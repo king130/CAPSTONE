@@ -185,3 +185,113 @@ h1 {
   text-decoration: none;
   font-weight: 500;
 }
+
+/* Role-specific fields */
+.role-specific-fields {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.select-input {
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  font-size: 13px;
+  background: white;
+  cursor: pointer;
+}
+
+.select-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.textarea-input {
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  font-size: 13px;
+  background: white;
+  resize: vertical;
+  min-height: 60px;
+  font-family: inherit;
+}
+
+.textarea-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.file-field {
+  margin-top: 8px;
+}
+
+.file-upload-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.file-input {
+  display: none;
+}
+
+.file-upload-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 2px dashed #d1d5db;
+  border-radius: 6px;
+  background: #f9fafb;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.file-upload-btn:hover {
+  border-color: #2563eb;
+  background: #eff4ff;
+  color: #2563eb;
+}
+
+.upload-icon {
+  font-size: 16px;
+}
+
+.file-help-text {
+  font-size: 11px;
+  color: #9ca3af;
+  margin: 0;
+}
+
+/* Input focus states */
+.field input:focus,
+.select-input:focus,
+.textarea-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+/* Responsive adjustments */
+@media (max-width: 640px) {
+  .card {
+    width: 90%;
+    max-width: 400px;
+    padding: 24px 20px;
+  }
+  
+  .role-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  
+  .role-card {
+    padding: 16px 12px;
+  }
+}

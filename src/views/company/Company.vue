@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import Sidebar from '../../components/Sidebar.vue'
+import FloatingChatWidget from '../../components/FloatingChatWidget.vue'
 
 const currentView = ref('dashboard')
 
@@ -748,24 +749,10 @@ const settingsDefaultPostDuration = ref('60 days')
 const settingsApplicationAutoClose = ref('After 10 applications')
 const settingsTwoFactorEnabled = ref(false)
 
-function closeSettingsPanel() {
-  currentView.value = 'dashboard'
-}
-
 function saveSettings() {
-  // TODO: persist settings
-  console.log('Save settings', {
-    emailNotif: settingsEmailNotif.value,
-    newAppAlerts: settingsNewAppAlerts.value,
-    internReminders: settingsInternReminders.value,
-    dailySummary: settingsDailySummary.value,
-    defaultDashboardView: settingsDefaultDashboardView.value,
-    showCompletionPct: settingsShowCompletionPct.value,
-    autoRefresh: settingsAutoRefresh.value,
-    defaultPostDuration: settingsDefaultPostDuration.value,
-    applicationAutoClose: settingsApplicationAutoClose.value
-  })
-  closeSettingsPanel()
+  console.log('Settings saved')
+  // Add save logic here
+  currentView.value = 'dashboard'
 }
 </script>
 
@@ -2426,12 +2413,12 @@ function saveSettings() {
         </Teleport>
       </div>
 
-      <!-- Settings View (Dashboard Settings panel) -->
+      <!-- Settings View -->
       <div v-if="currentView === 'settings'">
         <header class="top-header">
           <div class="header-left">
-            <img src="/icons/icon-settings.png" alt="Settings" class="header-icon-img" />
-            <h1>Settings</h1>
+            <div class="header-icon">🔒</div>
+            <h1>Change Password</h1>
           </div>
           <div class="header-right">
             <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
@@ -2439,124 +2426,101 @@ function saveSettings() {
             <div class="avatar">AC</div>
           </div>
         </header>
-        <main class="main-content settings-main">
-          <p class="settings-placeholder">Configure your dashboard and notification preferences in the panel.</p>
-        </main>
 
-        <Teleport to="body">
-          <div class="settings-panel-layer">
-            <div class="settings-panel-backdrop" @click="closeSettingsPanel" aria-hidden="true"></div>
-            <div class="settings-panel" role="dialog" aria-labelledby="settings-panel-title">
-              <div class="settings-panel-header">
-                <h2 id="settings-panel-title" class="settings-panel-title">Dashboard Settings</h2>
-                <button type="button" class="settings-panel-close" @click="closeSettingsPanel" aria-label="Close">×</button>
+        <main class="main-content">
+          <div class="settings-container">
+            <h2 class="settings-main-title">Update account Information</h2>
+
+            <!-- Password Section -->
+            <div class="settings-card">
+              <div class="password-section">
+                <h3 class="password-title">Password</h3>
+                <p class="password-subtitle">The password will additionally protect your account from hacking</p>
+
+                <div class="password-form">
+                  <div class="form-group">
+                    <label class="form-label">Current Password</label>
+                    <div class="password-input-container">
+                      <input 
+                        type="password" 
+                        class="form-input password-input"
+                        placeholder="Enter current password"
+                      />
+                      <button type="button" class="password-toggle">👁</button>
+                    </div>
+                  </div>
+
+                  <div class="form-group">
+                    <label class="form-label">New Password</label>
+                    <div class="password-input-container">
+                      <input 
+                        type="password" 
+                        class="form-input password-input"
+                        placeholder="Enter new password"
+                      />
+                      <button type="button" class="password-toggle">👁</button>
+                    </div>
+                    <div class="password-strength">
+                      <div class="strength-bar">
+                        <div class="strength-fill weak"></div>
+                      </div>
+                      <span class="strength-text">Weak password with capital letter</span>
+                    </div>
+                  </div>
+
+                  <div class="form-group">
+                    <label class="form-label">Confirm new password</label>
+                    <div class="password-input-container">
+                      <input 
+                        type="password" 
+                        class="form-input password-input"
+                        placeholder="Confirm new password"
+                      />
+                      <button type="button" class="password-toggle">👁</button>
+                    </div>
+                  </div>
+
+                  <div class="form-actions">
+                    <button type="button" class="btn-cancel" @click="currentView = 'dashboard'">Cancel</button>
+                    <button type="button" class="btn-save" @click="saveSettings">Save</button>
+                  </div>
+                </div>
               </div>
-              <div class="settings-panel-body">
-                <!-- Notification Settings -->
-                <section class="settings-section">
-                  <h3 class="settings-section-title">Notification Settings</h3>
-                  <div class="settings-toggle-row">
-                    <div class="settings-toggle-label">
-                      <span class="settings-toggle-name">Email Notifications</span>
-                      <span class="settings-toggle-desc">Receive email notifications for important updates.</span>
-                    </div>
-                    <button type="button" class="settings-toggle" :class="{ on: settingsEmailNotif }" @click="settingsEmailNotif = !settingsEmailNotif" role="switch" :aria-checked="settingsEmailNotif">
-                      <span class="settings-toggle-knob"></span>
-                    </button>
-                  </div>
-                  <div class="settings-toggle-row">
-                    <div class="settings-toggle-label">
-                      <span class="settings-toggle-name">New Application Alerts</span>
-                      <span class="settings-toggle-desc">Get notified when new applications are submitted.</span>
-                    </div>
-                    <button type="button" class="settings-toggle" :class="{ on: settingsNewAppAlerts }" @click="settingsNewAppAlerts = !settingsNewAppAlerts" role="switch" :aria-checked="settingsNewAppAlerts">
-                      <span class="settings-toggle-knob"></span>
-                    </button>
-                  </div>
-                  <div class="settings-toggle-row">
-                    <div class="settings-toggle-label">
-                      <span class="settings-toggle-name">Intern Completion Reminders</span>
-                      <span class="settings-toggle-desc">Reminders for interns nearing completion.</span>
-                    </div>
-                    <button type="button" class="settings-toggle" :class="{ on: settingsInternReminders }" @click="settingsInternReminders = !settingsInternReminders" role="switch" :aria-checked="settingsInternReminders">
-                      <span class="settings-toggle-knob"></span>
-                    </button>
-                  </div>
-                  <div class="settings-toggle-row">
-                    <div class="settings-toggle-label">
-                      <span class="settings-toggle-name">Daily Summary Report</span>
-                      <span class="settings-toggle-desc">Receive daily summary of internship activities.</span>
-                    </div>
-                    <button type="button" class="settings-toggle" :class="{ on: settingsDailySummary }" @click="settingsDailySummary = !settingsDailySummary" role="switch" :aria-checked="settingsDailySummary">
-                      <span class="settings-toggle-knob"></span>
-                    </button>
-                  </div>
-                </section>
+            </div>
 
-                <!-- Daily & Data Settings -->
-                <section class="settings-section">
-                  <h3 class="settings-section-title">Daily & Data Settings</h3>
-                  <div class="settings-field">
-                    <label class="settings-label">Default Dashboard View</label>
-                    <select v-model="settingsDefaultDashboardView" class="settings-select">
-                      <option>Dashboard</option>
-                      <option>Applications</option>
-                      <option>Internships</option>
-                      <option>Reports</option>
-                    </select>
-                  </div>
-                  <label class="settings-checkbox-row">
-                    <input type="checkbox" v-model="settingsShowCompletionPct" />
-                    <span>Show completion percentage on metric cards</span>
-                  </label>
-                  <label class="settings-checkbox-row">
-                    <input type="checkbox" v-model="settingsAutoRefresh" />
-                    <span>Auto-refresh dashboard data</span>
-                  </label>
-                </section>
+            <!-- Two-factor Authentication Section -->
+            <div class="settings-card">
+              <div class="two-factor-section">
+                <h3 class="two-factor-title">Tow-factor Authentication</h3>
+                <p class="two-factor-subtitle">The password with additionally protect your account from hacking</p>
 
-                <!-- Account & Security -->
-                <section class="settings-section">
-                  <h3 class="settings-section-title">Account & Security</h3>
-                  <button type="button" class="settings-btn settings-btn-secondary">🔒 Change Password</button>
-                  <div class="settings-btn-row">
-                    <button type="button" class="settings-btn settings-btn-secondary" @click="settingsTwoFactorEnabled = !settingsTwoFactorEnabled">🔑 Two-Factor Authentication</button>
-                    <span class="settings-pill">{{ settingsTwoFactorEnabled ? 'Enabled' : 'Enable' }}</span>
+                <div class="auth-options">
+                  <div class="auth-option">
+                    <div class="auth-icon">📱</div>
+                    <div class="auth-content">
+                      <h4 class="auth-option-title">Authentication app</h4>
+                      <p class="auth-option-desc">Use app the Google Authenticator or Duo Mobile to generate verifications code for more protection</p>
+                    </div>
                   </div>
-                </section>
 
-                <!-- Internship Post Defaults -->
-                <section class="settings-section">
-                  <h3 class="settings-section-title">Internship Post Defaults</h3>
-                  <div class="settings-field">
-                    <label class="settings-label">Default Post Duration</label>
-                    <select v-model="settingsDefaultPostDuration" class="settings-select">
-                      <option>30 days</option>
-                      <option>60 days</option>
-                      <option>90 days</option>
-                      <option>120 days</option>
-                    </select>
+                  <div class="auth-option">
+                    <div class="auth-icon">☁️</div>
+                    <div class="auth-content">
+                      <h4 class="auth-option-title">Security Key</h4>
+                      <p class="auth-option-desc">Use a physical security key help to protect your Facebook account from unauthorized access you won't to need to enter a code</p>
+                    </div>
                   </div>
-                  <div class="settings-field">
-                    <label class="settings-label">Application Auto-Close</label>
-                    <select v-model="settingsApplicationAutoClose" class="settings-select">
-                      <option>After 5 applications</option>
-                      <option>After 10 applications</option>
-                      <option>After 20 applications</option>
-                      <option>Manually</option>
-                    </select>
-                  </div>
-                </section>
-              </div>
-              <div class="settings-panel-actions">
-                <button type="button" class="settings-btn-save" @click="saveSettings">✓ Save Settings</button>
+                </div>
               </div>
             </div>
           </div>
-        </Teleport>
+        </main>
       </div>
 
     </div> <!-- End Main Wrapper -->
+
+    <!-- Floating Chat Widget -->
+    <FloatingChatWidget userType="company" />
   </div> <!-- End Dashboard -->
 </template>
 
@@ -5276,5 +5240,261 @@ function saveSettings() {
 
 .settings-btn-save:hover {
   background: #1d4ed8;
+}
+
+/* New Settings Styles */
+.header-icon {
+  font-size: 20px;
+  margin-right: 8px;
+}
+
+.settings-container {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+
+.settings-main-title {
+  font-size: 24px;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0 0 32px 0;
+}
+
+.settings-card {
+  background: white;
+  border-radius: 12px;
+  padding: 32px;
+  margin-bottom: 24px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e5e7eb;
+}
+
+.password-section {
+  max-width: 600px;
+}
+
+.password-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0 0 8px 0;
+}
+
+.password-subtitle {
+  font-size: 14px;
+  color: #6b7280;
+  margin: 0 0 32px 0;
+}
+
+.password-form {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+}
+
+.password-input-container {
+  position: relative;
+}
+
+.form-input {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+
+.password-input {
+  padding-right: 48px;
+}
+
+.form-input:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.password-toggle {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  color: #6b7280;
+  padding: 4px;
+}
+
+.password-strength {
+  margin-top: 8px;
+}
+
+.strength-bar {
+  width: 100%;
+  height: 4px;
+  background: #e5e7eb;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.strength-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.strength-fill.weak {
+  width: 30%;
+  background: #ef4444;
+}
+
+.strength-text {
+  font-size: 12px;
+  color: #ef4444;
+}
+
+.form-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.btn-cancel {
+  padding: 10px 20px;
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-cancel:hover {
+  background: #e5e7eb;
+  color: #1f2937;
+}
+
+.btn-save {
+  padding: 10px 20px;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-save:hover {
+  background: #2563eb;
+}
+
+.two-factor-section {
+  max-width: 800px;
+}
+
+.two-factor-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0 0 8px 0;
+}
+
+.two-factor-subtitle {
+  font-size: 14px;
+  color: #6b7280;
+  margin: 0 0 32px 0;
+}
+
+.auth-options {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.auth-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 20px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+}
+
+.auth-icon {
+  width: 48px;
+  height: 48px;
+  background: #dbeafe;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.auth-content {
+  flex: 1;
+}
+
+.auth-option-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0 0 8px 0;
+}
+
+.auth-option-desc {
+  font-size: 14px;
+  color: #6b7280;
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .settings-container {
+    padding: 24px 16px;
+  }
+  
+  .settings-card {
+    padding: 24px 16px;
+  }
+  
+  .form-actions {
+    flex-direction: column;
+  }
+  
+  .btn-cancel,
+  .btn-save {
+    width: 100%;
+  }
+  
+  .auth-option {
+    flex-direction: column;
+    text-align: center;
+  }
 }
 </style>

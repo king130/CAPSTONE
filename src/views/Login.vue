@@ -9,8 +9,10 @@ const password = ref('')
 
 async function onLogin() {
   console.log('Email entered:', email.value)
-  if (email.value.trim().toLowerCase() === 'company@gmail.com') {
-    console.log('Login successful, navigating to dashboard')
+  const emailLower = email.value.trim().toLowerCase()
+  
+  if (emailLower === 'company@gmail.com') {
+    console.log('Company login successful, navigating to dashboard')
     await Swal.fire({
       icon: 'success',
       iconColor: '#16a34a',
@@ -26,6 +28,23 @@ async function onLogin() {
       },
     })
     router.push('/dashboard')
+  } else if (emailLower === 'intern@gmail.com') {
+    console.log('Intern login successful, navigating to intern dashboard')
+    await Swal.fire({
+      icon: 'success',
+      iconColor: '#16a34a',
+      title: 'Login Successful!',
+      text: 'Welcome to your Intern Dashboard.',
+      confirmButtonText: 'Continue',
+      confirmButtonColor: '#2563eb',
+      customClass: {
+        popup: 'capstone-swal-popup',
+        title: 'capstone-swal-title',
+        htmlContainer: 'capstone-swal-text',
+        confirmButton: 'capstone-swal-confirm',
+      },
+    })
+    router.push('/intern')
   } else {
     await Swal.fire({
       icon: 'error',
