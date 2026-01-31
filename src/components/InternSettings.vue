@@ -1,11 +1,24 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useAuthStore } from '@/stores/auth'
+import { doc, updateDoc } from 'firebase/firestore'
+import { db } from '@/services/firebase'
+import Swal from 'sweetalert2'
 
-// Form data
+const authStore = useAuthStore()
+const organizationName = computed(() => {
+  const profile = authStore.user?.profile as Record<string, unknown> | undefined
+  return (profile?.schoolName as string) || authStore.user?.displayName || 'Account'
+})
+
+const loading = ref(true)
+const saving = ref(false)
+
+// Form data - Initialize with empty values
 const personalInfo = ref({
-  name: 'Alex Doe',
-  email: 'alexdoe@gmail.com',
-  phoneNumber: '+1 (123) 456-7890'
+  name: '',
+  email: '',
+  phoneNumber: ''
 })
 
 const security = ref({
@@ -17,16 +30,105 @@ const security = ref({
 
 const profilePicture = ref('/icons/profiles/alex-doe.jpg')
 
+// Load user data on mount
+onMounted(() => {
+  if (authStore.user) {
+    const profile = authStore.user.profile as Record<string, unknown> | undefined
+    personalInfo.value = {
+      name: authStore.user.displayName || '',
+      email: authStore.user.email || '',
+      phoneNumber: (profile?.contactNumber as string) || (profile?.companyContactNumber as string) || (profile?.schoolContactNumber as string) || ''
+    }
+    
+    // Load security settings from profile if available
+    if (profile?.twoFactorAuth !== undefined) {
+      security.value.twoFactorAuth = profile.twoFactorAuth as boolean
+    }
+    if (profile?.loginAlerts !== undefined) {
+      security.value.loginAlerts = profile.loginAlerts as boolean
+    }
+  }
+  loading.value = false
+})
+
 // Functions
 function updateProfilePicture() {
-  console.log('Update profile picture clicked')
+  Swal.fire({
+    icon: 'info',
+    title: 'Feature Under Development',
+    text: 'Profile picture upload will be available soon.',
+    confirmButtonText: 'OK',
+    confirmButtonColor: '#3b82f6'
+  })
 }
 
-function saveChanges() {
-  console.log('Saving changes...', {
-    personalInfo: personalInfo.value,
-    security: security.value
-  })
+async function saveChanges() {
+  if (!authStore.user?.uid) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Error',
+      text: 'User not authenticated. Please log in again.',
+      confirmButtonColor: '#3b82f6'
+    })
+    return
+  }
+
+  // Validate inputs
+  if (!personalInfo.value.name.trim()) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Validation Error',
+      text: 'Name is required.',
+      confirmButtonColor: '#3b82f6'
+    })
+    return
+  }
+
+  if (!personalInfo.value.email.trim()) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Validation Error',
+      text: 'Email is required.',
+      confirmButtonColor: '#3b82f6'
+    })
+    return
+  }
+
+  saving.value = true
+  
+  try {
+    const userRef = doc(db, 'users', authStore.user.uid)
+    const profile = authStore.user.profile as Record<string, unknown>
+    
+    // Update Firestore with new profile data
+    await updateDoc(userRef, {
+      displayName: personalInfo.value.name,
+      email: personalInfo.value.email,
+      'profile.contactNumber': personalInfo.value.phoneNumber,
+      'profile.twoFactorAuth': security.value.twoFactorAuth,
+      'profile.loginAlerts': security.value.loginAlerts,
+      updatedAt: new Date()
+    })
+
+    await Swal.fire({
+      icon: 'success',
+      title: 'Changes Saved!',
+      text: 'Your profile has been updated successfully.',
+      confirmButtonColor: '#3b82f6',
+      timer: 2000,
+      showConfirmButton: false
+    })
+  } catch (error) {
+    console.error('Error saving changes:', error)
+    await Swal.fire({
+      icon: 'error',
+      title: 'Save Failed',
+      text: error instanceof Error ? error.message : 'Unable to save changes. Please try again.',
+      confirmButtonColor: '#3b82f6'
+    })
+  } finally {
+    saving.value = false
+  }
 }
 
 function handleImageError(event: Event) {
@@ -61,17 +163,23 @@ function handleImageError(event: Event) {
       </div>
       <div class="header-right">
         <div class="notification-icon">🔔</div>
-        <span class="company-name">Acme Corp. Company</span>
+        <span class="company-name">{{ organizationName }}</span>
         <div class="user-avatar">AC</div>
       </div>
     </div>
 
     <div class="settings-body">
-      <div class="settings-main">
+      <div v-if="loading" class="loading-state">
+        <div class="loading-spinner"></div>
+        <p>Loading your profile...</p>
+      </div>
+      <div v-else class="settings-main">
         <!-- Settings Title and Save Button -->
         <div class="settings-title-bar">
           <h2 class="settings-title">Settings</h2>
-          <button @click="saveChanges" class="save-changes-btn">Save Changes</button>
+          <button @click="saveChanges" class="save-changes-btn" :disabled="saving || loading">
+            {{ saving ? 'Saving...' : 'Save Changes' }}
+          </button>
         </div>
 
         <!-- Personal Information Section -->
@@ -279,6 +387,33 @@ function handleImageError(event: Event) {
   padding: 24px;
 }
 
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  gap: 16px;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #e5e7eb;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-state p {
+  color: #6b7280;
+  font-size: 14px;
+}
+
 .settings-main {
   max-width: 1200px;
   margin: 0 auto;
@@ -310,8 +445,14 @@ function handleImageError(event: Event) {
   transition: background 0.2s;
 }
 
-.save-changes-btn:hover {
+.save-changes-btn:hover:not(:disabled) {
   background: #2563eb;
+}
+
+.save-changes-btn:disabled {
+  background: #93c5fd;
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
 .settings-section {

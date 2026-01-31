@@ -2,6 +2,13 @@
 import { ref, computed } from 'vue'
 import Sidebar from '../../components/Sidebar.vue'
 import FloatingChatWidget from '../../components/FloatingChatWidget.vue'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
+const companyName = computed(() => {
+  const profile = authStore.user?.profile as Record<string, unknown> | undefined
+  return (profile?.companyName as string) || authStore.user?.displayName || 'Company'
+})
 
 const currentView = ref('dashboard')
 
@@ -773,7 +780,7 @@ function saveSettings() {
           </div>
           <div class="header-right">
             <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">Acme Corp, Company</span>
+            <span class="company-name">{{ companyName }}</span>
             <div class="avatar">AC</div>
           </div>
         </header>
@@ -921,7 +928,7 @@ function saveSettings() {
           </div>
           <div class="header-right">
             <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">Acme Corp, Company</span>
+            <span class="company-name">{{ companyName }}</span>
             <div class="avatar">AC</div>
           </div>
         </header>
@@ -1069,7 +1076,7 @@ function saveSettings() {
           </div>
           <div class="header-right">
             <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">Acme Corp, Company</span>
+            <span class="company-name">{{ companyName }}</span>
             <div class="avatar">AC</div>
           </div>
         </header>
@@ -1181,7 +1188,7 @@ function saveSettings() {
           <div class="header-right">
             <button class="btn-add-journal" @click="openAddJournalPanel"><span class="add-icon">+</span> Add New Journal Entry</button>
             <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">Acme Corp, Company</span>
+            <span class="company-name">{{ companyName }}</span>
             <div class="avatar">AC</div>
           </div>
         </header>
@@ -1308,8 +1315,8 @@ function saveSettings() {
                 </div>
               </div>
               <div class="add-journal-actions">
-                <button type="button" class="add-journal-btn add-journal-btn-draft" @click="saveJournalDraft">Save Draft</button>
-                <button type="button" class="add-journal-btn add-journal-btn-submit" @click="submitJournalForReview">Submit for Review</button>
+                <button type="button" class="add-journal-btn add-journal-btn-draft" @click="saveJournalDraft" disabled title="Coming soon">Save Draft</button>
+                <button type="button" class="add-journal-btn add-journal-btn-submit" @click="submitJournalForReview" disabled title="Coming soon">Submit for Review</button>
               </div>
             </div>
           </div>
@@ -1325,7 +1332,7 @@ function saveSettings() {
           </div>
           <div class="header-right">
             <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">Acme Corp, Company</span>
+            <span class="company-name">{{ companyName }}</span>
             <div class="avatar">AC</div>
           </div>
         </header>
@@ -1565,7 +1572,7 @@ function saveSettings() {
           </div>
           <div class="header-right">
             <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">Acme Corp, Company</span>
+            <span class="company-name">{{ companyName }}</span>
             <div class="avatar">AC</div>
           </div>
         </header>
@@ -1861,11 +1868,11 @@ function saveSettings() {
                     <span class="arrow-icon">←</span>
                     Previous Section
                   </button>
-                  <button class="btn-save-draft" @click="saveDraft">
+                  <button class="btn-save-draft" @click="saveDraft" disabled title="Coming soon">
                     <img src="/icons/icon-save.png" alt="Save" class="btn-icon" />
                     Save Draft
                   </button>
-                  <button class="btn-next-section" @click="submitForApproval">
+                  <button class="btn-next-section" @click="submitForApproval" disabled title="Coming soon">
                     Submit for Approval
                     <span class="arrow-icon">✓</span>
                   </button>
@@ -1947,7 +1954,7 @@ function saveSettings() {
           </div>
           <div class="header-right">
             <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">Acme Corp, Company</span>
+            <span class="company-name">{{ companyName }}</span>
             <div class="avatar">AC</div>
           </div>
         </header>
@@ -1975,7 +1982,7 @@ function saveSettings() {
                 </div>
               </div>
             </div>
-            <button class="btn-edit-profile" @click="editProfile">
+            <button class="btn-edit-profile" @click="editProfile" disabled title="Coming soon">
               <span class="edit-icon">✏️</span>
               Edit Profile
             </button>
@@ -2064,7 +2071,7 @@ function saveSettings() {
             <div class="profile-card">
               <h3 class="profile-card-title">Company Description</h3>
               <p class="company-description">{{ companyProfile.description }}</p>
-              <button class="btn-edit-description" @click="editDescription">
+              <button class="btn-edit-description" @click="editDescription" disabled title="Coming soon">
                 <span class="edit-icon">✏️</span>
                 Edit Description
               </button>
@@ -2111,7 +2118,7 @@ function saveSettings() {
           </div>
           <div class="header-right">
             <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">Acme Corp, Company</span>
+            <span class="company-name">{{ companyName }}</span>
             <div class="avatar">AC</div>
           </div>
         </header>
@@ -2202,6 +2209,7 @@ function saveSettings() {
                     <button 
                       class="action-btn-tracking" 
                       @click="viewInternDetails(record.id)"
+                      disabled
                       title="View Details"
                     >
                       👁
@@ -2227,7 +2235,7 @@ function saveSettings() {
               Set New Evaluation
             </button>
             <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">Acme Corp, Company</span>
+            <span class="company-name">{{ companyName }}</span>
             <div class="avatar">AC</div>
           </div>
         </header>
@@ -2264,7 +2272,7 @@ function saveSettings() {
               <div class="eval-stat-card">
                 <div class="stat-header">
                   <h4 class="stat-title">Evaluations Due This Week</h4>
-                  <button class="view-pending-btn" @click="viewPending">
+                  <button class="view-pending-btn" @click="viewPending" disabled title="Coming soon">
                     View Pending →
                   </button>
                 </div>
@@ -2335,6 +2343,8 @@ function saveSettings() {
                       <button 
                         class="btn-start-evaluation"
                         @click="startEvaluation(evaluation.id)"
+                        disabled
+                        title="Coming soon"
                       >
                         Start Evaluation
                       </button>
@@ -2404,7 +2414,7 @@ function saveSettings() {
               </div>
 
               <div class="modal-footer">
-                <button class="btn-schedule-evaluation" @click="scheduleEvaluation">
+                <button class="btn-schedule-evaluation" @click="scheduleEvaluation" disabled title="Coming soon">
                   Schedule Evaluation
                 </button>
               </div>
@@ -2422,7 +2432,7 @@ function saveSettings() {
           </div>
           <div class="header-right">
             <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">Acme Corp, Company</span>
+            <span class="company-name">{{ companyName }}</span>
             <div class="avatar">AC</div>
           </div>
         </header>
@@ -2482,7 +2492,7 @@ function saveSettings() {
 
                   <div class="form-actions">
                     <button type="button" class="btn-cancel" @click="currentView = 'dashboard'">Cancel</button>
-                    <button type="button" class="btn-save" @click="saveSettings">Save</button>
+                    <button type="button" class="btn-save" @click="saveSettings" disabled title="Coming soon">Save</button>
                   </div>
                 </div>
               </div>
@@ -5498,3 +5508,4 @@ function saveSettings() {
   }
 }
 </style>
+

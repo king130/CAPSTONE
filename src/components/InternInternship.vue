@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
+const organizationName = computed(() => {
+  const profile = authStore.user?.profile as Record<string, unknown> | undefined
+  return (profile?.schoolName as string) || authStore.user?.displayName || 'Account'
+})
 
 // Search and filter state
 const searchQuery = ref('')
@@ -292,7 +299,7 @@ function getInitials(company: string): string {
           <img src="/icons/icon-message.png" alt="Messages" class="message-icon" />
         </button>
         <div class="company-info">
-          <span class="company-name">Acme Corp. Company</span>
+          <span class="company-name">{{ organizationName }}</span>
           <div class="user-avatar">AC</div>
         </div>
       </div>
@@ -363,7 +370,7 @@ function getInitials(company: string): string {
 
         <!-- Filter Actions -->
         <div class="filter-actions">
-          <button @click="applyFilters" class="apply-btn">Apply filters</button>
+          <button @click="applyFilters" class="apply-btn" disabled title="Coming soon">Apply filters</button>
           <button @click="clearAllFilters" class="clear-btn">Clear All</button>
         </div>
       </div>
@@ -542,8 +549,8 @@ function getInitials(company: string): string {
                 </div>
 
                 <div class="action-buttons">
-                  <button @click="applyNow" class="Review-Application">Review Application</button>
-                  <button @click="saveForLater" class="save-later-btn">Save for Later</button>
+                <button @click="applyNow" class="Review-Application" disabled title="Coming soon">Review Application</button>
+                <button @click="saveForLater" class="save-later-btn" disabled title="Coming soon">Save for Later</button>
                 </div>
 
                 <div class="social-share">
@@ -756,8 +763,8 @@ function getInitials(company: string): string {
 
         <!-- Application Footer -->
         <div class="application-footer">
-          <button @click="goToPreviousStep" class="footer-btn secondary">Previous: Personal Info</button>
-          <button @click="reviewApplication" class="footer-btn primary">Review Application →</button>
+          <button @click="goToPreviousStep" class="footer-btn secondary" disabled title="Coming soon">Previous: Personal Info</button>
+          <button @click="reviewApplication" class="footer-btn primary" disabled title="Coming soon">Review Application →</button>
         </div>
       </div>
     </div>

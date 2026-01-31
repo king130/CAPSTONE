@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
+const organizationName = computed(() => {
+  const profile = authStore.user?.profile as Record<string, unknown> | undefined
+  return (profile?.schoolName as string) || authStore.user?.displayName || 'Account'
+})
 
 // User profile data
 const user = ref({
@@ -128,7 +135,7 @@ function viewDetails(section: string) {
           <img src="/icons/icon-message.png" alt="Messages" class="message-icon" />
         </button>
         <div class="company-info">
-          <span class="company-name">Acme Corp. Company</span>
+          <span class="company-name">{{ organizationName }}</span>
           <div class="user-avatar-small">AC</div>
         </div>
       </div>
@@ -196,7 +203,7 @@ function viewDetails(section: string) {
           <div class="section-card">
             <div class="section-header">
               <h3 class="section-title">📚 Academic Performance</h3>
-              <button class="view-details-btn" @click="viewDetails('academic')">View Details</button>
+              <button class="view-details-btn" @click="viewDetails('academic')" disabled title="Coming soon">View Details</button>
             </div>
             <div class="gpa-display">
               <span class="gpa-number">{{ academicPerformance.gpa }}</span>
@@ -222,7 +229,7 @@ function viewDetails(section: string) {
           <div class="section-card">
             <div class="section-header">
               <h3 class="section-title">🎯 Skills Assessment</h3>
-              <button class="view-details-btn" @click="viewDetails('skills')">View Details</button>
+              <button class="view-details-btn" @click="viewDetails('skills')" disabled title="Coming soon">View Details</button>
             </div>
             <div class="skills-score">
               <span class="score-number">{{ skillsAssessment.score }}</span>
@@ -262,7 +269,7 @@ function viewDetails(section: string) {
           <div class="section-card">
             <div class="section-header">
               <h3 class="section-title">📄 Document Submission</h3>
-              <button class="view-details-btn" @click="viewDetails('documents')">View Details</button>
+              <button class="view-details-btn" @click="viewDetails('documents')" disabled title="Coming soon">View Details</button>
             </div>
             <div class="documents-list">
               <div v-for="doc in documentSubmission" :key="doc.name" class="document-item">
@@ -285,7 +292,7 @@ function viewDetails(section: string) {
                   <p>Complete your document submission to improve your readiness score</p>
                 </div>
               </div>
-              <button class="improve-btn" @click="improveReadiness">📤 Upload Documents</button>
+              <button class="improve-btn" @click="improveReadiness" disabled title="Coming soon">📤 Upload Documents</button>
             </div>
           </div>
 
@@ -293,7 +300,7 @@ function viewDetails(section: string) {
           <div class="section-card">
             <div class="section-header">
               <h3 class="section-title">🎓 Compatible Courses</h3>
-              <button class="view-details-btn" @click="viewDetails('courses')">View All Courses</button>
+              <button class="view-details-btn" @click="viewDetails('courses')" disabled title="Coming soon">View All Courses</button>
             </div>
             <div class="courses-list">
               <div v-for="course in compatibleCourses" :key="course.name" class="compatible-course">

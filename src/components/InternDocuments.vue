@@ -1,6 +1,21 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import Swal from 'sweetalert2'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
+const organizationName = computed(() => {
+  const profile = authStore.user?.profile as Record<string, unknown> | undefined
+  return (profile?.schoolName as string) || authStore.user?.displayName || 'Account'
+})
+
+const searchQuery = ref('')
+
+const filteredDocuments = computed(() => {
+  const query = searchQuery.value.trim().toLowerCase()
+  if (!query) return documents.value
+  return documents.value.filter((doc) => doc.name.toLowerCase().includes(query))
+})
 
 // Documents data matching the screenshot
 const documents = ref([
@@ -191,7 +206,7 @@ const recommendations = ref([
 ])
 
 function searchDocuments() {
-  console.log('Search documents')
+  // No-op, v-model handles filtering
 }
 
 function uploadDocument() {
@@ -270,12 +285,24 @@ async function confirmUpload() {
       },
     })
     
-    // Here you would typically add the document to the documents list
-    console.log('Document uploaded:', {
+    const fileExtension = selectedFile.value.name.split('.').pop()?.toUpperCase() || 'FILE'
+    documents.value.unshift({
+      id: Date.now(),
       name: documentName.value,
-      file: selectedFile.value,
-      type: selectedDocumentType.value
+      type: fileExtension,
+      size: `${Math.ceil(selectedFile.value.size / 1024)} KB`,
+      daysAgo: 'Just now',
+      status: 'Pending Review',
+      statusColor: '#f59e0b',
+      icon: fileExtension === 'PDF' ? '/icons/icon-pdf.png' : '/icons/icon-docs.png',
+      bgColor: '#dbeafe',
+      usedIn: '0 applications',
+      viewedTimes: '0 times',
+      needsUpdate: false,
     })
+    documentName.value = ''
+    selectedFile.value = null
+    selectedDocumentType.value = ''
   }
 }
 
@@ -301,7 +328,7 @@ function cancelUpload() {
             type="text" 
             placeholder="Search Documents..." 
             class="search-input"
-            @input="searchDocuments"
+            v-model="searchQuery"
           />
           <span class="search-icon">🔍</span>
         </div>
@@ -324,7 +351,7 @@ function cancelUpload() {
     <div class="main-layout">
       <!-- Documents Grid -->
       <div class="documents-grid">
-        <div v-for="doc in documents" :key="doc.id" class="document-card">
+        <div v-for="doc in filteredDocuments" :key="doc.id" class="document-card">
           <div class="doc-header">
             <div class="doc-icon-container" :style="{ backgroundColor: doc.bgColor }">
               <img :src="doc.icon" :alt="doc.type" class="doc-icon" />

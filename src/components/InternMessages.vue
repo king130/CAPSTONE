@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
+const organizationName = computed(() => {
+  const profile = authStore.user?.profile as Record<string, unknown> | undefined
+  return (profile?.schoolName as string) || authStore.user?.displayName || 'Account'
+})
 
 // Messages data - using the same design as the document upload complete view
 const messagesData = ref({
@@ -71,7 +78,7 @@ function handleApplyNow() {
       </div>
       <div class="header-right">
         <div class="notification-icon">🔔</div>
-        <span class="company-name">Acme Corp. Company</span>
+        <span class="company-name">{{ organizationName }}</span>
         <div class="user-avatar">AC</div>
       </div>
     </div>
@@ -232,8 +239,8 @@ function handleApplyNow() {
 
     <!-- Footer -->
     <div class="messages-footer">
-      <button @click="handlePreviousStep" class="footer-btn secondary">← Previous: Personal Info</button>
-      <button @click="handleApplyNow" class="footer-btn primary">Apply Now</button>
+      <button @click="handlePreviousStep" class="footer-btn secondary" disabled title="Coming soon">← Previous: Personal Info</button>
+      <button @click="handleApplyNow" class="footer-btn primary" disabled title="Coming soon">Apply Now</button>
     </div>
   </div>
 </template>

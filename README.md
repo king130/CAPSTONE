@@ -1,6 +1,13 @@
-# .
+# Internship Platform (Capstone)
 
-This template should help get you started developing with Vue 3 in Vite.
+Frontend built with Vue 3 + Vite. Backend architecture is defined for Laravel + Firebase.
+
+## Backend + Database Design
+
+See `docs/backend-architecture.md` for the full design:
+- Laravel REST API with RBAC, DSS, and reporting
+- Firebase Storage for file uploads
+- Optional Firebase Auth + realtime notifications
 
 ## Recommended IDE Setup
 

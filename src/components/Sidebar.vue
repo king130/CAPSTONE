@@ -95,8 +95,10 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
+const authStore = useAuthStore()
 const activeNav = ref('dashboard')
 
 const setActiveNav = (nav: string) => {
@@ -111,13 +113,11 @@ const setActiveNav = (nav: string) => {
   emit('nav-changed', nav)
 }
 
-const handleLogout = () => {
-  // Clear any stored authentication data
+const handleLogout = async () => {
+  await authStore.logout()
   localStorage.removeItem('authToken')
   localStorage.removeItem('userSession')
   sessionStorage.clear()
-  
-  // Redirect to login page
   router.push('/login')
 }
 
@@ -228,5 +228,30 @@ defineExpose({
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    width: 60px;
+    padding: 16px 0;
+  }
+
+  .sidebar-logo {
+    padding: 0 16px 16px;
+    justify-content: center;
+  }
+
+  .sidebar-logo span {
+    display: none;
+  }
+
+  .nav-item {
+    padding: 12px;
+    justify-content: center;
+  }
+
+  .nav-item span {
+    display: none;
+  }
 }
 </style>

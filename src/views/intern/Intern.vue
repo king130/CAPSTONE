@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useAuthStore } from '@/stores/auth'
 import InternSidebar from '@/components/InternSidebar.vue'
 import InternDashboard from '@/components/InternDashboard.vue'
 import InternDocuments from '@/components/InternDocuments.vue'
@@ -8,6 +9,12 @@ import InternInternship from '@/components/InternInternship.vue'
 import InternMessages from '@/components/InternMessages.vue'
 import InternSettings from '@/components/InternSettings.vue'
 import FloatingChatWidget from '@/components/FloatingChatWidget.vue'
+
+const authStore = useAuthStore()
+const organizationName = computed(() => {
+  const profile = authStore.user?.profile as Record<string, unknown> | undefined
+  return (profile?.schoolName as string) || authStore.user?.displayName || 'Account'
+})
 
 // Current active view
 const activeView = ref('dashboard')
@@ -217,7 +224,7 @@ function handleMenuClick(menuItem: string) {
             <h1 class="header-title">Community</h1>
           </div>
           <div class="header-right">
-            <span class="company-name">Acme Corp. Company</span>
+            <span class="company-name">{{ organizationName }}</span>
             <div class="user-avatar">AC</div>
           </div>
         </header>
@@ -255,7 +262,7 @@ function handleMenuClick(menuItem: string) {
                     <span class="suggestion-name">{{ person.name }}</span>
                     <span class="suggestion-title">{{ person.title }}</span>
                   </div>
-                  <button class="connect-btn" @click="connectWithUser(person.name)">+</button>
+                  <button class="connect-btn" @click="connectWithUser(person.name)" disabled title="Coming soon">+</button>
                 </div>
               </div>
             </div>

@@ -1,5 +1,14 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useAuthStore } from '@/stores/auth'
+import {
+  ensureDefaultChat,
+  sendMessage as sendChatMessage,
+  subscribeToChats,
+  subscribeToMessages,
+  type ChatMessage,
+  type ChatThread,
+} from '@/services/chat'
 
 // Props for customization
 const props = defineProps<{
@@ -7,175 +16,40 @@ const props = defineProps<{
 }>()
 
 // State management
+const authStore = useAuthStore()
 const isOpen = ref(false)
 const isMinimized = ref(false)
-const unreadCount = ref(3)
+const unreadCount = ref(0)
 const showGroupInfo = ref(true)
-
-// Sample chat data - expanded to match the design
-const conversations = ref([
-  {
-    id: 1,
-    name: 'OJT Intern Path',
-    subtitle: 'OJT Intern Path System',
-    avatar: '/icons/logo-main.png',
-    lastMessage: 'Welcome to the platform!',
-    time: '10m',
-    unread: 3,
-    online: true,
-    isGroup: true
-  },
-  {
-    id: 2,
-    name: 'Joseph Estrada',
-    subtitle: 'Last seen 2hrs ago',
-    avatar: '/icons/profiles/john-smith.jpg',
-    lastMessage: 'Hey everyone! I just wanted to kick off...',
-    time: '2hrs',
-    unread: 0,
-    online: false
-  },
-  {
-    id: 3,
-    name: 'Adrian Espanto',
-    subtitle: 'New and Online',
-    avatar: '/icons/profiles/alex-doe.jpg',
-    lastMessage: 'Definitely pumped to get started...',
-    time: '3hrs',
-    unread: 0,
-    online: true
-  },
-  {
-    id: 4,
-    name: 'Veronica Pacita',
-    subtitle: 'Software Engineer',
-    avatar: '/icons/profiles/maria-santos.jpg',
-    lastMessage: 'Thanks for the update!',
-    time: '1d',
-    unread: 2,
-    online: false
-  },
-  {
-    id: 5,
-    name: 'Cristal Gonzales',
-    subtitle: 'UI/UX Designer',
-    avatar: '/icons/profiles/emily-johnson.jpg',
-    lastMessage: 'Looking forward to working together',
-    time: '2d',
-    unread: 0,
-    online: false
-  },
-  {
-    id: 6,
-    name: 'Ricky Javier',
-    subtitle: 'Project Manager',
-    avatar: '/icons/profiles/robert-taylor.jpg',
-    lastMessage: 'Great job on the presentation!',
-    time: '3d',
-    unread: 0,
-    online: false
-  },
-  {
-    id: 7,
-    name: 'Jasper Heredia',
-    subtitle: 'Hi I am Jasper!',
-    avatar: '/icons/profiles/david-kim.jpg',
-    lastMessage: 'Nice to meet everyone',
-    time: '1w',
-    unread: 0,
-    online: false
-  },
-  {
-    id: 8,
-    name: 'Ruben Lopez',
-    subtitle: 'Always improving',
-    avatar: '/icons/profiles/james-wilson.jpg',
-    lastMessage: 'Working on improvements',
-    time: '1w',
-    unread: 0,
-    online: false
-  },
-  {
-    id: 9,
-    name: 'Joseph Salamanca',
-    subtitle: 'Backend Developer',
-    avatar: '/icons/profiles/john-smith.jpg',
-    lastMessage: 'See you tomorrow!',
-    time: '2w',
-    unread: 0,
-    online: false
-  },
-  {
-    id: 10,
-    name: 'Ledesma Ford',
-    subtitle: 'Data Analyst',
-    avatar: '/icons/profiles/sophia-martinez.jpg',
-    lastMessage: 'Thanks for your help',
-    time: '2w',
-    unread: 0,
-    online: false
-  },
-  {
-    id: 11,
-    name: 'Cristal Gonzales',
-    subtitle: 'Schedule Coordinator',
-    avatar: '/icons/profiles/emily-johnson.jpg',
-    lastMessage: 'Schedule updated',
-    time: '3w',
-    unread: 0,
-    online: false
-  },
-  {
-    id: 12,
-    name: 'Aryan Ford',
-    subtitle: 'Full Stack Developer',
-    avatar: '/icons/profiles/alex-doe.jpg',
-    lastMessage: 'Project completed successfully',
-    time: '1m',
-    unread: 0,
-    online: false
-  },
-  {
-    id: 13,
-    name: 'Acme Corp. Company',
-    subtitle: 'Company Account',
-    avatar: '/icons/icon-company.png',
-    lastMessage: 'Company updates available',
-    time: '1m',
-    unread: 0,
-    online: true
-  }
-])
-
-const currentChat = ref(conversations.value[0])
-const messages = ref([
-  {
-    id: 1,
-    sender: 'Joseph Estrada',
-    avatar: '/icons/profiles/john-smith.jpg',
-    message: 'Hey everyone! I just wanted to kick off the day by saying how excited I am to dive into our latest project. Who\'s ready to work some design magic?',
-    time: '10:20 AM',
-    isOwn: false
-  },
-  {
-    id: 2,
-    sender: 'Adrian Espanto',
-    avatar: '/icons/profiles/alex-doe.jpg',
-    message: 'Definitely pumped to get started. Did everyone get a chance to review the brief for project Capstone?',
-    time: '10:41 AM',
-    isOwn: false
-  },
-  {
-    id: 3,
-    sender: 'You',
-    avatar: '/icons/profiles/alex-doe.jpg',
-    message: 'I\'ve got a few sketches already. Thinking of incorporating some sleek animations for the website interface. What do you all think?',
-    time: '11:40 AM',
-    isOwn: true
-  }
-])
-
 const newMessage = ref('')
+
+type ConversationItem = {
+  id: string
+  name: string
+  subtitle: string
+  avatar: string
+  lastMessage: string
+  time: string
+  unread: number
+  online: boolean
+  isGroup: boolean
+}
+
+type MessageItem = {
+  id: string
+  sender: string
+  avatar: string
+  message: string
+  time: string
+  isOwn: boolean
+}
+
+const conversations = ref<ConversationItem[]>([])
+const currentChat = ref<ConversationItem | null>(null)
+const messages = ref<MessageItem[]>([])
+const currentUserId = computed(() => authStore.user?.uid || '')
+const unsubChats = ref<null | (() => void)>(null)
+const unsubMessages = ref<null | (() => void)>(null)
 
 // Group info data
 const groupInfo = ref({
@@ -227,24 +101,97 @@ function closeChat() {
   isMinimized.value = false
 }
 
-function selectConversation(conversation: any) {
+function selectConversation(conversation: ConversationItem) {
   currentChat.value = conversation
   conversation.unread = 0
+  startMessageListener(conversation.id)
 }
 
-function sendMessage() {
-  if (newMessage.value.trim()) {
-    messages.value.push({
-      id: messages.value.length + 1,
-      sender: 'You',
-      avatar: '/icons/profiles/alex-doe.jpg',
-      message: newMessage.value,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      isOwn: true
-    })
-    newMessage.value = ''
+function mapThread(thread: ChatThread): ConversationItem {
+  return {
+    id: thread.id,
+    name: thread.title || 'Support',
+    subtitle: thread.members.length > 1 ? 'Group Chat' : 'Direct Chat',
+    avatar: '/icons/logo-main.png',
+    lastMessage: thread.lastMessage || 'No messages yet',
+    time: '',
+    unread: 0,
+    online: false,
+    isGroup: thread.members.length > 1,
   }
 }
+
+function mapMessage(message: ChatMessage): MessageItem {
+  const isOwn = message.senderId === currentUserId.value
+  const createdAt =
+    message.createdAt && typeof message.createdAt === 'object' && 'toDate' in message.createdAt
+      ? (message.createdAt as { toDate: () => Date }).toDate()
+      : message.createdAt
+      ? new Date(message.createdAt)
+      : null
+  return {
+    id: message.id,
+    sender: isOwn ? 'You' : 'Member',
+    avatar: '/icons/logo-main.png',
+    message: message.text,
+    time: createdAt ? createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+    isOwn,
+  }
+}
+
+function startMessageListener(chatId: string) {
+  if (unsubMessages.value) {
+    unsubMessages.value()
+  }
+  unsubMessages.value = subscribeToMessages(chatId, (snapshot) => {
+    messages.value = snapshot.map(mapMessage)
+  })
+}
+
+async function sendMessage() {
+  if (!currentChat.value || !currentUserId.value) return
+  const content = newMessage.value.trim()
+  if (!content) return
+  await sendChatMessage(currentChat.value.id, currentUserId.value, content)
+  newMessage.value = ''
+}
+
+async function startChatListeners() {
+  if (!currentUserId.value) return
+  const defaultChatId = await ensureDefaultChat(currentUserId.value)
+  unsubChats.value = subscribeToChats(currentUserId.value, (threads) => {
+    conversations.value = threads.map(mapThread)
+    if (!currentChat.value && conversations.value.length > 0) {
+      const initial = conversations.value.find((chat) => chat.id === defaultChatId) || conversations.value[0]
+      currentChat.value = initial
+      startMessageListener(initial.id)
+    }
+  })
+}
+
+onMounted(() => {
+  startChatListeners()
+})
+
+watch(currentUserId, () => {
+  if (unsubChats.value) {
+    unsubChats.value()
+    unsubChats.value = null
+  }
+  if (unsubMessages.value) {
+    unsubMessages.value()
+    unsubMessages.value = null
+  }
+  conversations.value = []
+  messages.value = []
+  currentChat.value = null
+  startChatListeners()
+})
+
+onUnmounted(() => {
+  if (unsubChats.value) unsubChats.value()
+  if (unsubMessages.value) unsubMessages.value()
+})
 
 function toggleGroupInfo() {
   showGroupInfo.value = !showGroupInfo.value
@@ -282,7 +229,7 @@ function handleImageError(event: Event) {
   <!-- Full Screen Chat Widget -->
   <div v-if="isOpen" class="floating-chat-widget" :class="{ minimized: isMinimized }">
     <!-- Main Chat Header -->
-    <div class="main-chat-header">
+    <div class="main-chat-header" v-if="currentChat">
       <div class="header-left">
         <div class="chat-avatar">
           <img :src="currentChat.avatar" :alt="currentChat.name" @error="handleImageError" />
@@ -296,13 +243,13 @@ function handleImageError(event: Event) {
         </div>
       </div>
       <div class="header-right">
-        <button class="header-btn">
+        <button class="header-btn" disabled title="Coming soon">
           <span>📹</span>
         </button>
-        <button class="header-btn">
+        <button class="header-btn" disabled title="Coming soon">
           <span>📞</span>
         </button>
-        <button class="header-btn">
+        <button class="header-btn" disabled title="Coming soon">
           <span>⋯</span>
         </button>
         <button @click="toggleGroupInfo" class="header-btn group-info-btn">
@@ -322,8 +269,8 @@ function handleImageError(event: Event) {
         <div class="sidebar-header">
           <h3>Message</h3>
           <div class="header-actions">
-            <button class="action-btn">✏️</button>
-            <button class="action-btn">⋯</button>
+            <button class="action-btn" disabled title="Coming soon">✏️</button>
+            <button class="action-btn" disabled title="Coming soon">⋯</button>
           </div>
         </div>
 
@@ -357,7 +304,7 @@ function handleImageError(event: Event) {
             v-for="conversation in conversations" 
             :key="conversation.id"
             class="conversation-item"
-            :class="{ active: currentChat.id === conversation.id }"
+            :class="{ active: currentChat && currentChat.id === conversation.id }"
             @click="selectConversation(conversation)"
           >
             <div class="conversation-avatar">
@@ -379,7 +326,7 @@ function handleImageError(event: Event) {
       </div>
 
       <!-- Main Chat Area -->
-      <div class="main-chat-area">
+      <div class="main-chat-area" v-if="currentChat">
         <!-- Chat Date -->
         <div class="chat-date">Today, January 21, 2026</div>
 
@@ -412,7 +359,7 @@ function handleImageError(event: Event) {
         <!-- Message Input -->
         <div class="message-input-area">
           <div class="input-container">
-            <button class="attachment-btn">
+            <button class="attachment-btn" disabled title="Coming soon">
               <span>📎</span>
             </button>
             <input 
@@ -422,10 +369,10 @@ function handleImageError(event: Event) {
               class="message-input"
               @keyup.enter="sendMessage"
             />
-            <button class="emoji-btn">
+            <button class="emoji-btn" disabled title="Coming soon">
               <span>😊</span>
             </button>
-            <button class="media-btn">
+            <button class="media-btn" disabled title="Coming soon">
               <span>📷</span>
             </button>
             <button @click="sendMessage" class="send-btn">
@@ -433,6 +380,9 @@ function handleImageError(event: Event) {
             </button>
           </div>
         </div>
+      </div>
+      <div v-else class="empty-chat">
+        <p>No conversations yet. Start a new message to begin.</p>
       </div>
 
       <!-- Right Sidebar - Group Info -->
@@ -462,7 +412,7 @@ function handleImageError(event: Event) {
           <div class="group-link">
             <span class="link-icon">🔗</span>
             <a :href="groupInfo.link" class="group-link-text">{{ groupInfo.link }}</a>
-            <button class="copy-btn">📋</button>
+            <button class="copy-btn" disabled title="Coming soon">📋</button>
           </div>
         </div>
 
@@ -882,6 +832,16 @@ function handleImageError(event: Event) {
   flex: 1;
   display: flex;
   flex-direction: column;
+  background: #f9fafb;
+}
+
+.empty-chat {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  font-size: 13px;
   background: #f9fafb;
 }
 

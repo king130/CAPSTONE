@@ -4,18 +4,37 @@
       <img src="/icons/logo-main.png" alt="OJT Path" class="logo-icon" />
       <span class="logo-text">OJT Path</span>
     </div>
-    <nav class="links">
+    <button class="menu-toggle" type="button" @click="isMenuOpen = !isMenuOpen">
+      ☰
+    </button>
+    <nav :class="['links', { open: isMenuOpen }]">
       <a href="#why">Why Us</a>
       <a href="#features">Features</a>
+      <a href="#pricing">Pricing</a>
       <a href="#steps">How It Works</a>
       <RouterLink to="/find-internships">Find Internships</RouterLink>
     </nav>
-    <RouterLink to="/login" :class="['btn', buttonStyle]">{{ buttonText }}</RouterLink>
+    <div class="nav-actions">
+      <div v-if="authStore.user" class="profile-chip">
+        <div class="bell" role="button" @click="notificationStore.markAllRead()" title="Mark notifications as read">
+          🔔
+          <span v-if="notificationStore.unreadCount()" class="badge">{{ notificationStore.unreadCount() }}</span>
+        </div>
+        <div class="avatar" :title="authStore.user.displayName">
+          <img v-if="avatarUrl" :src="avatarUrl" :alt="authStore.user.displayName" />
+          <span v-else>{{ userInitials }}</span>
+        </div>
+      </div>
+      <RouterLink v-else to="/login" :class="['btn', buttonStyle]">{{ buttonText }}</RouterLink>
+    </div>
   </header>
 </template>
 
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
+import { computed, ref } from 'vue'
+import { useAuthStore } from '@/stores/auth'
+import { useNotificationStore } from '@/stores/notifications'
 
 // Props to customize the navbar
 interface Props {
@@ -28,6 +47,25 @@ const props = withDefaults(defineProps<Props>(), {
   buttonStyle: 'btn-outline',
   buttonText: 'Login',
   backgroundStyle: 'nav-transparent'
+})
+
+const authStore = useAuthStore()
+const notificationStore = useNotificationStore()
+const isMenuOpen = ref(false)
+
+const avatarUrl = computed(() => {
+  const profile = authStore.user?.profile as Record<string, unknown> | undefined
+  return (profile?.photoUrl as string) || ''
+})
+
+const userInitials = computed(() => {
+  const name = authStore.user?.displayName || 'User'
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase()
 })
 </script>
 
@@ -75,6 +113,66 @@ const props = withDefaults(defineProps<Props>(), {
   display: flex;
   gap: 18px;
   align-items: center;
+}
+
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.profile-chip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: #1f2937;
+}
+
+.bell {
+  position: relative;
+  font-size: 16px;
+}
+
+.badge {
+  position: absolute;
+  top: -6px;
+  right: -8px;
+  background: #ef4444;
+  color: #fff;
+  border-radius: 999px;
+  font-size: 10px;
+  padding: 2px 6px;
+}
+
+.avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #2563eb;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.menu-toggle {
+  display: none;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 16px;
 }
 
 .links a {
@@ -133,6 +231,13 @@ const props = withDefaults(defineProps<Props>(), {
     width: 100%;
     justify-content: center;
     flex-wrap: wrap;
+    display: none;
+  }
+  .links.open {
+    display: flex;
+  }
+  .menu-toggle {
+    display: inline-flex;
   }
 }
 </style>

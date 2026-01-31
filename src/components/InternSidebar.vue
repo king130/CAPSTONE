@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
 
 // Define props for active menu item
 const props = defineProps<{
@@ -11,7 +14,10 @@ const emit = defineEmits<{
   menuClick: [item: string]
 }>()
 
-function handleMenuClick(itemId: string) {
+async function handleMenuClick(itemId: string) {
+  if (itemId === 'logout') {
+    await authStore.logout()
+  }
   emit('menuClick', itemId)
 }
 </script>

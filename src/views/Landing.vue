@@ -16,7 +16,10 @@ import Navbar from '@/components/Navbar.vue'
             A web-based internship platform that helps students find the right opportunities, schools manage OJT programs, 
             and companies hire qualified interns using a decision support system and mobile application.
           </p>
-          
+          <div class="hero-actions">
+            <RouterLink to="/register" class="btn btn-primary">Get Started</RouterLink>
+            <RouterLink to="/login" class="btn btn-outline">Login</RouterLink>
+          </div>
         </div>
         <div class="hero-visual">
           <div class="hero-blob"></div>
@@ -141,6 +144,47 @@ import Navbar from '@/components/Navbar.vue'
             </div>
             <h4>Easy Access</h4>
             <p>Web and mobile platform support.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="pricing" class="section pricing">
+        <div class="pill">Pricing</div>
+        <h2 class="center">Simple plans for schools and companies</h2>
+        <p class="center muted">
+          Students use the platform through their school's active subscription.
+        </p>
+        <div class="pricing-grid">
+          <div class="pricing-card">
+            <h3>Free</h3>
+            <div class="price">₱0<span>/month</span></div>
+            <p>Basic access for small teams.</p>
+            <ul>
+              <li>Post internships</li>
+              <li>Basic matching</li>
+              <li>Student applications</li>
+            </ul>
+          </div>
+          <div class="pricing-card featured">
+            <div class="badge">Most Popular</div>
+            <h3>Standard</h3>
+            <div class="price">₱1,499<span>/month</span></div>
+            <p>Best for growing schools and employers.</p>
+            <ul>
+              <li>Analytics dashboard</li>
+              <li>Priority support</li>
+              <li>Advanced reports</li>
+            </ul>
+          </div>
+          <div class="pricing-card">
+            <h3>Premium</h3>
+            <div class="price">₱2,999<span>/month</span></div>
+            <p>Full suite + DSS customization.</p>
+            <ul>
+              <li>DSS weight controls</li>
+              <li>Bulk approvals</li>
+              <li>Custom templates</li>
+            </ul>
           </div>
         </div>
       </section>

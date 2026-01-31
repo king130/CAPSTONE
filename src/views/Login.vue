@@ -2,55 +2,51 @@
 import Swal from 'sweetalert2'
 import { RouterLink, useRouter } from 'vue-router'
 import { ref } from 'vue'
+import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
+const authStore = useAuthStore()
 const email = ref('')
 const password = ref('')
+const showPassword = ref(false)
+
+async function handleAuthSuccess(profile: { role?: string } | null) {
+  if (!profile?.role) {
+    throw new Error('Account setup incomplete. Your user profile is missing. Please contact support or re-register.')
+  }
+  await Swal.fire({
+    icon: 'success',
+    iconColor: '#16a34a',
+    title: 'Login Successful!',
+    text: profile.role === 'company' ? 'Welcome to the Company Dashboard.' : 'Welcome back!',
+    confirmButtonText: 'Continue',
+    confirmButtonColor: '#2563eb',
+    customClass: {
+      popup: 'capstone-swal-popup',
+      title: 'capstone-swal-title',
+      htmlContainer: 'capstone-swal-text',
+      confirmButton: 'capstone-swal-confirm',
+    },
+  })
+
+  if (profile.role === 'company' || profile.role === 'school') {
+    router.push('/dashboard')
+  } else {
+    router.push('/intern')
+  }
+}
 
 async function onLogin() {
-  console.log('Email entered:', email.value)
-  const emailLower = email.value.trim().toLowerCase()
-  
-  if (emailLower === 'company@gmail.com') {
-    console.log('Company login successful, navigating to dashboard')
-    await Swal.fire({
-      icon: 'success',
-      iconColor: '#16a34a',
-      title: 'Login Successful!',
-      text: 'Welcome to the Company Dashboard.',
-      confirmButtonText: 'Continue',
-      confirmButtonColor: '#2563eb',
-      customClass: {
-        popup: 'capstone-swal-popup',
-        title: 'capstone-swal-title',
-        htmlContainer: 'capstone-swal-text',
-        confirmButton: 'capstone-swal-confirm',
-      },
-    })
-    router.push('/dashboard')
-  } else if (emailLower === 'intern@gmail.com') {
-    console.log('Intern login successful, navigating to intern dashboard')
-    await Swal.fire({
-      icon: 'success',
-      iconColor: '#16a34a',
-      title: 'Login Successful!',
-      text: 'Welcome to your Intern Dashboard.',
-      confirmButtonText: 'Continue',
-      confirmButtonColor: '#2563eb',
-      customClass: {
-        popup: 'capstone-swal-popup',
-        title: 'capstone-swal-title',
-        htmlContainer: 'capstone-swal-text',
-        confirmButton: 'capstone-swal-confirm',
-      },
-    })
-    router.push('/intern')
-  } else {
+  try {
+    const profile = await authStore.login(email.value.trim(), password.value)
+    await handleAuthSuccess(profile)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Invalid credentials.'
     await Swal.fire({
       icon: 'error',
       iconColor: '#dc2626',
       title: 'Login Failed!',
-      text: 'Invalid credentials.',
+      text: message,
       confirmButtonText: 'Try Again',
       confirmButtonColor: '#2563eb',
       customClass: {
@@ -60,6 +56,53 @@ async function onLogin() {
         confirmButton: 'capstone-swal-confirm',
       },
     })
+  }
+}
+
+async function useDemoAccount() {
+  const demoEmail = 'student@demo.com'
+  const demoPassword = 'DemoPass123!'
+  email.value = demoEmail
+  password.value = demoPassword
+
+  try {
+    const profile = await authStore.login(demoEmail, demoPassword)
+    await handleAuthSuccess(profile)
+  } catch (error) {
+    try {
+      const profile = await authStore.register({
+        fullName: 'Alex Student',
+        email: demoEmail,
+        password: demoPassword,
+        role: 'student',
+        profile: {
+          studentId: '2026-0001',
+          schoolName: 'Cavite State University',
+          course: 'Computer Science',
+          yearLevel: '4th Year',
+          preferredField: 'Software Development',
+          contactNumber: '09171234567',
+        },
+      })
+      await handleAuthSuccess(profile)
+    } catch (registerError) {
+      const message =
+        registerError instanceof Error ? registerError.message : 'Unable to create demo account.'
+      await Swal.fire({
+        icon: 'error',
+        iconColor: '#dc2626',
+        title: 'Demo Login Failed',
+        text: message,
+        confirmButtonText: 'Try Again',
+        confirmButtonColor: '#2563eb',
+        customClass: {
+          popup: 'capstone-swal-popup',
+          title: 'capstone-swal-title',
+          htmlContainer: 'capstone-swal-text',
+          confirmButton: 'capstone-swal-confirm',
+        },
+      })
+    }
   }
 }
 </script>
@@ -96,7 +139,16 @@ async function onLogin() {
 
         <form @submit.prevent="onLogin">
           <input type="email" placeholder="Email Address:" v-model="email" />
-          <input type="password" placeholder="Password:" v-model="password" />
+          <div class="password-field">
+            <input
+              :type="showPassword ? 'text' : 'password'"
+              placeholder="Password:"
+              v-model="password"
+            />
+            <button type="button" class="toggle-password" @click="showPassword = !showPassword">
+              {{ showPassword ? 'Hide' : 'Show' }}
+            </button>
+          </div>
 
           <div class="row">
             <label>
@@ -106,11 +158,17 @@ async function onLogin() {
             <a href="#">Forgot password</a>
           </div>
 
-          <button type="submit">Log In</button>
+          <button type="submit" :disabled="authStore.loading">Log In</button>
+          <button type="button" class="demo-login" @click="useDemoAccount" :disabled="authStore.loading">
+            Use Demo Account
+          </button>
 
           <p class="signup">
             Don’t have an account?
             <RouterLink to="/register">Sign up</RouterLink>
+          </p>
+          <p class="admin-link">
+            <RouterLink to="/admin/login">Admin Login</RouterLink>
           </p>
         </form>
       </div>

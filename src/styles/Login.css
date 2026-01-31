@@ -61,6 +61,7 @@
   padding: 56px 48px;
   text-align: center;
   position: relative;
+  overflow: hidden;
 }
 
 .back-link {
@@ -119,16 +120,33 @@
 
 form {
   text-align: left;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 input[type='email'],
-input[type='password'] {
+input[type='password'],
+input[type='text'] {
   width: 100%;
   padding: 12px 14px;
   border-radius: 6px;
   border: 1px solid #e5e7eb;
   margin-bottom: 16px;
   font-size: 14px;
+  box-sizing: border-box;
+}
+
+.password-field {
+  position: relative;
+  margin-bottom: 16px;
+  width: 100%;
+}
+
+.password-field input {
+  padding-right: 72px;
+  margin-bottom: 0;
+  box-sizing: border-box;
 }
 
 .row {
@@ -144,7 +162,7 @@ input[type='password'] {
   text-decoration: none;
 }
 
-button {
+.right form > button {
   width: 100%;
   padding: 12px;
   background: #2563eb;
@@ -153,6 +171,35 @@ button {
   color: white;
   font-weight: 600;
   cursor: pointer;
+}
+
+.demo-login {
+  margin-top: 10px;
+  background: #f1f5f9;
+  color: #0f172a;
+  border: 1px solid #e2e8f0;
+}
+
+.demo-login:disabled {
+  background: #e2e8f0;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.toggle-password {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 6px 8px;
+  width: auto;
+  z-index: 1;
 }
 
 .signup {
@@ -165,4 +212,19 @@ button {
   color: #2563eb;
   font-weight: 500;
   text-decoration: none;
+}
+
+.admin-link {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.admin-link a {
+  color: #6b7280;
+  text-decoration: none;
+}
+
+.admin-link a:hover {
+  color: #2563eb;
 }
