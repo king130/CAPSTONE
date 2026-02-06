@@ -373,7 +373,7 @@ function handleMenuClick(menuItem: string) {
 
 .main-content-area {
   flex: 1;
-  margin-left: 240px;
+  margin-left: 280px;
   min-height: 100vh;
 }
 
@@ -900,7 +900,7 @@ function handleMenuClick(menuItem: string) {
 /* Responsive */
 @media (max-width: 1200px) {
   .main-content-area {
-    margin-left: 60px;
+    margin-left: 0;
   }
   
   .community-container {
@@ -916,7 +916,7 @@ function handleMenuClick(menuItem: string) {
 
 @media (max-width: 768px) {
   .main-content-area {
-    margin-left: 60px;
+    margin-left: 0;
   }
   
   .community-container {

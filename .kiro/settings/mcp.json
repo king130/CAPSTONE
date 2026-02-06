@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "power-figma-figma": {
+      "command": "uvx",
+      "args": ["mcp-server-figma"],
+      "env": {
+        "FIGMA_PERSONAL_ACCESS_TOKEN": ""
+      },
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}

@@ -94,7 +94,7 @@ async function handleMenuClick(itemId: string) {
 
 <style scoped>
 .intern-sidebar {
-  width: 240px;
+  width: 280px;
   background: #1e3a8a;
   color: #fff;
   display: flex;
@@ -173,16 +173,6 @@ async function handleMenuClick(itemId: string) {
 
 .nav-item:hover .nav-icon-img {
   filter: brightness(0) saturate(100%) invert(100%) sepia(0%) saturate(7500%) hue-rotate(109deg) brightness(107%) contrast(107%);
-}
-
-/* Specific styling for community icon to ensure blue color */
-.nav-item:nth-child(5) .nav-icon-img {
-  filter: brightness(0) saturate(100%) invert(42%) sepia(93%) saturate(1352%) hue-rotate(220deg) brightness(119%) contrast(119%) !important;
-}
-
-.nav-item:nth-child(5).active .nav-icon-img,
-.nav-item:nth-child(5):hover .nav-icon-img {
-  filter: brightness(0) saturate(100%) invert(100%) sepia(0%) saturate(7500%) hue-rotate(109deg) brightness(107%) contrast(107%) !important;
 }
 
 .sidebar-bottom {

@@ -4,6 +4,7 @@ import Login from '@/views/Login.vue'
 import Register from '@/views/Register.vue'
 import FindInternships from '@/views/FindInternships.vue'
 import Dashboard from '@/views/company/Company.vue'
+import School from '@/views/school/School.vue'
 import Intern from '@/views/intern/Intern.vue'
 import AccountDisabled from '@/views/AccountDisabled.vue'
 import AdminLogin from '@/views/admin/AdminLogin.vue'
@@ -21,6 +22,7 @@ const router = createRouter({
     { path: '/register', name: 'register', component: Register },
     { path: '/find-internships', name: 'find-internships', component: FindInternships },
     { path: '/dashboard', name: 'dashboard', component: Dashboard },
+    { path: '/school', name: 'school', component: School },
     { path: '/intern', name: 'intern', component: Intern },
     { path: '/account-disabled', name: 'account-disabled', component: AccountDisabled },
     { path: '/admin/login', name: 'admin-login', component: AdminLogin },
@@ -47,6 +49,14 @@ router.beforeEach((to) => {
 
   if (to.meta.requiresAdmin && authStore.user?.role !== 'admin') {
     return { name: 'admin-login' }
+  }
+
+  if (to.meta.requiresCompany && authStore.user?.role !== 'company' && authStore.user?.role !== 'school') {
+    return { name: 'login' }
+  }
+
+  if (to.meta.requiresStudent && authStore.user?.role !== 'student') {
+    return { name: 'login' }
   }
 
   return true

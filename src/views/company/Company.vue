@@ -2555,7 +2555,7 @@ function saveSettings() {
 /* Main Wrapper */
 .main-wrapper {
   flex: 1;
-  margin-left: 240px;
+  margin-left: 280px;
   display: flex;
   flex-direction: column;
 }
@@ -3033,7 +3033,7 @@ function saveSettings() {
   }
 
   .main-wrapper {
-    margin-left: 200px;
+    margin-left: 0;
   }
 
   .action-buttons {

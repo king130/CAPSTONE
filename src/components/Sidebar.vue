@@ -135,7 +135,7 @@ defineExpose({
 
 <style scoped>
 .sidebar {
-  width: 240px;
+  width: 280px;
   background: #1e3a8a;
   color: #fff;
   display: flex;

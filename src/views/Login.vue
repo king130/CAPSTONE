@@ -14,11 +14,17 @@ async function handleAuthSuccess(profile: { role?: string } | null) {
   if (!profile?.role) {
     throw new Error('Account setup incomplete. Your user profile is missing. Please contact support or re-register.')
   }
+  const message = profile.role === 'company' 
+    ? 'Welcome to the Company Dashboard.' 
+    : profile.role === 'school' 
+    ? 'Welcome to the School Dashboard.'
+    : 'Welcome back!'
+
   await Swal.fire({
     icon: 'success',
     iconColor: '#16a34a',
     title: 'Login Successful!',
-    text: profile.role === 'company' ? 'Welcome to the Company Dashboard.' : 'Welcome back!',
+    text: message,
     confirmButtonText: 'Continue',
     confirmButtonColor: '#2563eb',
     customClass: {
@@ -29,8 +35,10 @@ async function handleAuthSuccess(profile: { role?: string } | null) {
     },
   })
 
-  if (profile.role === 'company' || profile.role === 'school') {
+  if (profile.role === 'company') {
     router.push('/dashboard')
+  } else if (profile.role === 'school') {
+    router.push('/school')
   } else {
     router.push('/intern')
   }
