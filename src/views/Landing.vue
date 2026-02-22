@@ -18,7 +18,6 @@ import Navbar from '@/components/Navbar.vue'
           </p>
           <div class="hero-actions">
             <RouterLink to="/register" class="btn btn-primary">Get Started</RouterLink>
-            <RouterLink to="/login" class="btn btn-outline">Login</RouterLink>
           </div>
         </div>
         <div class="hero-visual">
@@ -149,7 +148,6 @@ import Navbar from '@/components/Navbar.vue'
       </section>
 
       <section id="pricing" class="section pricing">
-        <div class="pill">Pricing</div>
         <h2 class="center">Simple plans for schools and companies</h2>
         <p class="center muted">
           Students use the platform through their school's active subscription.
@@ -248,8 +246,7 @@ import Navbar from '@/components/Navbar.vue'
           <h2>Ready to start your internship journey?</h2>
           <p>Join students, schools, and companies already using OJT Path.</p>
           <div class="cta-actions">
-            <RouterLink to="/register" class="btn btn-primary">Get Started</RouterLink>
-            <RouterLink to="/login" class="btn btn-ghost">Login</RouterLink>
+            <RouterLink to="/register" class="btn btn-ghost">Get Started</RouterLink>
           </div>
         </div>
       </section>

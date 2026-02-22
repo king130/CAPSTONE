@@ -4,6 +4,7 @@ import SchoolSidebar from '../../components/SchoolSidebar.vue'
 import FloatingChatWidget from '../../components/FloatingChatWidget.vue'
 import { useAuthStore } from '@/stores/auth'
 import Swal from 'sweetalert2'
+import { BellIcon } from '@heroicons/vue/24/outline'
 
 const authStore = useAuthStore()
 const schoolName = computed(() => {
@@ -600,7 +601,7 @@ const requiredDocumentsList = ref([
             <h1>Dashboard</h1>
           </div>
           <div class="header-right">
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
+            <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
             <div class="avatar">AC</div>
           </div>
@@ -778,7 +779,7 @@ const requiredDocumentsList = ref([
               </div>
               <input type="search" placeholder="Search by company or position..." class="search-input" />
             </div>
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
+            <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
             <div class="avatar">AC</div>
           </div>
@@ -1059,7 +1060,7 @@ const requiredDocumentsList = ref([
             <h1>Internship Applications</h1>
           </div>
           <div class="header-right">
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
+            <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
             <div class="avatar">AC</div>
           </div>
@@ -1259,7 +1260,7 @@ const requiredDocumentsList = ref([
             <h1>Companies</h1>
           </div>
           <div class="header-right">
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
+            <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
             <div class="avatar">AC</div>
           </div>
@@ -1654,7 +1655,7 @@ const requiredDocumentsList = ref([
           </div>
           <div class="header-right">
             <span class="step-indicator">Step 1 of 3</span>
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
+            <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
             <div class="avatar">AC</div>
           </div>
@@ -1747,7 +1748,7 @@ const requiredDocumentsList = ref([
             <h1>Community</h1>
           </div>
           <div class="header-right">
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
+            <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
             <div class="avatar">AC</div>
           </div>
@@ -1957,7 +1958,7 @@ const requiredDocumentsList = ref([
             <h1>Documents</h1>
           </div>
           <div class="header-right">
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
+            <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
             <div class="avatar">AC</div>
           </div>
@@ -1974,7 +1975,7 @@ const requiredDocumentsList = ref([
             <h1>Reports</h1>
           </div>
           <div class="header-right">
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
+            <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
             <div class="avatar">AC</div>
           </div>
@@ -2113,7 +2114,7 @@ const requiredDocumentsList = ref([
             <h1>Student Interns</h1>
           </div>
           <div class="header-right">
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
+            <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
             <div class="avatar">AC</div>
           </div>
@@ -3033,3 +3034,4 @@ const requiredDocumentsList = ref([
 
 <style scoped src="../../styles/School.css">
 </style>
+

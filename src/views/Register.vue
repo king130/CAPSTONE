@@ -342,6 +342,9 @@ async function onRegister() {
 <template>
   <div class="page">
     <div class="card">
+      <div class="back-link">
+      </div>
+      
       <div class="icon-row">
         <div class="icon-bubbles">
           <img src="/icons/logo-main.png" alt="OJT Intern Path" class="register-logo" />

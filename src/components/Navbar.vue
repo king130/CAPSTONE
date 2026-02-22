@@ -9,32 +9,19 @@
     </button>
     <nav :class="['links', { open: isMenuOpen }]">
       <a href="#why">Why Us</a>
-      <a href="#features">Features</a>
-      <a href="#pricing">Pricing</a>
-      <a href="#steps">How It Works</a>
+      <a href="#pricing">Subscriptions</a>
       <RouterLink to="/find-internships">Find Internships</RouterLink>
     </nav>
     <div class="nav-actions">
-      <div v-if="authStore.user" class="profile-chip">
-        <div class="bell" role="button" @click="notificationStore.markAllRead()" title="Mark notifications as read">
-          🔔
-          <span v-if="notificationStore.unreadCount()" class="badge">{{ notificationStore.unreadCount() }}</span>
-        </div>
-        <div class="avatar" :title="authStore.user.displayName">
-          <img v-if="avatarUrl" :src="avatarUrl" :alt="authStore.user.displayName" />
-          <span v-else>{{ userInitials }}</span>
-        </div>
-      </div>
-      <RouterLink v-else to="/login" :class="['btn', buttonStyle]">{{ buttonText }}</RouterLink>
+      <RouterLink to="/register" class="btn btn-primary">Register</RouterLink>
+      <RouterLink to="/login" :class="['btn', buttonStyle]">{{ buttonText }}</RouterLink>
     </div>
   </header>
 </template>
 
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
-import { computed, ref } from 'vue'
-import { useAuthStore } from '@/stores/auth'
-import { useNotificationStore } from '@/stores/notifications'
+import { ref } from 'vue'
 
 // Props to customize the navbar
 interface Props {
@@ -49,24 +36,7 @@ const props = withDefaults(defineProps<Props>(), {
   backgroundStyle: 'nav-transparent'
 })
 
-const authStore = useAuthStore()
-const notificationStore = useNotificationStore()
 const isMenuOpen = ref(false)
-
-const avatarUrl = computed(() => {
-  const profile = authStore.user?.profile as Record<string, unknown> | undefined
-  return (profile?.photoUrl as string) || ''
-})
-
-const userInitials = computed(() => {
-  const name = authStore.user?.displayName || 'User'
-  return name
-    .split(' ')
-    .filter(Boolean)
-    .map((part) => part[0])
-    .join('')
-    .toUpperCase()
-})
 </script>
 
 <style scoped>
@@ -99,14 +69,14 @@ const userInitials = computed(() => {
 }
 
 .logo-icon {
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
   object-fit: cover;
 }
 
 .logo-text {
-  font-size: 18px;
+  font-size: 20px;
 }
 
 .links {
@@ -119,50 +89,6 @@ const userInitials = computed(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.profile-chip {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 13px;
-  color: #1f2937;
-}
-
-.bell {
-  position: relative;
-  font-size: 16px;
-}
-
-.badge {
-  position: absolute;
-  top: -6px;
-  right: -8px;
-  background: #ef4444;
-  color: #fff;
-  border-radius: 999px;
-  font-size: 10px;
-  padding: 2px 6px;
-}
-
-.avatar {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  background: #2563eb;
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
 }
 
 .menu-toggle {
@@ -192,8 +118,8 @@ const userInitials = computed(() => {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 10px 16px;
-  border-radius: 8px;
+  padding: 10px 24px;
+  border-radius: 24px;
   font-weight: 600;
   font-size: 14px;
   text-decoration: none;
@@ -210,6 +136,8 @@ const userInitials = computed(() => {
 
 .btn-outline:hover {
   background: #eff6ff;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
 }
 
 .btn-primary {
@@ -219,6 +147,8 @@ const userInitials = computed(() => {
 
 .btn-primary:hover {
   background: #1d4ed8;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
 }
 
 /* Responsive */

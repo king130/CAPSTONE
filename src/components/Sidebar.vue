@@ -174,18 +174,17 @@ defineExpose({
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 0 12px;
+  gap: 2px;
+  padding: 0;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 16px;
+  padding: 12px 20px;
   color: #cbd5e1;
   text-decoration: none;
-  border-radius: 8px;
   transition: all 0.2s;
   font-size: 14px;
 }
@@ -196,8 +195,9 @@ defineExpose({
 }
 
 .nav-item.active {
-  background: #3b82f6;
+  background: rgba(255, 255, 255, 0.15);
   color: #fff;
+  border-right: 3px solid #60a5fa;
 }
 
 .nav-icon {
@@ -222,12 +222,12 @@ defineExpose({
 }
 
 .sidebar-bottom {
-  padding: 12px;
+  padding: 0 0 20px 0;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   margin-top: auto;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 @media (max-width: 768px) {

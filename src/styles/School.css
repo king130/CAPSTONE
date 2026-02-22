@@ -48,6 +48,18 @@
   gap: 16px;
 }
 
+.notification-icon-bell {
+  width: 24px;
+  height: 24px;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.notification-icon-bell:hover {
+  color: #2563eb;
+  transform: scale(1.1);
+}
 .notification-icon {
   width: 24px;
   height: 24px;

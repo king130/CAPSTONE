@@ -9,17 +9,77 @@ import InternInternship from '@/components/InternInternship.vue'
 import InternMessages from '@/components/InternMessages.vue'
 import InternSettings from '@/components/InternSettings.vue'
 import FloatingChatWidget from '@/components/FloatingChatWidget.vue'
+import { 
+  CameraIcon, 
+  VideoCameraIcon, 
+  DocumentTextIcon, 
+  HandThumbUpIcon, 
+  ChatBubbleLeftIcon, 
+  ArrowPathIcon,
+  BellIcon
+} from '@heroicons/vue/24/outline'
 
 const authStore = useAuthStore()
+
+const userInitials = computed(() => {
+  const name = authStore.user?.displayName || authStore.user?.email || 'User'
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2)
+})
+
+// TEMPORARY DATA: Notification dropdown state - this is a UI state variable
+const showNotifications = ref(false)
+
+// TEMPORARY DATA: Static notifications for dropdown - replace with real data from backend
+const notifications = ref([
+  {
+    id: 1,
+    title: 'Application Update',
+    message: 'Your application to TechCorp has been reviewed',
+    time: '2 hours ago',
+    unread: true
+  },
+  {
+    id: 2,
+    title: 'Interview Scheduled',
+    message: 'Interview scheduled for May 20 at 2:00 PM',
+    time: '5 hours ago',
+    unread: true
+  },
+  {
+    id: 3,
+    title: 'Document Reminder',
+    message: 'Please upload your resume',
+    time: '1 day ago',
+    unread: false
+  },
+  {
+    id: 4,
+    title: 'New Internship Match',
+    message: 'You have 3 new internship matches',
+    time: '2 days ago',
+    unread: false
+  }
+])
+
+function toggleNotifications() {
+  showNotifications.value = !showNotifications.value
+}
+
 const organizationName = computed(() => {
   const profile = authStore.user?.profile as Record<string, unknown> | undefined
   return (profile?.schoolName as string) || authStore.user?.displayName || 'Account'
 })
 
-// Current active view
+// TEMPORARY DATA: UI state variable for tracking active view - this is a UI state variable
 const activeView = ref('dashboard')
 
-// User profile data
+// TEMPORARY DATA: User profile data for community view - replace with real data from backend/auth store
 const currentUser = ref({
   name: 'Alex Doe',
   title: 'Full Stack Developer',
@@ -28,7 +88,7 @@ const currentUser = ref({
   views: 25
 })
 
-// Posts/Updates data
+// TEMPORARY DATA: Posts/updates data for community feed - replace with real data from backend
 const posts = ref([
   {
     id: 1,
@@ -71,7 +131,7 @@ const posts = ref([
   }
 ])
 
-// Suggestions data
+// TEMPORARY DATA: Suggestions data for community sidebar - replace with real data from backend
 const suggestions = ref([
   { name: 'Jessica Williams', title: 'Product Manager', avatar: '/icons/profiles/emily-johnson.jpg' },
   { name: 'Mike Rodriguez', title: 'Software Engineer', avatar: '/icons/profiles/robert-taylor.jpg' },
@@ -82,7 +142,7 @@ const suggestions = ref([
   { name: 'Sophia Martinez', title: 'Marketing Specialist', avatar: '/icons/profiles/sophia-martinez.jpg' }
 ])
 
-// Job listings data
+// TEMPORARY DATA: Job listings data for community sidebar - replace with real data from backend
 const jobListings = ref([
   {
     title: 'UI/UX Designer',
@@ -116,7 +176,7 @@ const jobListings = ref([
   }
 ])
 
-// Most viewed profiles
+// TEMPORARY DATA: Most viewed profiles data for community sidebar - replace with real data from backend
 const mostViewed = ref([
   { name: 'Jessica Williams', title: 'Product Manager', avatar: '/icons/profiles/emily-johnson.jpg' },
   { name: 'Mike Rodriguez', title: 'Software Engineer', avatar: '/icons/profiles/john-smith.jpg' },
@@ -198,16 +258,16 @@ function handleMenuClick(menuItem: string) {
     <!-- Main Content Area -->
     <div class="main-content-area">
       <!-- Dashboard View -->
-      <InternDashboard v-if="activeView === 'dashboard'" @openMessages="activeView = 'messages'" />
+      <InternDashboard v-if="activeView === 'dashboard'" @openMessages="activeView = 'messages'" @navigateToProfile="activeView = 'settings'" />
       
       <!-- Internship View -->
-      <InternInternship v-else-if="activeView === 'internship'" @openMessages="activeView = 'messages'" />
+      <InternInternship v-else-if="activeView === 'internship'" @openMessages="activeView = 'messages'" @navigateToProfile="activeView = 'settings'" />
       
       <!-- Documents View -->
-      <InternDocuments v-else-if="activeView === 'documents'" @openMessages="activeView = 'messages'" />
+      <InternDocuments v-else-if="activeView === 'documents'" @openMessages="activeView = 'messages'" @navigateToProfile="activeView = 'settings'" />
       
       <!-- Readiness Check View -->
-      <InternReadinessCheck v-else-if="activeView === 'readiness-check'" @openMessages="activeView = 'messages'" />
+      <InternReadinessCheck v-else-if="activeView === 'readiness-check'" @openMessages="activeView = 'messages'" @navigateToProfile="activeView = 'settings'" />
       
       <!-- Messages View -->
       <InternMessages v-else-if="activeView === 'messages'" />
@@ -224,8 +284,8 @@ function handleMenuClick(menuItem: string) {
             <h1 class="header-title">Community</h1>
           </div>
           <div class="header-right">
-            <span class="company-name">{{ organizationName }}</span>
-            <div class="user-avatar">AC</div>
+            <BellIcon class="notification-icon-bell" />
+            <div class="avatar" title="View Profile">{{ userInitials }}</div>
           </div>
         </header>
 
@@ -277,9 +337,18 @@ function handleMenuClick(menuItem: string) {
                 <input type="text" placeholder="What's on your mind?" class="post-input" />
               </div>
               <div class="post-actions">
-                <button class="post-action-btn">📷 Photo</button>
-                <button class="post-action-btn">📹 Video</button>
-                <button class="post-action-btn">📄 Document</button>
+                <button class="post-action-btn">
+                  <CameraIcon class="post-action-icon" />
+                  Photo
+                </button>
+                <button class="post-action-btn">
+                  <VideoCameraIcon class="post-action-icon" />
+                  Video
+                </button>
+                <button class="post-action-btn">
+                  <DocumentTextIcon class="post-action-icon" />
+                  Document
+                </button>
                 <button class="post-btn">Post</button>
               </div>
             </div>
@@ -300,13 +369,16 @@ function handleMenuClick(menuItem: string) {
                 </div>
                 <div class="post-actions-bar">
                   <button @click="likePost(post.id)" class="post-action">
-                    👍 {{ post.likes }}
+                    <HandThumbUpIcon class="post-action-bar-icon" />
+                    {{ post.likes }}
                   </button>
                   <button class="post-action">
-                    💬 {{ post.comments }} Comment
+                    <ChatBubbleLeftIcon class="post-action-bar-icon" />
+                    {{ post.comments }} Comment
                   </button>
                   <button @click="sharePost(post.id)" class="post-action">
-                    🔄 {{ post.shares }} Share
+                    <ArrowPathIcon class="post-action-bar-icon" />
+                    {{ post.shares }} Share
                   </button>
                 </div>
               </article>
@@ -406,9 +478,9 @@ function handleMenuClick(menuItem: string) {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 24px;
-  background: linear-gradient(135deg, #dbeafe 0%, #e0e7ff 100%);
-  border-bottom: 1px solid #c7d2fe;
+  padding: 16px 32px;
+  background: #dbeafe;
+  border-bottom: 1px solid #bfdbfe;
 }
 
 .community-header .header-left {
@@ -421,12 +493,12 @@ function handleMenuClick(menuItem: string) {
   width: 24px;
   height: 24px;
   object-fit: contain;
-  filter: brightness(0) saturate(100%) invert(42%) sepia(93%) saturate(1352%) hue-rotate(220deg) brightness(119%) contrast(119%);
+  filter: brightness(0) saturate(100%) invert(27%) sepia(51%) saturate(2878%) hue-rotate(220deg) brightness(104%) contrast(97%);
 }
 
 .community-header .header-title {
-  font-size: 20px;
-  font-weight: 600;
+  font-size: 24px;
+  font-weight: 700;
   color: #1e40af;
   margin: 0;
 }
@@ -434,31 +506,41 @@ function handleMenuClick(menuItem: string) {
 .community-header .header-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
 }
 
-.community-header .notification-icon {
-  font-size: 16px;
-  color: #4338ca;
+.community-header .notification-icon-bell {
+  width: 24px;
+  height: 24px;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.2s ease;
 }
 
-.community-header .company-name {
-  font-size: 14px;
-  color: #4338ca;
-  font-weight: 500;
+.community-header .notification-icon-bell:hover {
+  color: #2563eb;
+  transform: scale(1.1);
 }
 
-.community-header .user-avatar {
-  width: 32px;
-  height: 32px;
+.community-header .avatar {
+  width: 36px;
+  height: 36px;
   background: #3b82f6;
-  color: white;
+  color: #fff;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.community-header .avatar:hover {
+  background: #2563eb;
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
 }
 
 /* Community Container */
@@ -484,6 +566,12 @@ function handleMenuClick(menuItem: string) {
   padding: 20px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   text-align: center;
+}
+
+.profile-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .profile-avatar {
@@ -666,6 +754,9 @@ function handleMenuClick(menuItem: string) {
 }
 
 .post-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   background: none;
   border: none;
   color: #6b7280;
@@ -674,6 +765,11 @@ function handleMenuClick(menuItem: string) {
   padding: 8px 12px;
   border-radius: 6px;
   transition: background 0.2s;
+}
+
+.post-action-icon {
+  width: 18px;
+  height: 18px;
 }
 
 .post-action-btn:hover {
@@ -763,6 +859,9 @@ function handleMenuClick(menuItem: string) {
 }
 
 .post-action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   background: none;
   border: none;
   color: #6b7280;
@@ -770,6 +869,11 @@ function handleMenuClick(menuItem: string) {
   cursor: pointer;
   padding: 8px 0;
   transition: color 0.2s;
+}
+
+.post-action-bar-icon {
+  width: 18px;
+  height: 18px;
 }
 
 .post-action:hover {

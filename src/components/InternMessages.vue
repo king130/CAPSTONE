@@ -1,918 +1,772 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import { 
+  BellIcon,
+  MagnifyingGlassIcon,
+  PaperAirplaneIcon,
+  PaperClipIcon,
+  EllipsisVerticalIcon,
+  PhoneIcon,
+  VideoCameraIcon
+} from '@heroicons/vue/24/outline'
 
 const authStore = useAuthStore()
-const organizationName = computed(() => {
-  const profile = authStore.user?.profile as Record<string, unknown> | undefined
-  return (profile?.schoolName as string) || authStore.user?.displayName || 'Account'
+
+const userInitials = computed(() => {
+  const name = authStore.user?.displayName || authStore.user?.email || 'User'
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2)
 })
 
-// Messages data - using the same design as the document upload complete view
-const messagesData = ref({
-  progress: 75,
-  completedSteps: [
-    { name: 'Personal Information', completed: true },
-    { name: 'Documents', completed: true }
-  ],
-  nextSteps: [
-    {
-      number: 1,
-      title: 'Review your application',
-      description: 'Double-check all info before submitting'
-    },
-    {
-      number: 2,
-      title: 'Preview employer view',
-      description: 'See how employers will see your profile'
-    },
-    {
-      number: 3,
-      title: 'Submit your application',
-      description: 'Complete and send your application'
-    }
-  ],
-  summary: {
-    filesUploaded: 4,
-    totalSize: '6.2 MB'
+// TEMPORARY DATA: Conversations list - replace with real data from backend
+const conversations = ref([
+  {
+    id: 1,
+    name: 'TechCorp HR Team',
+    avatar: '/icons/profiles/emily-johnson.jpg',
+    lastMessage: 'Your application has been reviewed',
+    timestamp: '2m ago',
+    unread: 2,
+    online: true
   },
-  documents: [
-    {
-      name: 'Resume/CV',
-      filename: 'JohnDoe_Resume.pdf',
-      status: 'uploaded'
-    },
-    {
-      name: 'Cover Letter',
-      filename: 'JohnDoe_CoverLetter.pdf',
-      status: 'uploaded'
-    },
-    {
-      name: 'Portfolio/Work Samples',
-      filename: 'Portfolio_3_files.zip',
-      status: 'uploaded'
-    },
-    {
-      name: 'References Document',
-      filename: 'Professional_References.pdf',
-      status: 'uploaded'
-    }
-  ]
+  {
+    id: 2,
+    name: 'Maria Santos',
+    avatar: '/icons/profiles/maria-santos.jpg',
+    lastMessage: 'Thanks for the update!',
+    timestamp: '1h ago',
+    unread: 0,
+    online: true
+  },
+  {
+    id: 3,
+    name: 'John Smith',
+    avatar: '/icons/profiles/john-smith.jpg',
+    lastMessage: 'Can we schedule a meeting?',
+    timestamp: '3h ago',
+    unread: 1,
+    online: false
+  },
+  {
+    id: 4,
+    name: 'Innovation Labs',
+    avatar: '/icons/profiles/david-kim.jpg',
+    lastMessage: 'Welcome to the team!',
+    timestamp: '1d ago',
+    unread: 0,
+    online: false
+  }
+])
+
+// TEMPORARY DATA: Selected conversation messages - replace with real data from backend
+const selectedConversation = ref(1)
+const messages = ref([
+  {
+    id: 1,
+    sender: 'TechCorp HR Team',
+    content: 'Hello! Thank you for applying to our Software Engineering Internship position.',
+    timestamp: '10:30 AM',
+    isOwn: false
+  },
+  {
+    id: 2,
+    sender: 'You',
+    content: 'Thank you for considering my application! I\'m very excited about this opportunity.',
+    timestamp: '10:32 AM',
+    isOwn: true
+  },
+  {
+    id: 3,
+    sender: 'TechCorp HR Team',
+    content: 'We\'ve reviewed your application and would like to schedule an interview. Are you available next week?',
+    timestamp: '10:35 AM',
+    isOwn: false
+  },
+  {
+    id: 4,
+    sender: 'You',
+    content: 'Yes, I\'m available next week. What days work best for you?',
+    timestamp: '10:37 AM',
+    isOwn: true
+  },
+  {
+    id: 5,
+    sender: 'TechCorp HR Team',
+    content: 'Great! How about Tuesday at 2:00 PM? We\'ll send you a calendar invite with the meeting link.',
+    timestamp: '10:40 AM',
+    isOwn: false
+  }
+])
+
+const messageInput = ref('')
+const searchQuery = ref('')
+
+function selectConversation(id: number) {
+  selectedConversation.value = id
+}
+
+function sendMessage() {
+  if (messageInput.value.trim()) {
+    messages.value.push({
+      id: messages.value.length + 1,
+      sender: 'You',
+      content: messageInput.value,
+      timestamp: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
+      isOwn: true
+    })
+    messageInput.value = ''
+  }
+}
+
+function handleAvatarClick() {
+  console.log('Avatar clicked')
+}
+
+const activeConversation = computed(() => {
+  return conversations.value.find(c => c.id === selectedConversation.value)
 })
-
-function handlePreviousStep() {
-  console.log('Previous step clicked')
-}
-
-function handleApplyNow() {
-  console.log('Apply now clicked')
-}
 </script>
 
 <template>
-  <div class="messages-content">
+  <div class="messages-container">
     <!-- Header -->
-    <div class="messages-header">
+    <header class="messages-header">
       <div class="header-left">
-        <img src="/icons/logo-main.png" alt="Logo" class="app-logo" />
+        <img src="/icons/icon-message.png" alt="Messages" class="header-icon" />
+        <h1 class="header-title">Messages</h1>
       </div>
       <div class="header-right">
-        <div class="notification-icon">🔔</div>
-        <span class="company-name">{{ organizationName }}</span>
-        <div class="user-avatar">AC</div>
+        <BellIcon class="notification-icon-bell" />
+        <div class="avatar" @click="handleAvatarClick" title="View Profile">{{ userInitials }}</div>
       </div>
-    </div>
+    </header>
 
-    <!-- Success Banner -->
-    <div class="success-banner">
-      <div class="success-icon">✓</div>
-      <div class="success-content">
-        <h2 class="success-title">All required documents uploaded!</h2>
-        <p class="success-subtitle">You can now proceed to review your application</p>
-      </div>
-    </div>
+    <div class="messages-layout">
+      <!-- Conversations Sidebar -->
+      <aside class="conversations-sidebar">
+        <div class="sidebar-header">
+          <div class="search-box">
+            <MagnifyingGlassIcon class="search-icon" />
+            <input 
+              type="text" 
+              v-model="searchQuery"
+              placeholder="Search conversations..." 
+              class="search-input"
+            />
+          </div>
+        </div>
 
-    <div class="messages-body">
-      <div class="messages-grid">
-        <!-- Left Column -->
-        <div class="left-section">
-          <!-- Document Upload Complete -->
-          <div class="completion-card">
-            <h2 class="completion-title">Document Upload Complete</h2>
-            <p class="completion-subtitle">All your documents have been successfully uploaded and verified</p>
-            
-            <div class="progress-indicator">
-              <span class="step-text">Step 2 of 2</span>
-              <div class="progress-bar-full">
-                <div class="progress-fill-full"></div>
-              </div>
+        <div class="conversations-list">
+          <div 
+            v-for="conversation in conversations" 
+            :key="conversation.id"
+            @click="selectConversation(conversation.id)"
+            class="conversation-item"
+            :class="{ active: selectedConversation === conversation.id }"
+          >
+            <div class="conversation-avatar-wrapper">
+              <img :src="conversation.avatar" :alt="conversation.name" class="conversation-avatar" />
+              <span v-if="conversation.online" class="online-indicator"></span>
             </div>
-
-            <!-- Document Checklist Complete -->
-            <div class="checklist-complete">
-              <div class="checklist-header">
-                <span class="checklist-icon">📋</span>
-                <h3 class="checklist-title">Document Checklist Complete</h3>
+            <div class="conversation-info">
+              <div class="conversation-header">
+                <h3 class="conversation-name">{{ conversation.name }}</h3>
+                <span class="conversation-time">{{ conversation.timestamp }}</span>
               </div>
-              <p class="checklist-subtitle">You have completed 4 of 4 required documents. 1 optional document uploaded.</p>
-              
-              <div class="document-status-list">
-                <div class="status-item">
-                  <div class="status-icon completed">✓</div>
-                  <span class="status-name">Resume/CV</span>
-                  <span class="status-label uploaded">Uploaded</span>
-                </div>
-                <div class="status-item">
-                  <div class="status-icon completed">✓</div>
-                  <span class="status-name">Cover Letter</span>
-                  <span class="status-label uploaded">Uploaded</span>
-                </div>
-                <div class="status-item">
-                  <div class="status-icon completed">✓</div>
-                  <span class="status-name">Portfolio/Work Samples</span>
-                  <span class="status-label optional">Optional</span>
-                </div>
-                <div class="status-item">
-                  <div class="status-icon completed">✓</div>
-                  <span class="status-name">References Document</span>
-                  <span class="status-label uploaded">Uploaded</span>
-                </div>
+              <div class="conversation-preview">
+                <p class="last-message">{{ conversation.lastMessage }}</p>
+                <span v-if="conversation.unread > 0" class="unread-badge">{{ conversation.unread }}</span>
               </div>
             </div>
           </div>
+        </div>
+      </aside>
 
-          <!-- Uploaded Documents -->
-          <div class="uploaded-documents">
-            <div v-for="doc in messagesData.documents" :key="doc.name" class="document-item">
-              <div class="doc-icon">✓</div>
-              <div class="doc-info">
-                <span class="doc-name">{{ doc.name }}</span>
-                <span class="doc-filename">{{ doc.filename }}</span>
+      <!-- Chat Area -->
+      <main class="chat-area">
+        <div v-if="activeConversation" class="chat-container">
+          <!-- Chat Header -->
+          <div class="chat-header">
+            <div class="chat-user-info">
+              <div class="chat-avatar-wrapper">
+                <img :src="activeConversation.avatar" :alt="activeConversation.name" class="chat-avatar" />
+                <span v-if="activeConversation.online" class="online-dot"></span>
               </div>
-              <span class="doc-status uploaded">Uploaded</span>
-              <button class="doc-action">⌄</button>
+              <div class="chat-user-details">
+                <h2 class="chat-user-name">{{ activeConversation.name }}</h2>
+                <span class="chat-user-status">{{ activeConversation.online ? 'Active now' : 'Offline' }}</span>
+              </div>
             </div>
-
-            <!-- Add More Documents -->
-            <div class="add-documents">
-              <button class="add-btn">
-                <span class="add-icon">+</span>
+            <div class="chat-actions">
+              <button class="chat-action-btn" title="Voice call">
+                <PhoneIcon class="action-icon" />
               </button>
-              <div class="add-content">
-                <h4 class="add-title">Want to upload additional supporting documents?</h4>
-                <p class="add-subtitle">Click here to add certifications, transcripts, or other relevant files</p>
+              <button class="chat-action-btn" title="Video call">
+                <VideoCameraIcon class="action-icon" />
+              </button>
+              <button class="chat-action-btn" title="More options">
+                <EllipsisVerticalIcon class="action-icon" />
+              </button>
+            </div>
+          </div>
+
+          <!-- Messages -->
+          <div class="messages-area">
+            <div v-for="message in messages" :key="message.id" class="message-wrapper" :class="{ own: message.isOwn }">
+              <div class="message-bubble">
+                <p class="message-content">{{ message.content }}</p>
+                <span class="message-time">{{ message.timestamp }}</span>
               </div>
             </div>
+          </div>
+
+          <!-- Message Input -->
+          <div class="message-input-area">
+            <button class="attach-btn" title="Attach file">
+              <PaperClipIcon class="attach-icon" />
+            </button>
+            <input 
+              type="text" 
+              v-model="messageInput"
+              @keyup.enter="sendMessage"
+              placeholder="Type a message..." 
+              class="message-input"
+            />
+            <button @click="sendMessage" class="send-btn" :disabled="!messageInput.trim()">
+              <PaperAirplaneIcon class="send-icon" />
+            </button>
           </div>
         </div>
 
-        <!-- Right Column -->
-        <div class="right-section">
-          <!-- Your Progress -->
-          <div class="progress-card">
-            <h3 class="progress-title">Your Progress</h3>
-            <div class="progress-circle">
-              <div class="circle-progress" :style="{ '--progress': messagesData.progress }">
-                <span class="progress-number">{{ messagesData.progress }}%</span>
-              </div>
-            </div>
-            <div class="progress-steps">
-              <div v-for="step in messagesData.completedSteps" :key="step.name" class="progress-step completed">
-                <div class="step-icon">✓</div>
-                <span class="step-text">{{ step.name }}</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- What's Next -->
-          <div class="next-steps-card">
-            <h3 class="next-title">What's Next?</h3>
-            <div class="next-steps">
-              <div v-for="step in messagesData.nextSteps" :key="step.number" class="next-step">
-                <span class="step-number">{{ step.number }}</span>
-                <div class="step-content">
-                  <h4 class="step-title">{{ step.title }}</h4>
-                  <p class="step-description">{{ step.description }}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Summary -->
-          <div class="summary-card">
-            <h3 class="summary-title">Summary</h3>
-            <div class="summary-item">
-              <span class="summary-label">Files uploaded</span>
-              <span class="summary-value">{{ messagesData.summary.filesUploaded }}</span>
-            </div>
-            <div class="summary-item">
-              <span class="summary-label">Total size</span>
-              <span class="summary-value">{{ messagesData.summary.totalSize }}</span>
-            </div>
-            <div class="summary-status">
-              <div class="status-icon-small">✓</div>
-              <span class="status-text">All requirements met</span>
-            </div>
-          </div>
-
-          <!-- Need Help -->
-          <div class="help-card">
-            <h3 class="help-title">Need Help?</h3>
-            <div class="help-items">
-              <div class="help-item">
-                <div class="help-icon">📖</div>
-                <span class="help-text">Application guide</span>
-              </div>
-              <div class="help-item">
-                <div class="help-icon">🎧</div>
-                <span class="help-text">Contact support</span>
-              </div>
-              <div class="help-item">
-                <div class="help-icon">❓</div>
-                <span class="help-text">FAQs</span>
-              </div>
-            </div>
+        <div v-else class="no-conversation">
+          <div class="no-conversation-content">
+            <img src="/icons/icon-message.png" alt="Messages" class="no-conversation-icon" />
+            <h3 class="no-conversation-title">Select a conversation</h3>
+            <p class="no-conversation-text">Choose a conversation from the list to start messaging</p>
           </div>
         </div>
-      </div>
-    </div>
-
-    <!-- Footer -->
-    <div class="messages-footer">
-      <button @click="handlePreviousStep" class="footer-btn secondary" disabled title="Coming soon">← Previous: Personal Info</button>
-      <button @click="handleApplyNow" class="footer-btn primary" disabled title="Coming soon">Apply Now</button>
+      </main>
     </div>
   </div>
 </template>
 
 <style scoped>
-.messages-content {
-  background: white;
-  min-height: 100vh;
+.messages-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #f8fafc;
 }
 
+/* Header */
 .messages-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 24px;
-  border-bottom: 1px solid #e5e7eb;
-  background: #f8fafc;
+  padding: 16px 32px;
+  background: #dbeafe;
+  border-bottom: 1px solid #bfdbfe;
+  flex-shrink: 0;
 }
 
 .header-left {
   display: flex;
   align-items: center;
+  gap: 12px;
 }
 
-.app-logo {
-  width: 32px;
-  height: 32px;
+.header-icon {
+  width: 24px;
+  height: 24px;
   object-fit: contain;
+  filter: brightness(0) saturate(100%) invert(27%) sepia(51%) saturate(2878%) hue-rotate(220deg) brightness(104%) contrast(97%);
+}
+
+.header-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: #1e40af;
+  margin: 0;
 }
 
 .header-right {
   display: flex;
   align-items: center;
-  gap: 12px;
-}
-
-.notification-icon {
-  font-size: 16px;
-  color: #6b7280;
-}
-
-.company-name {
-  font-size: 14px;
-  color: #6b7280;
-}
-
-.user-avatar {
-  width: 32px;
-  height: 32px;
-  background: #3b82f6;
-  color: white;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.success-banner {
-  background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%);
-  border: 1px solid #86efac;
-  margin: 24px;
-  border-radius: 12px;
-  padding: 20px;
-  display: flex;
-  align-items: center;
   gap: 16px;
 }
 
-.success-icon {
-  width: 48px;
-  height: 48px;
-  background: #16a34a;
-  color: white;
+.notification-icon-bell {
+  width: 24px;
+  height: 24px;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.notification-icon-bell:hover {
+  color: #2563eb;
+  transform: scale(1.1);
+}
+
+.avatar {
+  width: 36px;
+  height: 36px;
+  background: #3b82f6;
+  color: #fff;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
-  font-weight: bold;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.avatar:hover {
+  background: #2563eb;
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+/* Layout */
+.messages-layout {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Conversations Sidebar */
+.conversations-sidebar {
+  background: #fff;
+  border-right: 1px solid #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-header {
+  padding: 20px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-icon {
+  position: absolute;
+  left: 12px;
+  width: 18px;
+  height: 18px;
+  color: #9ca3af;
+}
+
+.search-input {
+  width: 100%;
+  padding: 10px 12px 10px 40px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 14px;
+  outline: none;
+  transition: all 0.2s;
+}
+
+.search-input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.conversations-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.conversation-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  cursor: pointer;
+  transition: background 0.2s;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.conversation-item:hover {
+  background: #f9fafb;
+}
+
+.conversation-item.active {
+  background: #eff6ff;
+  border-left: 3px solid #2563eb;
+}
+
+.conversation-avatar-wrapper {
+  position: relative;
   flex-shrink: 0;
 }
 
-.success-content {
+.conversation-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.online-indicator {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 12px;
+  height: 12px;
+  background: #16a34a;
+  border: 2px solid #fff;
+  border-radius: 50%;
+}
+
+.conversation-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.conversation-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.conversation-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: #111827;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conversation-time {
+  font-size: 12px;
+  color: #9ca3af;
+  flex-shrink: 0;
+}
+
+.conversation-preview {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.last-message {
+  font-size: 13px;
+  color: #6b7280;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   flex: 1;
 }
 
-.success-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #15803d;
-  margin: 0 0 4px 0;
+.unread-badge {
+  background: #2563eb;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 10px;
+  min-width: 20px;
+  text-align: center;
+  flex-shrink: 0;
 }
 
-.success-subtitle {
-  font-size: 14px;
-  color: #166534;
+/* Chat Area */
+.chat-area {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  overflow: hidden;
+}
+
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.chat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fff;
+}
+
+.chat-user-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.chat-avatar-wrapper {
+  position: relative;
+}
+
+.chat-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.online-dot {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 10px;
+  height: 10px;
+  background: #16a34a;
+  border: 2px solid #fff;
+  border-radius: 50%;
+}
+
+.chat-user-details {
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-user-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: #111827;
   margin: 0;
 }
 
-.messages-body {
-  padding: 0 24px 24px 24px;
+.chat-user-status {
+  font-size: 12px;
+  color: #6b7280;
 }
 
-.messages-grid {
-  display: grid;
-  grid-template-columns: 1fr 320px;
-  gap: 32px;
+.chat-actions {
+  display: flex;
+  gap: 8px;
 }
 
-.left-section {
+.chat-action-btn {
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: #f3f4f6;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.chat-action-btn:hover {
+  background: #e5e7eb;
+}
+
+.action-icon {
+  width: 20px;
+  height: 20px;
+  color: #6b7280;
+}
+
+/* Messages Area */
+.messages-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  background: #f9fafb;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
 }
 
-.completion-card {
-  background: white;
+.message-wrapper {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.message-wrapper.own {
+  justify-content: flex-end;
+}
+
+.message-bubble {
+  max-width: 60%;
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: #fff;
   border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 24px;
 }
 
-.completion-title {
-  font-size: 24px;
+.message-wrapper.own .message-bubble {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.message-content {
+  font-size: 14px;
+  color: #374151;
+  margin: 0 0 4px 0;
+  line-height: 1.5;
+}
+
+.message-wrapper.own .message-content {
+  color: #fff;
+}
+
+.message-time {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.message-wrapper.own .message-time {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* Message Input */
+.message-input-area {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px;
+  border-top: 1px solid #e5e7eb;
+  background: #fff;
+}
+
+.attach-btn {
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: #f3f4f6;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.attach-btn:hover {
+  background: #e5e7eb;
+}
+
+.attach-icon {
+  width: 20px;
+  height: 20px;
+  color: #6b7280;
+}
+
+.message-input {
+  flex: 1;
+  padding: 10px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 24px;
+  font-size: 14px;
+  outline: none;
+  transition: all 0.2s;
+}
+
+.message-input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.send-btn {
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: #2563eb;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.send-btn:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.send-btn:disabled {
+  background: #e5e7eb;
+  cursor: not-allowed;
+}
+
+.send-icon {
+  width: 20px;
+  height: 20px;
+  color: #fff;
+}
+
+.send-btn:disabled .send-icon {
+  color: #9ca3af;
+}
+
+/* No Conversation */
+.no-conversation {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  background: #f9fafb;
+}
+
+.no-conversation-content {
+  text-align: center;
+  max-width: 300px;
+}
+
+.no-conversation-icon {
+  width: 80px;
+  height: 80px;
+  margin: 0 auto 20px;
+  opacity: 0.3;
+}
+
+.no-conversation-title {
+  font-size: 18px;
   font-weight: 600;
-  color: #1f2937;
+  color: #374151;
   margin: 0 0 8px 0;
 }
 
-.completion-subtitle {
+.no-conversation-text {
   font-size: 14px;
-  color: #6b7280;
-  margin: 0 0 20px 0;
-}
-
-.progress-indicator {
-  margin-bottom: 24px;
-}
-
-.step-text {
-  font-size: 12px;
-  color: #6b7280;
-  margin-bottom: 8px;
-  display: block;
-}
-
-.progress-bar-full {
-  width: 100%;
-  height: 8px;
-  background: #e5e7eb;
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.progress-fill-full {
-  width: 100%;
-  height: 100%;
-  background: #16a34a;
-  border-radius: 4px;
-}
-
-.checklist-complete {
-  background: #f8fafc;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 20px;
-}
-
-.checklist-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.checklist-icon {
-  font-size: 20px;
-}
-
-.checklist-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: #1f2937;
-  margin: 0;
-}
-
-.checklist-subtitle {
-  font-size: 13px;
-  color: #6b7280;
-  margin: 0 0 16px 0;
-}
-
-.document-status-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.status-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.status-icon {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: bold;
-}
-
-.status-icon.completed {
-  background: #dcfce7;
-  color: #16a34a;
-}
-
-.status-name {
-  flex: 1;
-  font-size: 14px;
-  color: #374151;
-}
-
-.status-label {
-  font-size: 12px;
-  font-weight: 500;
-  padding: 2px 8px;
-  border-radius: 12px;
-}
-
-.status-label.uploaded {
-  background: #dcfce7;
-  color: #16a34a;
-}
-
-.status-label.optional {
-  background: #fef3c7;
-  color: #92400e;
-}
-
-.uploaded-documents {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.document-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px;
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-}
-
-.doc-icon {
-  width: 32px;
-  height: 32px;
-  background: #dcfce7;
-  color: #16a34a;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-  font-weight: bold;
-}
-
-.doc-info {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.doc-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: #1f2937;
-}
-
-.doc-filename {
-  font-size: 12px;
-  color: #6b7280;
-}
-
-.doc-status {
-  font-size: 12px;
-  font-weight: 500;
-  padding: 2px 8px;
-  border-radius: 12px;
-}
-
-.doc-status.uploaded {
-  background: #dcfce7;
-  color: #16a34a;
-}
-
-.doc-action {
-  width: 24px;
-  height: 24px;
-  background: none;
-  border: none;
-  color: #9ca3af;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-}
-
-.add-documents {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 20px;
-  background: #f9fafb;
-  border: 2px dashed #d1d5db;
-  border-radius: 8px;
-  margin-top: 8px;
-}
-
-.add-btn {
-  width: 48px;
-  height: 48px;
-  background: #f3f4f6;
-  border: 1px solid #d1d5db;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.add-btn:hover {
-  background: #e5e7eb;
-}
-
-.add-icon {
-  font-size: 20px;
-  color: #6b7280;
-}
-
-.add-content {
-  flex: 1;
-}
-
-.add-title {
-  font-size: 14px;
-  font-weight: 500;
-  color: #374151;
-  margin: 0 0 4px 0;
-}
-
-.add-subtitle {
-  font-size: 12px;
   color: #6b7280;
   margin: 0;
-}
-
-/* Right Section */
-.right-section {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  position: sticky;
-  top: 20px;
-  height: fit-content;
-}
-
-.progress-card,
-.next-steps-card,
-.summary-card,
-.help-card {
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 20px;
-}
-
-.progress-title,
-.next-title,
-.summary-title,
-.help-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: #1f2937;
-  margin: 0 0 16px 0;
-}
-
-.progress-circle {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 16px;
-}
-
-.circle-progress {
-  width: 80px;
-  height: 80px;
-  border-radius: 50%;
-  background: #e5e7eb;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  overflow: hidden;
-}
-
-.circle-progress::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  background: conic-gradient(
-    #16a34a 0deg,
-    #16a34a calc(var(--progress) * 3.6deg),
-    transparent calc(var(--progress) * 3.6deg)
-  );
-  mask: radial-gradient(circle at center, transparent 65%, white 65%);
-  -webkit-mask: radial-gradient(circle at center, transparent 65%, white 65%);
-}
-
-.progress-number {
-  font-size: 16px;
-  font-weight: 600;
-  color: #1f2937;
-  z-index: 2;
-  position: relative;
-}
-
-.progress-steps {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.progress-step {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.progress-step.completed {
-  color: #16a34a;
-}
-
-.step-icon {
-  width: 16px;
-  height: 16px;
-  background: #dcfce7;
-  color: #16a34a;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: bold;
-}
-
-.step-text {
-  font-size: 13px;
-}
-
-.next-steps {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.next-step {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.step-number {
-  width: 24px;
-  height: 24px;
-  background: #3b82f6;
-  color: white;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-.step-content {
-  flex: 1;
-}
-
-.step-title {
-  font-size: 14px;
-  font-weight: 500;
-  color: #1f2937;
-  margin: 0 0 4px 0;
-}
-
-.step-description {
-  font-size: 12px;
-  color: #6b7280;
-  margin: 0;
-}
-
-.summary-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.summary-label {
-  font-size: 13px;
-  color: #6b7280;
-}
-
-.summary-value {
-  font-size: 13px;
-  font-weight: 600;
-  color: #1f2937;
-}
-
-.summary-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: #dcfce7;
-  border-radius: 6px;
-  margin-top: 12px;
-}
-
-.status-icon-small {
-  width: 16px;
-  height: 16px;
-  background: #16a34a;
-  color: white;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: bold;
-}
-
-.status-text {
-  font-size: 12px;
-  color: #15803d;
-  font-weight: 500;
-}
-
-.help-items {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.help-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px;
-  background: #f8fafc;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.help-item:hover {
-  background: #f1f5f9;
-}
-
-.help-icon {
-  font-size: 16px;
-}
-
-.help-text {
-  font-size: 13px;
-  color: #374151;
-}
-
-.messages-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 20px 24px;
-  border-top: 1px solid #e5e7eb;
-  background: #f8fafc;
-}
-
-.footer-btn {
-  padding: 10px 20px;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.footer-btn.secondary {
-  background: none;
-  color: #6b7280;
-  border: 1px solid #d1d5db;
-}
-
-.footer-btn.secondary:hover {
-  background: #f3f4f6;
-  color: #374151;
-}
-
-.footer-btn.primary {
-  background: #3b82f6;
-  color: white;
-  border: none;
-}
-
-.footer-btn.primary:hover {
-  background: #2563eb;
 }
 
 /* Responsive */
-@media (max-width: 1024px) {
-  .messages-grid {
+@media (max-width: 768px) {
+  .messages-layout {
     grid-template-columns: 1fr;
   }
   
-  .right-section {
-    order: -1;
-  }
-}
-
-@media (max-width: 768px) {
-  .messages-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
+  .conversations-sidebar {
+    display: none;
   }
   
-  .messages-body {
-    padding: 16px;
-  }
-  
-  .success-banner {
-    margin: 16px;
-    flex-direction: column;
-    text-align: center;
-  }
-  
-  .messages-footer {
-    flex-direction: column;
-    gap: 12px;
-  }
-  
-  .footer-btn {
-    width: 100%;
-  }
-  
-  .add-documents {
-    flex-direction: column;
-    text-align: center;
+  .message-bubble {
+    max-width: 80%;
   }
 }
 </style>

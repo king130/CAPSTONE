@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import Swal from 'sweetalert2'
 import { RouterLink, useRouter } from 'vue-router'
 import { ref } from 'vue'
@@ -134,10 +134,6 @@ async function useDemoAccount() {
 
       <!-- Right Login Panel -->
       <div class="right">
-        <div class="back-link">
-          <RouterLink to="/" class="back-btn" title="Back to Home">←</RouterLink>
-        </div>
-
         <div class="icon">
           <img src="/icons/logo-main.png" alt="OJT Intern Path" class="login-logo" />
         </div>

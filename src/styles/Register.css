@@ -19,6 +19,33 @@
   border-radius: 12px;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
   padding: 32px 32px 28px;
+  position: relative;
+}
+
+.back-link {
+  position: absolute;
+  top: 20px;
+  left: 0;
+}
+
+.back-btn {
+  color: #6b7280;
+  text-decoration: none;
+  font-size: 24px;
+  font-weight: 400;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  transition: all 0.2s;
+  background: transparent;
+}
+
+.back-btn:hover {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.1);
 }
 
 .icon-row {
@@ -77,6 +104,12 @@ h1 {
   font-size: 12px;
   width: 100%;
   box-sizing: border-box;
+  transition: all 0.2s ease;
+}
+
+.field > input:hover {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
 .password-field {
@@ -92,6 +125,12 @@ h1 {
   border: 1px solid #e5e7eb;
   font-size: 12px;
   box-sizing: border-box;
+  transition: all 0.2s ease;
+}
+
+.password-field input:hover {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
 .toggle-password {
@@ -207,10 +246,17 @@ h1 {
   font-weight: 600;
   font-size: 14px;
   cursor: pointer;
+  transition: all 0.2s ease;
 }
 
-.primary-btn:hover {
+.primary-btn:hover:not(:disabled) {
   background: #1d4ed8;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.primary-btn:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .primary-btn:disabled {
@@ -261,10 +307,23 @@ h1 {
   box-shadow: 0 10px 18px rgba(37, 99, 235, 0.18);
 }
 
+.step-btn.primary:hover:not(:disabled) {
+  background: #1d4ed8;
+  transform: translateY(-2px);
+  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.25);
+}
+
 .step-btn.ghost {
   background: #f1f5f9;
   color: #0f172a;
   border: 1px solid #e2e8f0;
+}
+
+.step-btn.ghost:hover:not(:disabled) {
+  background: #e2e8f0;
+  border-color: #cbd5e1;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.1);
 }
 
 .step-btn:disabled {
@@ -316,6 +375,12 @@ h1 {
   font-size: 12px;
   background: white;
   cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.select-input:hover {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
 .select-input:focus {
@@ -333,6 +398,12 @@ h1 {
   resize: vertical;
   min-height: 48px;
   font-family: inherit;
+  transition: all 0.2s ease;
+}
+
+.textarea-input:hover {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
 .textarea-input:focus {

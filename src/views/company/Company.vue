@@ -1,14 +1,105 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import Sidebar from '../../components/Sidebar.vue'
+import CompanySettings from '../../components/CompanySettings.vue'
 import FloatingChatWidget from '../../components/FloatingChatWidget.vue'
 import { useAuthStore } from '@/stores/auth'
+import { 
+  DocumentIcon, 
+  ClockIcon, 
+  CheckIcon, 
+  UserIcon, 
+  CalendarIcon, 
+  ExclamationTriangleIcon,
+  EyeIcon,
+  XMarkIcon,
+  ArrowDownTrayIcon,
+  BellIcon,
+  MagnifyingGlassIcon,
+  MapPinIcon,
+  StarIcon,
+  ChartBarIcon,
+  ChartBarSquareIcon,
+  PlusIcon,
+  ClipboardDocumentListIcon,
+  FolderIcon,
+  AcademicCapIcon,
+  LockClosedIcon,
+  EnvelopeIcon,
+  PhoneIcon,
+  PencilIcon,
+  CloudIcon
+} from '@heroicons/vue/24/outline'
 
 const authStore = useAuthStore()
 const companyName = computed(() => {
   const profile = authStore.user?.profile as Record<string, unknown> | undefined
-  return (profile?.companyName as string) || authStore.user?.displayName || 'Company'
+  return (profile?.companyName as string) || 
+         (profile?.name as string) || 
+         authStore.user?.displayName || 
+         authStore.user?.email?.split('@')[0] || 
+         'Company'
 })
+
+const companyInitials = computed(() => {
+  return companyName.value
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2)
+})
+
+const userInitials = computed(() => {
+  const name = authStore.user?.displayName || authStore.user?.email || 'User'
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2)
+})
+
+// TEMPORARY DATA: Notification dropdown state - this is a UI state variable
+const showNotifications = ref(false)
+
+// TEMPORARY DATA: Static notifications for dropdown - replace with real data from backend
+const notifications = ref([
+  {
+    id: 1,
+    title: 'Application Update',
+    message: 'Your application to TechCorp has been reviewed',
+    time: '2 hours ago',
+    unread: true
+  },
+  {
+    id: 2,
+    title: 'Interview Scheduled',
+    message: 'Interview scheduled for May 20 at 2:00 PM',
+    time: '5 hours ago',
+    unread: true
+  },
+  {
+    id: 3,
+    title: 'Document Reminder',
+    message: 'Please upload your resume',
+    time: '1 day ago',
+    unread: false
+  },
+  {
+    id: 4,
+    title: 'New Internship Match',
+    message: 'You have 3 new internship matches',
+    time: '2 days ago',
+    unread: false
+  }
+])
+
+function toggleNotifications() {
+  showNotifications.value = !showNotifications.value
+}
 
 const currentView = ref('dashboard')
 
@@ -19,36 +110,38 @@ const handleNavChange = (nav: string) => {
   }
 }
 
+// TEMPORARY DATA: Sample recent activities for dashboard display - replace with real data from backend
 const recentActivities = ref([
   {
     id: 1,
     text: 'New application received for Software Developer Intern',
     time: '2 hours ago',
-    icon: '📄',
+    icon: 'document',
     type: 'application'
   },
   {
     id: 2,
     text: 'John Doe timed in today',
     time: '5 hours ago',
-    icon: '🕐',
+    icon: 'clock',
     type: 'time'
   },
   {
     id: 3,
     text: "Maria Santos' internship marked as completed",
     time: '1 day ago',
-    icon: '✓',
+    icon: 'check',
     type: 'completion'
   }
 ])
 
-const notifications = ref([
+// TEMPORARY DATA: Sample notifications for dashboard display - replace with real data from backend
+const dashboardNotifications = ref([
   {
     id: 1,
     text: 'New application for Software Developer Intern',
     time: '2 hours ago',
-    icon: '📄',
+    icon: 'document',
     action: 'View Application',
     unread: true
   },
@@ -56,7 +149,7 @@ const notifications = ref([
     id: 2,
     text: 'Maria Santos is nearing internship completion (92%)',
     time: '5 hours ago',
-    icon: '📅',
+    icon: 'calendar',
     action: 'View Progress',
     unread: true
   },
@@ -64,18 +157,19 @@ const notifications = ref([
     id: 3,
     text: 'Missing time log entry from John Doe - Oct 22',
     time: '1 day ago',
-    icon: '🕐',
+    icon: 'clock',
     action: 'Remind Intern',
     unread: true
   }
 ])
 
+// TEMPORARY DATA: Sample interns near completion for dashboard display - replace with real data from backend
 const nearCompletion = ref([
   { name: 'Sarah Chen', progress: 95, date: 'Oct 30, 2024' },
   { name: 'John Martinez', progress: 88, date: 'Nov 5, 2024' }
 ])
 
-// Internships view data
+// TEMPORARY DATA: Internships view filter data - replace with real data from backend
 const selectedSkills = ref(['Python', 'Data Analysis'])
 const locationFilter = ref('')
 const startDate = ref('2024-06-01')
@@ -84,6 +178,7 @@ const companyTypes = ref<string[]>([])
 const duration = ref('4-6 Months')
 const searchQuery = ref('')
 
+// TEMPORARY DATA: Sample internships list - replace with real data from backend
 const internshipsList = ref([
   {
     id: 1,
@@ -144,7 +239,7 @@ function clearAllFilters() {
   duration.value = '4-6 Months'
 }
 
-// Create Internship Form data
+// TEMPORARY DATA: Create internship form state - these are UI state variables
 const showCreateForm = ref(false)
 const currentFormStep = ref(1)
 const formTitle = ref('')
@@ -156,7 +251,7 @@ const startDateForm = ref('')
 const endDateForm = ref('')
 const locationType = ref('Remote')
 
-// New form fields for step 2
+// TEMPORARY DATA: Additional form fields for step 2 - replace with real data from backend
 const preferredCourse = ref('')
 const minimumGPA = ref('')
 const requiredSkills = ref('')
@@ -216,7 +311,7 @@ function submitForApproval() {
   console.log('Submitting for approval...')
 }
 
-// Reports view data
+// TEMPORARY DATA: Sample attendance records for reports view - replace with real data from backend
 const attendanceRecords = ref([
   { date: 'Nov 28, 2024', in: '8:00 AM', out: '5:00 PM', hours: '8.0', status: 'Present' },
   { date: 'Nov 27, 2024', in: '8:00 AM', out: '5:00 PM', hours: '8.0', status: 'Present' },
@@ -225,6 +320,7 @@ const attendanceRecords = ref([
   { date: 'Nov 22, 2024', in: '8:00 AM', out: '5:00 PM', hours: '8.0', status: 'Present' },
 ])
 
+// TEMPORARY DATA: Sample journal entries for reports view - replace with real data from backend
 const journalEntries = ref([
   { week: 24, title: 'Project Deployment & Final Testing', date: 'Nov 25, 2024' },
   { week: 23, title: 'User Acceptance Testing Phase', date: 'Nov 18, 2024' },
@@ -233,6 +329,7 @@ const journalEntries = ref([
   { week: 20, title: 'Database Schema Design', date: 'Oct 28, 2024' },
 ])
 
+// TEMPORARY DATA: Sample performance metrics for reports view - replace with real data from backend
 const performanceMetrics = ref([
   { skill: 'Technical Skills', rating: 4.8 },
   { skill: 'Communication', rating: 4.7 },
@@ -241,10 +338,11 @@ const performanceMetrics = ref([
   { skill: 'Problem Solving', rating: 4.9 },
 ])
 
-// Applications view data
+// TEMPORARY DATA: Applications view filter state - these are UI state variables
 const selectedInternship = ref('')
 const searchStudent = ref('')
 
+// TEMPORARY DATA: Sample applications list - replace with real data from backend
 const applications = ref([
   {
     id: 1,
@@ -302,7 +400,7 @@ const applications = ref([
   }
 ])
 
-// Journals view (Journal Overview) data
+// TEMPORARY DATA: Sample journal activity for journals view - replace with real data from backend
 const recentJournalActivity = ref([
   { type: 'completed' as const, title: 'Completed: Backend API Integration', description: 'Applied Python, Django, RESTful API principles. 8 hours.', status: 'Approved' as const, date: 'May 15, 2024' },
   { type: 'completed' as const, title: 'Completed: Frontend UI Refinement', description: 'Applied React.js, CSS Grid. 7.5 hours.', status: 'Approved' as const, date: 'May 14, 2024' },
@@ -310,9 +408,11 @@ const recentJournalActivity = ref([
   { type: 'completed' as const, title: 'Completed: Initial Platform Setup', description: 'Applied Git, Docker, DevOps basics. 8 hours.', status: 'Approved' as const, date: 'May 08, 2024' }
 ])
 
+// TEMPORARY DATA: Journal calendar state - these are UI state variables for calendar navigation
 const journalMonth = ref(new Date(2026, 0, 1)) // January 2026
 const journalWeekStart = ref(new Date(2024, 4, 13)) // Monday May 13, 2024
 
+// TEMPORARY DATA: Sample calendar activity map - replace with real data from backend
 const calendarActivityMap: Record<string, string[]> = {
   '2026-1-1': ['blue'], '2026-1-2': ['green', 'blue'], '2026-1-3': ['blue'], '2026-1-6': ['blue'],
   '2026-1-7': ['blue'], '2026-1-8': ['blue', 'green'], '2026-1-9': ['blue'], '2026-1-13': ['blue'],
@@ -386,7 +486,7 @@ const weekRow = computed(() => {
   return cells
 })
 
-// Add Journal Entry panel
+// TEMPORARY DATA: Add journal entry panel state - these are UI state variables
 const showAddJournalPanel = ref(false)
 const journalEntryDate = ref('17/01/2026')
 const journalEntryTasks = ref('')
@@ -413,11 +513,11 @@ function submitJournalForReview() {
   closeAddJournalPanel()
 }
 
-// Profile view data
-const companyProfile = ref({
-  name: 'TechCorp Solutions',
+// TEMPORARY DATA: Sample company profile data - replace with real data from backend
+const companyProfile = computed(() => ({
+  name: companyName.value,
   industry: 'Information Technology',
-  email: 'contact@techcorp.com',
+  email: authStore.user?.email || 'contact@company.com',
   phone: '+63 (046) 123-4567',
   address: 'Cavite Technology Park, Dasmarinas, Cavite',
   website: 'www.techcorp.com',
@@ -434,8 +534,9 @@ const companyProfile = ref({
   completionRate: '94%',
   studentSatisfaction: 4.8,
   profileCompletion: 85
-})
+}))
 
+// TEMPORARY DATA: Profile edit mode state - UI state variable
 const profileEditMode = ref(false)
 
 function editProfile() {
@@ -458,7 +559,7 @@ function editDescription() {
   console.log('Edit description')
 }
 
-// Time Tracking view data
+// TEMPORARY DATA: Time tracking date state - UI state variable
 const timeTrackingDate = ref('Today - Jan 17, 2026')
 const timeTrackingStatus = ref('All')
 const timeTrackingInterns = ref('All interns')
@@ -744,7 +845,7 @@ function viewPending() {
   console.log('View pending evaluations')
 }
 
-// Dashboard Settings (shown when Settings in sidebar is pressed)
+// TEMPORARY DATA: Dashboard settings state - these are UI state variables for settings toggles
 const settingsEmailNotif = ref(true)
 const settingsNewAppAlerts = ref(true)
 const settingsInternReminders = ref(true)
@@ -779,36 +880,36 @@ function saveSettings() {
             <h1>Dashboard</h1>
           </div>
           <div class="header-right">
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">{{ companyName }}</span>
-            <div class="avatar">AC</div>
+            <div class="notification-wrapper">
+              <BellIcon class="notification-icon-bell" />
+            </div>
+            
+            <div class="avatar" @click="handleNavChange('profile')" title="View Profile">{{ userInitials }}</div>
           </div>
         </header>
 
         <!-- Main Content -->
         <main class="main-content">
-        <!-- Action Buttons -->
-        <div class="action-buttons">
-          <button class="action-btn">+ Post New Internship</button>
-          <button class="action-btn">Review Applications</button>
-          <button class="action-btn">Generate Report</button>
-          <button class="action-btn">View Interns</button>
-        </div>
-
         <!-- Summary Cards -->
         <div class="summary-cards">
           <div class="summary-card">
-            <div class="card-icon ongoing">👤</div>
+            <div class="card-icon ongoing">
+              <UserIcon class="icon-size" />
+            </div>
             <div class="card-number">17</div>
             <div class="card-label">Ongoing</div>
           </div>
           <div class="summary-card">
-            <div class="card-icon near">🕐</div>
+            <div class="card-icon near">
+              <ClockIcon class="icon-size" />
+            </div>
             <div class="card-number">2</div>
             <div class="card-label">Near Completion</div>
           </div>
           <div class="summary-card">
-            <div class="card-icon completed">✓</div>
+            <div class="card-icon completed">
+              <CheckIcon class="icon-size" />
+            </div>
             <div class="card-number">9</div>
             <div class="card-label">Completed</div>
           </div>
@@ -827,7 +928,11 @@ function saveSettings() {
                   :key="activity.id"
                   class="activity-item"
                 >
-                  <span class="activity-icon">{{ activity.icon }}</span>
+                  <span class="activity-icon">
+                    <DocumentIcon v-if="activity.icon === 'document'" class="icon-size" />
+                    <ClockIcon v-else-if="activity.icon === 'clock'" class="icon-size" />
+                    <CheckIcon v-else-if="activity.icon === 'check'" class="icon-size" />
+                  </span>
                   <div class="activity-content">
                     <p class="activity-text">{{ activity.text }}</p>
                     <span class="activity-time">{{ activity.time }}</span>
@@ -894,24 +999,57 @@ function saveSettings() {
             <!-- Recent Notifications -->
             <section class="content-section">
               <div class="section-header">
-                <h2>Recent Notifications</h2>
-                <span class="notification-badge">3</span>
               </div>
 
               <div class="notifications-list">
                 <div
-                  v-for="notification in notifications"
+                  v-for="notification in dashboardNotifications"
                   :key="notification.id"
                   class="notification-item"
                   :class="{ unread: notification.unread }"
                 >
-                  <span class="notification-icon">{{ notification.icon }}</span>
+                  <span class="notification-icon">
+                    <DocumentIcon v-if="notification.icon === 'document'" class="icon-size" />
+                    <CalendarIcon v-else-if="notification.icon === 'calendar'" class="icon-size" />
+                    <ClockIcon v-else-if="notification.icon === 'clock'" class="icon-size" />
+                  </span>
                   <div class="notification-content">
                     <p class="notification-text">{{ notification.text }}</p>
                     <span class="notification-time">{{ notification.time }}</span>
                     <a href="#" class="notification-action">{{ notification.action }}</a>
                   </div>
                 </div>
+              </div>
+            </section>
+
+            <!-- Quick Actions Card -->
+            <section class="content-section quick-actions-card">
+              <h2>Quick Actions</h2>
+              <div class="action-buttons-grid">
+                <button class="action-btn-card" @click="handleNavChange('internships')">
+                  <div class="action-icon-wrapper">
+                    <PlusIcon class="action-icon-svg" />
+                  </div>
+                  <span class="action-text">Post New Internship</span>
+                </button>
+                <button class="action-btn-card">
+                  <div class="action-icon-wrapper">
+                    <ClipboardDocumentListIcon class="action-icon-svg" />
+                  </div>
+                  <span class="action-text">Review Applications</span>
+                </button>
+                <button class="action-btn-card">
+                  <div class="action-icon-wrapper">
+                    <ChartBarSquareIcon class="action-icon-svg" />
+                  </div>
+                  <span class="action-text">Generate Report</span>
+                </button>
+                <button class="action-btn-card">
+                  <div class="action-icon-wrapper">
+                    <AcademicCapIcon class="action-icon-svg" />
+                  </div>
+                  <span class="action-text">View Interns</span>
+                </button>
               </div>
             </section>
           </div>
@@ -927,9 +1065,10 @@ function saveSettings() {
             <h1>Internship Posting</h1>
           </div>
           <div class="header-right">
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">{{ companyName }}</span>
-            <div class="avatar">AC</div>
+            <div class="notification-wrapper">
+              <BellIcon class="notification-icon-bell" />
+            </div>
+            <div class="avatar" @click="handleNavChange('profile')" title="View Profile">{{ userInitials }}</div>
           </div>
         </header>
         <main class="main-content">
@@ -957,7 +1096,7 @@ function saveSettings() {
                     class="skill-tag"
                   >
                     {{ skill }}
-                    <button @click="removeSkill(skill)" class="skill-remove">×</button>
+                    <button @click="removeSkill(skill)" class="skill-remove"><XMarkIcon class="icon-size-sm" /></button>
                   </span>
                 </div>
                 <p v-else class="no-skills">No skills selected</p>
@@ -1015,7 +1154,9 @@ function saveSettings() {
                 <h2 class="internships-title">Available Internships</h2>
                 <div class="search-section">
                   <div class="search-wrapper">
-                    <span class="search-icon">🔍</span>
+                    <span class="search-icon">
+                      <MagnifyingGlassIcon class="icon-size" />
+                    </span>
                     <input
                       type="text"
                       v-model="searchQuery"
@@ -1038,12 +1179,16 @@ function saveSettings() {
                     <div class="card-info">
                       <h4>{{ internship.title }}</h4>
                       <p class="company-name">{{ internship.company }}</p>
-                      <p class="location">📍 {{ internship.location }}</p>
+                      <p class="location">
+                        <MapPinIcon class="icon-size-sm" /> {{ internship.location }}
+                      </p>
                     </div>
                     <div class="match-badge">{{ internship.match }}% Match</div>
                   </div>
                   <div v-if="internship.recommended" class="recommended-badge">
-                    <span class="star-icon">⭐</span>
+                    <span class="star-icon">
+                      <StarIcon class="icon-size-sm" />
+                    </span>
                     Recommended for You
                   </div>
                   <p class="card-description">{{ internship.description }}</p>
@@ -1075,9 +1220,10 @@ function saveSettings() {
             <h1>Student Applications</h1>
           </div>
           <div class="header-right">
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">{{ companyName }}</span>
-            <div class="avatar">AC</div>
+            <div class="notification-wrapper">
+              <BellIcon class="notification-icon-bell" />
+            </div>
+            <div class="avatar" @click="handleNavChange('profile')" title="View Profile">{{ userInitials }}</div>
           </div>
         </header>
         <main class="main-content">
@@ -1096,7 +1242,9 @@ function saveSettings() {
                   </select>
                 </div>
                 <div class="search-group">
-                  <span class="search-icon">🔍</span>
+                  <span class="search-icon">
+                    <MagnifyingGlassIcon class="icon-size" />
+                  </span>
                   <input
                     type="text"
                     v-model="searchStudent"
@@ -1140,7 +1288,9 @@ function saveSettings() {
                       </div>
                     </td>
                     <td>
-                      <button class="download-btn" title="Download Resume">📥</button>
+                      <button class="download-btn" title="Download Resume">
+                        <ArrowDownTrayIcon class="icon-size" />
+                      </button>
                     </td>
                     <td>{{ app.applicationDate }}</td>
                     <td>
@@ -1153,20 +1303,22 @@ function saveSettings() {
                     </td>
                     <td>
                       <div class="action-icons">
-                        <button class="action-icon" title="View Details">👁</button>
+                        <button class="action-icon" title="View Details">
+                          <EyeIcon class="icon-size" />
+                        </button>
                         <button
                           class="action-icon"
                           :class="{ disabled: app.status === 'Accepted' }"
                           title="Accept"
                         >
-                          ✓
+                          <CheckIcon class="icon-size" />
                         </button>
                         <button
                           class="action-icon"
                           :class="{ disabled: app.status === 'Accepted' }"
                           title="Decline"
                         >
-                          ×
+                          <XMarkIcon class="icon-size" />
                         </button>
                       </div>
                     </td>
@@ -1186,10 +1338,9 @@ function saveSettings() {
             <h1>Journal Overview</h1>
           </div>
           <div class="header-right">
-            <button class="btn-add-journal" @click="openAddJournalPanel"><span class="add-icon">+</span> Add New Journal Entry</button>
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">{{ companyName }}</span>
-            <div class="avatar">AC</div>
+            <button class="btn-add-journal" @click="openAddJournalPanel"> Add New Journal Entry</button>
+            <BellIcon class="notification-icon-bell" />
+            <div class="avatar" @click="handleNavChange('profile')" title="View Profile">{{ userInitials }}</div>
           </div>
         </header>
         <main class="main-content">
@@ -1264,13 +1415,15 @@ function saveSettings() {
                 class="journal-activity-item"
               >
                 <span class="journal-entry-icon" :class="entry.type">
-                  <template v-if="entry.type === 'completed'">📄</template>
-                  <template v-else>⚠</template>
+                  <DocumentIcon v-if="entry.type === 'completed'" class="icon-size" />
+                  <ExclamationTriangleIcon v-else class="icon-size" />
                 </span>
                 <div class="journal-entry-body">
                   <div class="journal-entry-title">{{ entry.title }}</div>
                   <div class="journal-entry-desc">{{ entry.description }}</div>
-                  <div v-if="entry.status === 'Approved'" class="journal-entry-status approved">✓ Approved</div>
+                  <div v-if="entry.status === 'Approved'" class="journal-entry-status approved">
+                    <CheckIcon class="icon-size-sm" /> Approved
+                  </div>
                   <div v-else class="journal-entry-status pending">Pending</div>
                 </div>
                 <div class="journal-entry-date">{{ entry.date }}</div>
@@ -1286,14 +1439,16 @@ function saveSettings() {
             <div class="add-journal-panel" role="dialog" aria-labelledby="add-journal-title">
               <div class="add-journal-header">
                 <h2 id="add-journal-title" class="add-journal-title">Add Journal Entry</h2>
-                <button type="button" class="add-journal-close" @click="closeAddJournalPanel" aria-label="Close">×</button>
+                <button type="button" class="add-journal-close" @click="closeAddJournalPanel" aria-label="Close"><XMarkIcon class="icon-size" /></button>
               </div>
               <div class="add-journal-body">
                 <div class="add-journal-field">
                   <label class="add-journal-label">Date</label>
                   <div class="add-journal-input-wrap">
                     <input v-model="journalEntryDate" type="text" class="add-journal-input" placeholder="dd/mm/yyyy" />
-                    <span class="add-journal-input-icon">📅</span>
+                    <span class="add-journal-input-icon">
+                      <CalendarIcon class="icon-size" />
+                    </span>
                   </div>
                 </div>
                 <div class="add-journal-field">
@@ -1331,25 +1486,32 @@ function saveSettings() {
             <h1>Report & Certification</h1>
           </div>
           <div class="header-right">
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">{{ companyName }}</span>
-            <div class="avatar">AC</div>
+            <div class="notification-wrapper">
+              <BellIcon class="notification-icon-bell" />
+            </div>
+            <div class="avatar" @click="handleNavChange('profile')" title="View Profile">{{ userInitials }}</div>
           </div>
         </header>
         <main class="main-content">
           <!-- Summary Cards -->
           <div class="summary-cards-reports">
-            <div class="summary-card-report">
-              <div class="card-value">600 Hours</div>
-            </div>
-            <div class="summary-card-report">
-              <div class="card-value">100% Attendance</div>
-            </div>
-            <div class="summary-card-report">
-              <div class="card-value">24 Journals</div>
-            </div>
-            <div class="summary-card-report">
-              <div class="card-value">4.8/5 Rating</div>
+            <div class="summary-card-report-combined">
+              <div class="metric-item">
+                <div class="card-number">600</div>
+                <div class="card-label">Hours</div>
+              </div>
+              <div class="metric-item">
+                <div class="card-number">100%</div>
+                <div class="card-label">Attendance</div>
+              </div>
+              <div class="metric-item">
+                <div class="card-number">24</div>
+                <div class="card-label">Journals</div>
+              </div>
+              <div class="metric-item">
+                <div class="card-number">4.8/5</div>
+                <div class="card-label">Rating</div>
+              </div>
             </div>
           </div>
 
@@ -1359,7 +1521,9 @@ function saveSettings() {
               <!-- Attendance & Hours Report -->
               <div class="report-card">
                 <div class="report-card-header">
-                  <div class="report-icon">📅</div>
+                  <div class="report-icon">
+                    <CalendarIcon class="icon-size" />
+                  </div>
                   <div>
                     <h3 class="report-title">Attendance & Hours Report</h3>
                     <p class="report-subtitle">120 days | 600 hours | 0 absences</p>
@@ -1399,7 +1563,9 @@ function saveSettings() {
               <!-- Weekly Journal Compilation -->
               <div class="report-card">
                 <div class="report-card-header">
-                  <div class="report-icon">📄</div>
+                  <div class="report-icon">
+                    <DocumentIcon class="icon-size" />
+                  </div>
                   <div>
                     <h3 class="report-title">Weekly Journal Compilation</h3>
                     <p class="report-subtitle">24 weeks | All submitted | 100% approved</p>
@@ -1430,7 +1596,9 @@ function saveSettings() {
               <!-- Performance Evaluation Summary -->
               <div class="report-card">
                 <div class="report-card-header">
-                  <div class="report-icon">⭐</div>
+                  <div class="report-icon">
+                    <StarIcon class="icon-size" />
+                  </div>
                   <div>
                     <h3 class="report-title">Performance Evaluation Summary</h3>
                     <p class="report-subtitle">Overall: 4.8/5 | Excellent rating</p>
@@ -1464,7 +1632,7 @@ function saveSettings() {
               <!-- All-in-One Report Package -->
               <div class="report-card">
                 <div class="report-card-header">
-                  <div class="report-icon">📁</div>
+                  <div class="report-icon"><FolderIcon class="icon-size" /></div>
                   <div>
                     <h3 class="report-title">All-in-One Report Package</h3>
                     <p class="report-subtitle">Complete internship documentation including attendance, journals, and evaluation</p>
@@ -1487,7 +1655,7 @@ function saveSettings() {
                 <div class="status-pill completed">COMPLETED</div>
                 <div class="certificate-preview">
                   <div class="certificate-content">
-                    <div class="certificate-icon">🎓</div>
+                    <div class="certificate-icon"><AcademicCapIcon style="width: 48px; height: 48px;" /></div>
                     <div class="certificate-text">
                       <div class="certificate-header">CERTIFICATE OF COMPLETION</div>
                       <div class="certificate-name">Maria Clara Santos</div>
@@ -1508,7 +1676,7 @@ function saveSettings() {
                   <button class="btn-outline">Email Certificate</button>
                 </div>
                 <div class="certificate-verified">
-                  <span class="lock-icon">🔒</span>
+                  <span class="lock-icon"><LockClosedIcon class="icon-size-sm" /></span>
                   Digitally signed and verifiable
                 </div>
               </div>
@@ -1543,7 +1711,9 @@ function saveSettings() {
                 <div class="info-item">
                   <span class="info-label">Status:</span>
                   <span class="info-value verified">
-                    <span class="check-icon">✓</span>
+                    <span class="check-icon">
+                      <CheckIcon class="icon-size-sm" />
+                    </span>
                     Verified
                   </span>
                 </div>
@@ -1571,9 +1741,10 @@ function saveSettings() {
             <h1>Post New Internship</h1>
           </div>
           <div class="header-right">
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">{{ companyName }}</span>
-            <div class="avatar">AC</div>
+            <div class="notification-wrapper">
+              <BellIcon class="notification-icon-bell" />
+            </div>
+            <div class="avatar" @click="handleNavChange('profile')" title="View Profile">{{ userInitials }}</div>
           </div>
         </header>
         <main class="main-content">
@@ -1874,7 +2045,9 @@ function saveSettings() {
                   </button>
                   <button class="btn-next-section" @click="submitForApproval" disabled title="Coming soon">
                     Submit for Approval
-                    <span class="arrow-icon">✓</span>
+                    <span class="arrow-icon">
+                      <CheckIcon class="icon-size-sm" />
+                    </span>
                   </button>
                 </div>
               </div>
@@ -1953,93 +2126,97 @@ function saveSettings() {
             <h1>Profile</h1>
           </div>
           <div class="header-right">
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">{{ companyName }}</span>
-            <div class="avatar">AC</div>
+            <div class="notification-wrapper">
+              <BellIcon class="notification-icon-bell" />
+            </div>
+            <div class="avatar" @click="handleNavChange('profile')" title="View Profile">{{ userInitials }}</div>
           </div>
         </header>
         <main class="main-content">
           <!-- Company Profile Header -->
           <div class="profile-header">
             <div class="profile-company-info">
-              <div class="company-logo-large">TC</div>
+              <div class="company-logo-large">{{ companyInitials }}</div>
               <div class="company-details">
                 <h2 class="company-name-large">{{ companyProfile.name }}</h2>
                 <p class="company-industry">{{ companyProfile.industry }}</p>
                 <div class="company-contact">
                   <div class="contact-item">
-                    <span class="contact-icon">📧</span>
+                    <span class="contact-icon"><EnvelopeIcon class="icon-size" /></span>
                     <span>{{ companyProfile.email }}</span>
                   </div>
                   <div class="contact-item">
-                    <span class="contact-icon">📞</span>
+                    <span class="contact-icon"><PhoneIcon class="icon-size" /></span>
                     <span>{{ companyProfile.phone }}</span>
                   </div>
                   <div class="contact-item">
-                    <span class="contact-icon">📍</span>
+                    <span class="contact-icon"><MapPinIcon class="icon-size" /></span>
                     <span>{{ companyProfile.address }}</span>
                   </div>
                 </div>
               </div>
             </div>
-            <button class="btn-edit-profile" @click="editProfile" disabled title="Coming soon">
-              <span class="edit-icon">✏️</span>
-              Edit Profile
-            </button>
+            <div class="profile-stats-section">
+              <div class="profile-description-preview">
+                <p class="description-text">{{ companyProfile.description }}</p>
+              </div>
+              <button class="btn-edit-profile" @click="editProfile">
+                <span class="edit-icon"><PencilIcon class="icon-size-sm" /></span>
+                Edit Profile
+              </button>
+            </div>
           </div>
 
           <!-- Profile Content Grid -->
           <div class="profile-content-grid">
             <!-- Company Details -->
             <div class="profile-card">
-              <h3 class="profile-card-title">Company Details</h3>
+              <div class="profile-card-header">
+                <h3 class="profile-card-title">Company Details</h3>
+                <button class="card-edit-btn" @click="editProfile" title="Edit Company Details"><PencilIcon class="icon-size-sm" /></button>
+              </div>
               <div class="profile-details">
                 <div class="detail-row">
                   <span class="detail-label">Company Size</span>
                   <span class="detail-value">{{ companyProfile.companySize }}</span>
-                  <button class="detail-edit-btn">✏️</button>
                 </div>
                 <div class="detail-row">
                   <span class="detail-label">Founded</span>
                   <span class="detail-value">{{ companyProfile.founded }}</span>
-                  <button class="detail-edit-btn">✏️</button>
                 </div>
                 <div class="detail-row">
                   <span class="detail-label">Website</span>
                   <span class="detail-value">{{ companyProfile.website }}</span>
-                  <button class="detail-edit-btn">✏️</button>
                 </div>
                 <div class="detail-row">
                   <span class="detail-label">Business Type</span>
                   <span class="detail-value">{{ companyProfile.businessType }}</span>
-                  <button class="detail-edit-btn">✏️</button>
                 </div>
               </div>
             </div>
 
             <!-- Internship Focus -->
             <div class="profile-card">
-              <h3 class="profile-card-title">Internship Focus</h3>
+              <div class="profile-card-header">
+                <h3 class="profile-card-title">Internship Focus</h3>
+                <button class="card-edit-btn" @click="editProfile" title="Edit Internship Focus"><PencilIcon class="icon-size-sm" /></button>
+              </div>
               <div class="profile-details">
                 <div class="detail-row">
                   <span class="detail-label">Primary Departments</span>
                   <span class="detail-value">{{ companyProfile.primaryDepartments }}</span>
-                  <button class="detail-edit-btn">✏️</button>
                 </div>
                 <div class="detail-row">
                   <span class="detail-label">Preferred Background</span>
                   <span class="detail-value">{{ companyProfile.preferredBackground }}</span>
-                  <button class="detail-edit-btn">✏️</button>
                 </div>
                 <div class="detail-row">
                   <span class="detail-label">Internship Duration</span>
                   <span class="detail-value">{{ companyProfile.internshipDuration }}</span>
-                  <button class="detail-edit-btn">✏️</button>
                 </div>
                 <div class="detail-row">
                   <span class="detail-label">Available Slots</span>
                   <span class="detail-value">{{ companyProfile.availableSlots }}</span>
-                  <button class="detail-edit-btn">✏️</button>
                 </div>
               </div>
             </div>
@@ -2062,20 +2239,11 @@ function saveSettings() {
                 </div>
                 <div class="detail-row">
                   <span class="detail-label">Student Satisfaction</span>
-                  <span class="detail-value">{{ companyProfile.studentSatisfaction }} / 5.0 ⭐</span>
+                  <span class="detail-value">{{ companyProfile.studentSatisfaction }} / 5.0 <StarIcon class="icon-size-sm" style="display: inline-block; vertical-align: middle;" /></span>
                 </div>
               </div>
             </div>
 
-            <!-- Company Description -->
-            <div class="profile-card">
-              <h3 class="profile-card-title">Company Description</h3>
-              <p class="company-description">{{ companyProfile.description }}</p>
-              <button class="btn-edit-description" @click="editDescription" disabled title="Coming soon">
-                <span class="edit-icon">✏️</span>
-                Edit Description
-              </button>
-            </div>
           </div>
 
           <!-- Profile Completion -->
@@ -2117,9 +2285,10 @@ function saveSettings() {
             <h1>Time Tracking</h1>
           </div>
           <div class="header-right">
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">{{ companyName }}</span>
-            <div class="avatar">AC</div>
+            <div class="notification-wrapper">
+              <BellIcon class="notification-icon-bell" />
+            </div>
+            <div class="avatar" @click="handleNavChange('profile')" title="View Profile">{{ userInitials }}</div>
           </div>
         </header>
         <main class="main-content">
@@ -2127,7 +2296,9 @@ function saveSettings() {
           <div class="time-tracking-controls">
             <div class="tracking-filters">
               <div class="filter-item">
-                <span class="filter-icon">📅</span>
+                <span class="filter-icon">
+                  <CalendarIcon class="icon-size" />
+                </span>
                 <span class="filter-text">{{ timeTrackingDate }}</span>
               </div>
               <div class="filter-item">
@@ -2141,7 +2312,9 @@ function saveSettings() {
                 </select>
               </div>
               <div class="filter-item">
-                <span class="filter-icon">🔍</span>
+                <span class="filter-icon">
+                  <MagnifyingGlassIcon class="icon-size" />
+                </span>
                 <select v-model="timeTrackingInterns" class="filter-select">
                   <option value="All interns">All interns</option>
                   <option value="Present">Present Only</option>
@@ -2155,7 +2328,9 @@ function saveSettings() {
                 :class="{ active: timeTrackingView === 'daily' }"
                 @click="viewDailyLog"
               >
-                <span class="btn-icon">📊</span>
+                <span class="btn-icon">
+                  <ChartBarIcon class="icon-size" />
+                </span>
                 View Daily Log
               </button>
               <button 
@@ -2163,7 +2338,9 @@ function saveSettings() {
                 :class="{ active: timeTrackingView === 'weekly' }"
                 @click="viewWeeklySummary"
               >
-                <span class="btn-icon">📈</span>
+                <span class="btn-icon">
+                  <ChartBarSquareIcon class="icon-size" />
+                </span>
                 View Weekly Summary
               </button>
             </div>
@@ -2194,7 +2371,6 @@ function saveSettings() {
                   <td class="td-date">{{ record.date }}</td>
                   <td class="td-time">
                     <div class="time-entry" :class="{ 'has-indicator': record.status === 'ONGOING' }">
-                      <span v-if="record.status === 'ONGOING'" class="time-indicator">🟢</span>
                       {{ record.timeIn }}
                     </div>
                   </td>
@@ -2212,7 +2388,7 @@ function saveSettings() {
                       disabled
                       title="View Details"
                     >
-                      👁
+                      <EyeIcon class="icon-size" />
                     </button>
                   </td>
                 </tr>
@@ -2231,12 +2407,13 @@ function saveSettings() {
           </div>
           <div class="header-right">
             <button class="btn-set-evaluation" @click="setNewEvaluation">
-              <span class="btn-icon">➕</span>
+              <span class="btn-icon">
+                <PlusIcon class="icon-size" />
+              </span>
               Set New Evaluation
             </button>
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">{{ companyName }}</span>
-            <div class="avatar">AC</div>
+            <BellIcon class="notification-icon-bell" />
+            <div class="avatar" @click="handleNavChange('profile')" title="View Profile">{{ userInitials }}</div>
           </div>
         </header>
         <main class="main-content">
@@ -2303,11 +2480,15 @@ function saveSettings() {
           <div class="pending-evaluations-section">
             <div class="section-header-eval">
               <div class="section-title-with-icon">
-                <span class="section-icon">📋</span>
+                <span class="section-icon">
+                  <ClipboardDocumentListIcon class="icon-size" />
+                </span>
                 <h3 class="section-title">Pending Evaluations</h3>
               </div>
               <div class="search-wrapper-eval">
-                <span class="search-icon">🔍</span>
+                <span class="search-icon">
+                  <MagnifyingGlassIcon class="icon-size" />
+                </span>
                 <input
                   type="text"
                   placeholder="Search Student, Supervisor..."
@@ -2363,7 +2544,7 @@ function saveSettings() {
             <div class="evaluation-modal">
               <div class="modal-header">
                 <h3 class="modal-title">Set New Evaluation Schedule</h3>
-                <button class="modal-close-btn" @click="closeNewEvaluationModal">×</button>
+                <button class="modal-close-btn" @click="closeNewEvaluationModal"><XMarkIcon class="icon-size" /></button>
               </div>
               
               <div class="modal-body">
@@ -2408,7 +2589,9 @@ function saveSettings() {
                       class="form-input date-input"
                       placeholder="DD/MM/YYYY"
                     />
-                    <span class="date-icon">📅</span>
+                    <span class="date-icon">
+                      <CalendarIcon class="icon-size" />
+                    </span>
                   </div>
                 </div>
               </div>
@@ -2424,108 +2607,7 @@ function saveSettings() {
       </div>
 
       <!-- Settings View -->
-      <div v-if="currentView === 'settings'">
-        <header class="top-header">
-          <div class="header-left">
-            <div class="header-icon">🔒</div>
-            <h1>Change Password</h1>
-          </div>
-          <div class="header-right">
-            <img src="/icons/icon-notification.png" alt="Notifications" class="notification-icon" />
-            <span class="company-name">{{ companyName }}</span>
-            <div class="avatar">AC</div>
-          </div>
-        </header>
-
-        <main class="main-content">
-          <div class="settings-container">
-            <h2 class="settings-main-title">Update account Information</h2>
-
-            <!-- Password Section -->
-            <div class="settings-card">
-              <div class="password-section">
-                <h3 class="password-title">Password</h3>
-                <p class="password-subtitle">The password will additionally protect your account from hacking</p>
-
-                <div class="password-form">
-                  <div class="form-group">
-                    <label class="form-label">Current Password</label>
-                    <div class="password-input-container">
-                      <input 
-                        type="password" 
-                        class="form-input password-input"
-                        placeholder="Enter current password"
-                      />
-                      <button type="button" class="password-toggle">👁</button>
-                    </div>
-                  </div>
-
-                  <div class="form-group">
-                    <label class="form-label">New Password</label>
-                    <div class="password-input-container">
-                      <input 
-                        type="password" 
-                        class="form-input password-input"
-                        placeholder="Enter new password"
-                      />
-                      <button type="button" class="password-toggle">👁</button>
-                    </div>
-                    <div class="password-strength">
-                      <div class="strength-bar">
-                        <div class="strength-fill weak"></div>
-                      </div>
-                      <span class="strength-text">Weak password with capital letter</span>
-                    </div>
-                  </div>
-
-                  <div class="form-group">
-                    <label class="form-label">Confirm new password</label>
-                    <div class="password-input-container">
-                      <input 
-                        type="password" 
-                        class="form-input password-input"
-                        placeholder="Confirm new password"
-                      />
-                      <button type="button" class="password-toggle">👁</button>
-                    </div>
-                  </div>
-
-                  <div class="form-actions">
-                    <button type="button" class="btn-cancel" @click="currentView = 'dashboard'">Cancel</button>
-                    <button type="button" class="btn-save" @click="saveSettings" disabled title="Coming soon">Save</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Two-factor Authentication Section -->
-            <div class="settings-card">
-              <div class="two-factor-section">
-                <h3 class="two-factor-title">Tow-factor Authentication</h3>
-                <p class="two-factor-subtitle">The password with additionally protect your account from hacking</p>
-
-                <div class="auth-options">
-                  <div class="auth-option">
-                    <div class="auth-icon">📱</div>
-                    <div class="auth-content">
-                      <h4 class="auth-option-title">Authentication app</h4>
-                      <p class="auth-option-desc">Use app the Google Authenticator or Duo Mobile to generate verifications code for more protection</p>
-                    </div>
-                  </div>
-
-                  <div class="auth-option">
-                    <div class="auth-icon">☁️</div>
-                    <div class="auth-content">
-                      <h4 class="auth-option-title">Security Key</h4>
-                      <p class="auth-option-desc">Use a physical security key help to protect your Facebook account from unauthorized access you won't to need to enter a code</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </main>
-      </div>
+      <CompanySettings v-if="currentView === 'settings'" />
 
     </div> <!-- End Main Wrapper -->
 
@@ -2535,6 +2617,41 @@ function saveSettings() {
 </template>
 
 <style scoped>
+/* Heroicons sizing */
+.icon-size {
+  width: 20px;
+  height: 20px;
+}
+
+.icon-size-sm {
+  width: 16px;
+  height: 16px;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 8px;
+}
+
+.filter-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b7280;
+}
+
+.section-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #2563eb;
+  margin-right: 8px;
+}
+
 .dashboard {
   display: flex;
   min-height: 100vh;
@@ -2623,6 +2740,195 @@ function saveSettings() {
   margin: 0;
 }
 
+.notification-icon-bell {
+  width: 24px;
+  height: 24px;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.notification-icon-bell:hover {
+  color: #2563eb;
+  transform: scale(1.1);
+}
+
+.notification-wrapper {
+  position: relative;
+}
+
+.notification-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 10px;
+  min-width: 18px;
+  text-align: center;
+}
+
+.notification-dropdown {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  width: 360px;
+  max-height: 480px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.notification-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+
+.notification-header h3 {
+  font-size: 16px;
+  font-weight: 700;
+  color: #111827;
+  margin: 0;
+}
+
+.notification-count {
+  font-size: 12px;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.notification-list {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 360px;
+}
+
+.notification-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid #f3f4f6;
+  cursor: pointer;
+  transition: background 0.2s;
+  position: relative;
+}
+
+.notification-item:hover {
+  background: #f9fafb;
+}
+
+.notification-item:last-child {
+  border-bottom: none;
+}
+
+.notification-item.unread {
+  background: #eff6ff;
+}
+
+.notification-item.unread:hover {
+  background: #dbeafe;
+}
+
+.notification-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.notification-content h4 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+  margin: 0 0 4px 0;
+}
+
+.notification-content p,
+.notification-text {
+  font-size: 13px;
+  color: #6b7280;
+  margin: 0 0 4px 0;
+  line-height: 1.4;
+}
+
+.notification-time {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.notification-action {
+  font-size: 12px;
+  color: #2563eb;
+  font-weight: 500;
+  text-decoration: none;
+  margin-top: 4px;
+  display: inline-block;
+}
+
+.notification-action:hover {
+  text-decoration: underline;
+}
+
+.unread-dot {
+  width: 8px;
+  height: 8px;
+  background: #2563eb;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+
+.notification-footer {
+  padding: 12px 20px;
+  border-top: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+
+.view-all-btn {
+  width: 100%;
+  padding: 8px;
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.view-all-btn:hover {
+  background: #1d4ed8;
+}
+
+.notification-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #f3f4f6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.icon-size {
+  width: 18px;
+  height: 18px;
+  color: #6b7280;
+}
+
 .company-name {
   font-size: 14px;
   color: #1e40af;
@@ -2640,6 +2946,14 @@ function saveSettings() {
   justify-content: center;
   font-weight: 700;
   font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.avatar:hover {
+  background: #2563eb;
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
 }
 
 /* Main Content */
@@ -2648,28 +2962,59 @@ function saveSettings() {
   flex: 1;
 }
 
-/* Action Buttons */
-.action-buttons {
-  display: flex;
+/* Quick Actions Card */
+.quick-actions-card {
+  margin-top: 24px;
+}
+
+.action-buttons-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
   gap: 12px;
-  margin-bottom: 24px;
-  flex-wrap: wrap;
 }
 
-.action-btn {
-  padding: 12px 20px;
-  background: #2563eb;
-  color: #fff;
-  border: none;
-  border-radius: 8px;
-  font-weight: 600;
-  font-size: 14px;
+.action-btn-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px 16px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s ease;
 }
 
-.action-btn:hover {
-  background: #1d4ed8;
+.action-btn-card:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.action-icon-wrapper {
+  width: 48px;
+  height: 48px;
+  background: #dbeafe;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.action-icon-svg {
+  width: 24px;
+  height: 24px;
+  color: #2563eb;
+}
+
+.action-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: #475569;
+  text-align: center;
 }
 
 /* Summary Cards */
@@ -2686,7 +3031,13 @@ function saveSettings() {
   border-radius: 12px;
   padding: 24px;
   position: relative;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  transition: all 0.3s ease;
+}
+
+.summary-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
 }
 
 .card-icon {
@@ -2699,19 +3050,26 @@ function saveSettings() {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
+  transition: transform 0.3s ease;
+}
+
+.summary-card:hover .card-icon {
+  transform: scale(1.1);
 }
 
 .card-icon.ongoing {
-  background: #dbeafe;
+  background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+  color: #1e40af;
 }
 
 .card-icon.near {
-  background: #fef3c7;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  color: #92400e;
 }
 
 .card-icon.completed {
-  background: #d1fae5;
+  background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+  color: #065f46;
 }
 
 .card-number {
@@ -2741,7 +3099,12 @@ function saveSettings() {
   border-radius: 12px;
   padding: 24px;
   margin-bottom: 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  transition: box-shadow 0.3s ease;
+}
+
+.content-section:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
 .content-section h2 {
@@ -2775,18 +3138,33 @@ function saveSettings() {
   display: flex;
   gap: 12px;
   align-items: flex-start;
+  padding: 8px;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.activity-item:hover {
+  background: #f9fafb;
+  transform: translateX(4px);
 }
 
 .activity-icon {
-  font-size: 20px;
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f3f4f6;
-  border-radius: 8px;
+  background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+  border-radius: 10px;
   flex-shrink: 0;
+  color: #4b5563;
+  transition: all 0.2s ease;
+}
+
+.activity-item:hover .activity-icon {
+  background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+  color: #1e40af;
+  transform: scale(1.05);
 }
 
 .activity-content {
@@ -2942,7 +3320,12 @@ function saveSettings() {
   align-items: flex-start;
   padding: 12px;
   border-radius: 8px;
-  transition: background 0.2s;
+  transition: all 0.2s ease;
+}
+
+.notification-item:hover {
+  background: #f9fafb;
+  transform: translateX(4px);
 }
 
 .notification-item.unread {
@@ -2950,15 +3333,22 @@ function saveSettings() {
 }
 
 .notification-icon {
-  font-size: 20px;
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f3f4f6;
-  border-radius: 8px;
+  background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+  border-radius: 10px;
   flex-shrink: 0;
+  color: #4b5563;
+  transition: all 0.2s ease;
+}
+
+.notification-item:hover .notification-icon {
+  background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+  color: #1e40af;
+  transform: scale(1.05);
 }
 
 .notification-content {
@@ -3035,14 +3425,6 @@ function saveSettings() {
   .main-wrapper {
     margin-left: 0;
   }
-
-  .action-buttons {
-    flex-direction: column;
-  }
-
-  .action-btn {
-    width: 100%;
-  }
 }
 
 /* Internships View Styles */
@@ -3059,6 +3441,12 @@ function saveSettings() {
   padding: 24px;
   height: fit-content;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
+}
+
+.filters-column:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  border-color: #cbd5e1;
 }
 
 .filters-title {
@@ -3105,6 +3493,14 @@ function saveSettings() {
 
 .date-input {
   width: 100%;
+  position: relative;
+  padding-right: 40px;
+}
+
+.date-input::-webkit-calendar-picker-indicator {
+  position: absolute;
+  right: 12px;
+  cursor: pointer;
 }
 
 .selected-skills {
@@ -3250,8 +3646,10 @@ function saveSettings() {
   left: 16px;
   top: 50%;
   transform: translateY(-50%);
-  font-size: 18px;
   color: #6b7280;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .search-input {
@@ -3351,6 +3749,9 @@ function saveSettings() {
   font-size: 13px;
   color: #6b7280;
   margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .match-badge {
@@ -3377,7 +3778,10 @@ function saveSettings() {
 }
 
 .star-icon {
-  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fbbf24;
 }
 
 .card-description {
@@ -3649,6 +4053,18 @@ function saveSettings() {
   padding-right: 40px;
 }
 
+.date-icon {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: #6b7280;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .calendar-icon {
   position: absolute;
   right: 12px;
@@ -3728,25 +4144,48 @@ function saveSettings() {
 
 /* Reports View Styles */
 .summary-cards-reports {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  display: flex;
   gap: 16px;
   margin-bottom: 32px;
 }
 
-.summary-card-report {
+.summary-card-report-combined {
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 12px;
   padding: 24px;
-  text-align: center;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  width: 100%;
+  gap: 32px;
 }
 
-.card-value {
-  font-size: 24px;
+.summary-card-report-combined:hover {
+  border-color: #2563eb;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.15);
+  transform: translateY(-2px);
+}
+
+.metric-item {
+  text-align: center;
+  flex: 1;
+}
+
+.card-number {
+  font-size: 36px;
   font-weight: 700;
-  color: #111827;
+  color: #1e3a8a;
+  margin-bottom: 8px;
+}
+
+.card-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #6b7280;
+  text-transform: capitalize;
 }
 
 .reports-layout {
@@ -3767,6 +4206,13 @@ function saveSettings() {
   border-radius: 12px;
   padding: 24px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
+}
+
+.report-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  transform: translateY(-2px);
+  border-color: #cbd5e1;
 }
 
 .report-card-header {
@@ -3978,6 +4424,13 @@ function saveSettings() {
   border-radius: 12px;
   padding: 24px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
+}
+
+.certificate-section:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  transform: translateY(-2px);
+  border-color: #cbd5e1;
 }
 
 .certificate-title {
@@ -4108,6 +4561,13 @@ function saveSettings() {
   border-radius: 12px;
   padding: 24px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
+}
+
+.student-info-section:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  transform: translateY(-2px);
+  border-color: #cbd5e1;
 }
 
 .section-title {
@@ -4158,6 +4618,13 @@ function saveSettings() {
   border-radius: 12px;
   padding: 24px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
+}
+
+.honors-section:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  transform: translateY(-2px);
+  border-color: #cbd5e1;
 }
 
 .honors-badges {
@@ -4895,8 +5362,11 @@ function saveSettings() {
   right: 12px;
   top: 50%;
   transform: translateY(-50%);
-  font-size: 16px;
   pointer-events: none;
+  color: #6b7280;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .add-journal-textarea {
@@ -5507,5 +5977,307 @@ function saveSettings() {
     text-align: center;
   }
 }
+
+/* Progress Column - Remove sticky behavior */
+.progress-column {
+  position: relative;
+}
+
+.progress-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.progress-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 20px;
+}
+
+.progress-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.progress-step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.step-indicator {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #f3f4f6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.progress-step.active .step-indicator {
+  background: #2563eb;
+  color: #fff;
+}
+
+.step-number {
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.step-content {
+  flex: 1;
+}
+
+.step-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #111827;
+  margin-bottom: 4px;
+}
+
+.step-status {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.step-status.completed {
+  color: #10b981;
+}
+
+.step-status.in-progress {
+  color: #2563eb;
+}
+
+.step-status.pending {
+  color: #9ca3af;
+}
+
+/* Profile Cards */
+.profile-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.profile-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.profile-card-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #111827;
+  margin: 0;
+}
+
+.card-edit-btn {
+  background: transparent;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px;
+  cursor: pointer;
+  color: #6b7280;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.card-edit-btn:hover {
+  background: #f3f4f6;
+  border-color: #2563eb;
+  color: #2563eb;
+}
+
+.profile-details {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.detail-row:last-child {
+  border-bottom: none;
+}
+
+.detail-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #6b7280;
+}
+
+.detail-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+}
+
+/* Profile Header Stats */
+.profile-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 32px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.profile-company-info {
+  display: flex;
+  gap: 20px;
+  flex: 1;
+}
+
+.company-logo-large {
+  width: 80px;
+  height: 80px;
+  border-radius: 12px;
+  background: #2563eb;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.company-details {
+  flex: 1;
+}
+
+.company-name-large {
+  font-size: 24px;
+  font-weight: 700;
+  color: #111827;
+  margin: 0 0 4px 0;
+}
+
+.company-industry {
+  font-size: 14px;
+  color: #6b7280;
+  margin: 0 0 16px 0;
+}
+
+.company-contact {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.contact-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #374151;
+}
+
+.contact-icon {
+  color: #6b7280;
+  display: flex;
+  align-items: center;
+}
+
+.profile-stats-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-items: flex-end;
+  max-width: 400px;
+}
+
+.profile-description-preview {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 16px;
+  width: 100%;
+}
+
+.description-text {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #6b7280;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.btn-edit-profile {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-edit-profile:hover:not(:disabled) {
+  background: #1d4ed8;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.btn-edit-profile:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.edit-icon {
+  display: flex;
+  align-items: center;
+}
+
+.profile-content-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 24px;
+}
+
+.profile-card-full {
+  grid-column: 1 / -1;
+}
+
+.company-description {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #374151;
+  margin: 0;
+}
 </style>
+
 

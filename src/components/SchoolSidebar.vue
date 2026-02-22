@@ -140,7 +140,7 @@ async function logout() {
 .school-sidebar {
   width: 280px;
   height: 100vh;
-  background: linear-gradient(180deg, #1e3a8a 0%, #1e40af 50%, #1d4ed8 100%);
+  background: #1e3a8a;
   position: fixed;
   left: 0;
   top: 0;
@@ -215,6 +215,7 @@ async function logout() {
 
 .sidebar-bottom {
   padding: 20px 0;
+  padding-bottom: 20px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 

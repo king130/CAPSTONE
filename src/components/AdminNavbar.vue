@@ -29,7 +29,7 @@ async function handleLogout() {
   align-items: center;
   justify-content: space-between;
   padding: 16px 24px;
-  background: #0f172a;
+  background: #1e3a8a;
   color: #fff;
 }
 

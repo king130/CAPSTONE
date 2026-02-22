@@ -1,12 +1,90 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import { 
+  BellIcon,
+  MapPinIcon,
+  CheckIcon,
+  CheckCircleIcon,
+  MagnifyingGlassIcon,
+  DocumentTextIcon,
+  BookmarkIcon,
+  BriefcaseIcon,
+  LinkIcon,
+  CloudArrowUpIcon,
+  PaintBrushIcon,
+  UserGroupIcon,
+  BookOpenIcon,
+  QuestionMarkCircleIcon,
+  ChevronRightIcon
+} from '@heroicons/vue/24/outline'
 
 const authStore = useAuthStore()
+
+const userInitials = computed(() => {
+  const name = authStore.user?.displayName || authStore.user?.email || 'User'
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2)
+})
+
+// TEMPORARY DATA: Notification dropdown state - this is a UI state variable
+const showNotifications = ref(false)
+
+// TEMPORARY DATA: Static notifications for dropdown - replace with real data from backend
+const notifications = ref([
+  {
+    id: 1,
+    title: 'Application Update',
+    message: 'Your application to TechCorp has been reviewed',
+    time: '2 hours ago',
+    unread: true
+  },
+  {
+    id: 2,
+    title: 'Interview Scheduled',
+    message: 'Interview scheduled for May 20 at 2:00 PM',
+    time: '5 hours ago',
+    unread: true
+  },
+  {
+    id: 3,
+    title: 'Document Reminder',
+    message: 'Please upload your resume',
+    time: '1 day ago',
+    unread: false
+  },
+  {
+    id: 4,
+    title: 'New Internship Match',
+    message: 'You have 3 new internship matches',
+    time: '2 days ago',
+    unread: false
+  }
+])
+
+function toggleNotifications() {
+  showNotifications.value = !showNotifications.value
+}
+
 const organizationName = computed(() => {
   const profile = authStore.user?.profile as Record<string, unknown> | undefined
   return (profile?.schoolName as string) || authStore.user?.displayName || 'Account'
 })
+
+// Emit event to parent
+const emit = defineEmits<{
+  openMessages: []
+  navigateToProfile: []
+}>()
+
+function handleAvatarClick() {
+  emit('navigateToProfile')
+}
 
 // Search and filter state
 const searchQuery = ref('')
@@ -295,17 +373,15 @@ function getInitials(company: string): string {
         <h1 class="header-title">Internship</h1>
       </div>
       <div class="header-right">
-        <button @click="$emit('openMessages')" class="message-icon-btn">
-          <img src="/icons/icon-message.png" alt="Messages" class="message-icon" />
-        </button>
-        <div class="company-info">
-          <span class="company-name">{{ organizationName }}</span>
-          <div class="user-avatar">AC</div>
+        <div class="notification-wrapper">
+          <BellIcon class="notification-icon-bell" />
         </div>
+        <div class="avatar" @click="handleAvatarClick" title="View Profile">{{ userInitials }}</div>
       </div>
     </div>
 
-    <div class="main-layout">
+    <div class="internship-main">
+      <div class="main-layout">
       <!-- Filters Sidebar -->
       <div class="filters-sidebar">
         <h3 class="filters-title">Filters</h3>
@@ -388,15 +464,7 @@ function getInitials(company: string): string {
               placeholder="Search internship by keyword..."
               class="search-input"
             />
-            <span class="search-icon">🔍</span>
-          </div>
-
-          <!-- Active Filters -->
-          <div class="active-filters">
-            <div v-for="filter in selectedFilters" :key="filter" class="filter-tag">
-              <span>{{ filter }}</span>
-              <button @click="removeFilter(filter)" class="remove-filter">×</button>
-            </div>
+            <span class="search-icon"><MagnifyingGlassIcon class="search-icon-svg" /></span>
           </div>
         </div>
 
@@ -411,14 +479,14 @@ function getInitials(company: string): string {
                 <h3 class="internship-title">{{ internship.title }}</h3>
                 <p class="company-name">{{ internship.company }}</p>
                 <div class="location-info">
-                  <span class="location-icon">📍</span>
+                  <MapPinIcon class="location-icon-svg" />
                   <span class="location-text">{{ internship.location }}</span>
                 </div>
               </div>
               <div class="match-info">
                 <div class="match-score">{{ internship.match }}% Match</div>
                 <div v-if="internship.recommended" class="recommended-badge">
-                  <span class="badge-icon">✓</span>
+                  <CheckIcon class="badge-icon-svg" />
                   <span class="badge-text">Recommended for You</span>
                 </div>
               </div>
@@ -460,7 +528,7 @@ function getInitials(company: string): string {
               <h2 class="modal-title">{{ selectedInternship.title }}</h2>
               <p class="modal-company">{{ selectedInternship.company }}</p>
               <div class="modal-location">
-                <span class="location-icon">📍</span>
+                <MapPinIcon class="location-icon-svg" />
                 <span>{{ selectedInternship.location }}</span>
               </div>
             </div>
@@ -483,7 +551,7 @@ function getInitials(company: string): string {
                 <h3 class="section-title">Responsibilities</h3>
                 <ul class="responsibility-list">
                   <li v-for="responsibility in selectedInternship.responsibilities" :key="responsibility" class="responsibility-item">
-                    <span class="bullet-icon">🔹</span>
+                    <ChevronRightIcon class="bullet-icon-svg" />
                     {{ responsibility }}
                   </li>
                 </ul>
@@ -494,7 +562,7 @@ function getInitials(company: string): string {
                 <h3 class="section-title">Requirements</h3>
                 <ul class="requirement-list">
                   <li v-for="requirement in selectedInternship.requirements" :key="requirement" class="requirement-item">
-                    <span class="bullet-icon">📋</span>
+                    <DocumentTextIcon class="bullet-icon-svg" />
                     {{ requirement }}
                   </li>
                 </ul>
@@ -539,7 +607,7 @@ function getInitials(company: string): string {
                 
                 <div class="skills-match">
                   <div v-for="skill in selectedInternship.compatibility.matches" :key="skill" class="skill-match-item matched">
-                    <span class="match-icon">✓</span>
+                    <CheckIcon class="match-icon-svg" />
                     <span class="skill-text">{{ skill }}</span>
                   </div>
                   <div v-for="skill in selectedInternship.compatibility.missing" :key="skill" class="skill-match-item missing">
@@ -554,9 +622,9 @@ function getInitials(company: string): string {
                 </div>
 
                 <div class="social-share">
-                  <button class="share-btn">💾</button>
-                  <button class="share-btn">💼</button>
-                  <button class="share-btn">🔗</button>
+                  <button class="share-btn"><BookmarkIcon class="share-icon" /></button>
+                  <button class="share-btn"><BriefcaseIcon class="share-icon" /></button>
+                  <button class="share-btn"><LinkIcon class="share-icon" /></button>
                 </div>
               </div>
             </div>
@@ -594,7 +662,7 @@ function getInitials(company: string): string {
                 <div class="document-list">
                   <div v-for="(doc, index) in applicationData.documents" :key="doc.name" class="document-item">
                     <div class="doc-status-icon" :class="{ completed: doc.status === 'completed', missing: doc.status === 'missing' }">
-                      <span v-if="doc.status === 'completed'" class="status-icon">✓</span>
+                      <CheckIcon v-if="doc.status === 'completed'" class="status-icon-svg" />
                       <span v-else class="status-icon">○</span>
                     </div>
                     <div class="doc-info">
@@ -606,7 +674,7 @@ function getInitials(company: string): string {
 
                 <div class="upload-section">
                   <div class="upload-status">
-                    <span class="upload-icon">📄</span>
+                    <DocumentTextIcon class="upload-icon-svg" />
                     <span class="upload-text">Resume/CV</span>
                   </div>
                   <p class="upload-description">
@@ -620,12 +688,12 @@ function getInitials(company: string): string {
                     <button class="file-action-btn">TXT</button>
                   </div>
                   <div class="upload-area">
-                    <div class="upload-icon-large">☁️</div>
+                    <CloudArrowUpIcon class="upload-icon-large-svg" />
                     <p class="upload-text-large">Drag & drop your resume here, or</p>
                     <button class="browse-btn">Browse files</button>
                   </div>
                   <div class="upload-note">
-                    <span class="note-icon">📋</span>
+                    <DocumentTextIcon class="note-icon-svg" />
                     <span class="note-text">Tips for optimal resume format</span>
                   </div>
                 </div>
@@ -633,7 +701,7 @@ function getInitials(company: string): string {
                 <!-- Cover Letter Section -->
                 <div class="upload-section">
                   <div class="upload-status">
-                    <span class="upload-icon">📝</span>
+                    <DocumentTextIcon class="upload-icon-svg" />
                     <span class="upload-text">Cover Letter</span>
                   </div>
                   <p class="upload-description">
@@ -646,7 +714,7 @@ function getInitials(company: string): string {
                     <button class="file-action-btn">TXT</button>
                   </div>
                   <div class="upload-area">
-                    <div class="upload-icon-large">☁️</div>
+                    <CloudArrowUpIcon class="upload-icon-large-svg" />
                     <p class="upload-text-large">Drag & drop your cover letter here, or</p>
                     <button class="browse-btn">Browse files</button>
                   </div>
@@ -655,7 +723,7 @@ function getInitials(company: string): string {
                 <!-- Portfolio Section -->
                 <div class="upload-section">
                   <div class="upload-status">
-                    <span class="upload-icon">🎨</span>
+                    <PaintBrushIcon class="upload-icon-svg" />
                     <span class="upload-text">Portfolio Samples</span>
                     <span class="optional-badge">Optional</span>
                   </div>
@@ -670,7 +738,7 @@ function getInitials(company: string): string {
                     <button class="file-action-btn">Add a link</button>
                   </div>
                   <div class="upload-area">
-                    <div class="upload-icon-large">☁️</div>
+                    <CloudArrowUpIcon class="upload-icon-large-svg" />
                     <p class="upload-text-large">Drag & drop your files here, or</p>
                     <button class="browse-btn">Browse files</button>
                   </div>
@@ -679,7 +747,7 @@ function getInitials(company: string): string {
                 <!-- Reference Documents -->
                 <div class="upload-section">
                   <div class="upload-status">
-                    <span class="upload-icon">👥</span>
+                    <UserGroupIcon class="upload-icon-svg" />
                     <span class="upload-text">Reference Documents</span>
                     <span class="required-badge">Required</span>
                   </div>
@@ -694,12 +762,12 @@ function getInitials(company: string): string {
                     <button class="file-action-btn">Add a link</button>
                   </div>
                   <div class="upload-area">
-                    <div class="upload-icon-large">☁️</div>
+                    <CloudArrowUpIcon class="upload-icon-large-svg" />
                     <p class="upload-text-large">Drag & drop your references document here, or</p>
                     <button class="browse-btn">Browse files</button>
                   </div>
                   <div class="upload-note">
-                    <span class="note-icon">📋</span>
+                    <DocumentTextIcon class="note-icon-svg" />
                     <span class="note-text">Download reference template</span>
                   </div>
                 </div>
@@ -718,11 +786,11 @@ function getInitials(company: string): string {
                 </div>
                 <div class="progress-items">
                   <div class="progress-item completed">
-                    <span class="progress-icon">✓</span>
+                    <CheckIcon class="progress-icon-svg" />
                     <span class="progress-text">Personal Information</span>
                   </div>
                   <div class="progress-item current">
-                    <span class="progress-icon">📄</span>
+                    <DocumentTextIcon class="progress-icon-doc-svg" />
                     <span class="progress-text">Documents</span>
                   </div>
                 </div>
@@ -733,15 +801,15 @@ function getInitials(company: string): string {
                 <h3 class="help-title">Need Help?</h3>
                 <div class="help-items">
                   <div class="help-item">
-                    <span class="help-icon">📚</span>
+                    <BookOpenIcon class="help-icon-svg" />
                     <span class="help-text">DOCUMENT FORMATTING GUIDE</span>
                   </div>
                   <div class="help-item">
-                    <span class="help-icon">☁️</span>
+                    <CloudArrowUpIcon class="help-icon-svg" />
                     <span class="help-text">UPLOAD SUPPORT</span>
                   </div>
                   <div class="help-item">
-                    <span class="help-icon">❓</span>
+                    <QuestionMarkCircleIcon class="help-icon-svg" />
                     <span class="help-text">FAQ</span>
                   </div>
                 </div>
@@ -778,7 +846,7 @@ function getInitials(company: string): string {
             <img src="/icons/logo-main.png" alt="Logo" class="app-logo" />
           </div>
           <div class="header-right">
-            <div class="notification-icon">🔔</div>
+            <BellIcon class="notification-icon-bell" />
             <span class="company-name">Acme Corp. Company</span>
             <div class="user-avatar">AC</div>
           </div>
@@ -786,7 +854,7 @@ function getInitials(company: string): string {
 
         <!-- Success Banner -->
         <div class="success-banner">
-          <div class="success-icon">✓</div>
+          <div class="success-icon"><CheckCircleIcon class="success-icon-svg" /></div>
           <div class="success-content">
             <h2 class="success-title">All required documents uploaded!</h2>
             <p class="success-subtitle">You can now proceed to review your application</p>
@@ -812,29 +880,29 @@ function getInitials(company: string): string {
                 <!-- Document Checklist Complete -->
                 <div class="checklist-complete">
                   <div class="checklist-header">
-                    <span class="checklist-icon">📋</span>
+                    <DocumentTextIcon class="checklist-icon-svg" />
                     <h3 class="checklist-title">Document Checklist Complete</h3>
                   </div>
                   <p class="checklist-subtitle">You have completed 4 of 4 required documents. 1 optional document uploaded.</p>
                   
                   <div class="document-status-list">
                     <div class="status-item">
-                      <div class="status-icon completed">✓</div>
+                      <div class="status-icon completed"><CheckIcon class="status-icon-svg" /></div>
                       <span class="status-name">Resume/CV</span>
                       <span class="status-label uploaded">Uploaded</span>
                     </div>
                     <div class="status-item">
-                      <div class="status-icon completed">✓</div>
+                      <div class="status-icon completed"><CheckIcon class="status-icon-svg" /></div>
                       <span class="status-name">Cover Letter</span>
                       <span class="status-label uploaded">Uploaded</span>
                     </div>
                     <div class="status-item">
-                      <div class="status-icon completed">✓</div>
+                      <div class="status-icon completed"><CheckIcon class="status-icon-svg" /></div>
                       <span class="status-name">Portfolio/Work Samples</span>
                       <span class="status-label optional">Optional</span>
                     </div>
                     <div class="status-item">
-                      <div class="status-icon completed">✓</div>
+                      <div class="status-icon completed"><CheckIcon class="status-icon-svg" /></div>
                       <span class="status-name">References Document</span>
                       <span class="status-label uploaded">Uploaded</span>
                     </div>
@@ -845,7 +913,7 @@ function getInitials(company: string): string {
               <!-- Uploaded Documents -->
               <div class="uploaded-documents">
                 <div class="document-item">
-                  <div class="doc-icon">✓</div>
+                  <div class="doc-icon-check"><CheckIcon class="doc-check-svg" /></div>
                   <div class="doc-info">
                     <span class="doc-name">Resume/CV</span>
                     <span class="doc-filename">JohnDoe_Resume.pdf</span>
@@ -855,7 +923,7 @@ function getInitials(company: string): string {
                 </div>
 
                 <div class="document-item">
-                  <div class="doc-icon">✓</div>
+                  <div class="doc-icon-check"><CheckIcon class="doc-check-svg" /></div>
                   <div class="doc-info">
                     <span class="doc-name">Cover Letter</span>
                     <span class="doc-filename">JohnDoe_CoverLetter.pdf</span>
@@ -865,7 +933,7 @@ function getInitials(company: string): string {
                 </div>
 
                 <div class="document-item">
-                  <div class="doc-icon">✓</div>
+                  <div class="doc-icon-check"><CheckIcon class="doc-check-svg" /></div>
                   <div class="doc-info">
                     <span class="doc-name">Portfolio/Work Samples</span>
                     <span class="doc-filename">Portfolio_3_files.zip</span>
@@ -875,7 +943,7 @@ function getInitials(company: string): string {
                 </div>
 
                 <div class="document-item">
-                  <div class="doc-icon">✓</div>
+                  <div class="doc-icon-check"><CheckIcon class="doc-check-svg" /></div>
                   <div class="doc-info">
                     <span class="doc-name">References Document</span>
                     <span class="doc-filename">Professional_References.pdf</span>
@@ -909,11 +977,11 @@ function getInitials(company: string): string {
                 </div>
                 <div class="progress-steps">
                   <div class="progress-step completed">
-                    <div class="step-icon">✓</div>
+                    <div class="step-icon-check"><CheckIcon class="step-check-svg" /></div>
                     <span class="step-text">Personal Information</span>
                   </div>
                   <div class="progress-step completed">
-                    <div class="step-icon">✓</div>
+                    <div class="step-icon-check"><CheckIcon class="step-check-svg" /></div>
                     <span class="step-text">Documents</span>
                   </div>
                 </div>
@@ -959,7 +1027,7 @@ function getInitials(company: string): string {
                   <span class="summary-value">6.2 MB</span>
                 </div>
                 <div class="summary-status">
-                  <div class="status-icon-small">✓</div>
+                  <div class="status-icon-small-check"><CheckIcon class="status-check-small-svg" /></div>
                   <span class="status-text">All requirements met</span>
                 </div>
               </div>
@@ -969,15 +1037,15 @@ function getInitials(company: string): string {
                 <h3 class="help-title">Need Help?</h3>
                 <div class="help-items">
                   <div class="help-item">
-                    <div class="help-icon">📖</div>
+                    <BookOpenIcon class="help-icon-svg" />
                     <span class="help-text">Application guide</span>
                   </div>
                   <div class="help-item">
-                    <div class="help-icon">🎧</div>
+                    <QuestionMarkCircleIcon class="help-icon-svg" />
                     <span class="help-text">Contact support</span>
                   </div>
                   <div class="help-item">
-                    <div class="help-icon">❓</div>
+                    <QuestionMarkCircleIcon class="help-icon-svg" />
                     <span class="help-text">FAQs</span>
                   </div>
                 </div>
@@ -993,26 +1061,30 @@ function getInitials(company: string): string {
         </div>
       </div>
     </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .internship-content {
-  padding: 24px;
+  padding: 0;
   background: #f8fafc;
   min-height: 100vh;
 }
 
+.internship-main {
+  padding: 24px;
+}
+
 /* Header */
 .internship-header {
+  background: #dbeafe;
+  padding: 16px 32px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 32px;
-  background: white;
-  padding: 16px 24px;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border-bottom: 1px solid #bfdbfe;
+  margin-bottom: 0;
 }
 
 .header-left {
@@ -1024,13 +1096,14 @@ function getInitials(company: string): string {
 .header-icon {
   width: 24px;
   height: 24px;
-  filter: hue-rotate(220deg) saturate(2);
+  object-fit: contain;
+  filter: brightness(0) saturate(100%) invert(27%) sepia(51%) saturate(2878%) hue-rotate(220deg) brightness(104%) contrast(97%);
 }
 
 .header-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: #1f2937;
+  font-size: 24px;
+  font-weight: 700;
+  color: #1e40af;
   margin: 0;
 }
 
@@ -1040,32 +1113,38 @@ function getInitials(company: string): string {
   gap: 16px;
 }
 
-.message-icon-btn {
-  background: none;
-  border: none;
+.notification-icon-bell {
+  width: 24px;
+  height: 24px;
+  color: #6b7280;
   cursor: pointer;
-  padding: 8px;
-  border-radius: 8px;
-  transition: background 0.2s;
+  transition: all 0.2s ease;
+}
+
+.notification-icon-bell:hover {
+  color: #2563eb;
+  transform: scale(1.1);
+}
+
+.avatar {
+  width: 36px;
+  height: 36px;
+  background: #3b82f6;
+  color: #fff;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
 }
 
-.message-icon-btn:hover {
-  background: rgba(59, 130, 246, 0.1);
-}
-
-.message-icon {
-  width: 20px;
-  height: 20px;
-  filter: hue-rotate(220deg) saturate(2);
-}
-
-.company-info {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.avatar:hover {
+  background: #2563eb;
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
 }
 
 .company-name {
@@ -1301,7 +1380,173 @@ function getInitials(company: string): string {
   right: 12px;
   top: 50%;
   transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
   color: #6b7280;
+}
+
+.search-icon-svg {
+  width: 20px;
+  height: 20px;
+}
+
+.location-icon-svg {
+  width: 16px;
+  height: 16px;
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.badge-icon-svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 3;
+}
+
+.match-icon-svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 3;
+}
+
+.share-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.status-icon-svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 3;
+}
+
+.upload-icon-svg {
+  width: 20px;
+  height: 20px;
+  color: #3b82f6;
+}
+
+.progress-icon-svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 3;
+}
+
+.success-icon-svg {
+  width: 32px;
+  height: 32px;
+}
+
+.doc-icon-svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 3;
+}
+
+.step-icon-svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 3;
+}
+
+.status-icon-small-svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 3;
+}
+
+.bullet-icon-svg {
+  width: 16px;
+  height: 16px;
+  color: #3b82f6;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.upload-icon-large-svg {
+  width: 48px;
+  height: 48px;
+  color: #3b82f6;
+  margin: 0 auto 8px;
+}
+
+.note-icon-svg {
+  width: 14px;
+  height: 14px;
+  color: #3b82f6;
+}
+
+.checklist-icon-svg {
+  width: 20px;
+  height: 20px;
+  color: #3b82f6;
+}
+
+.doc-icon-check {
+  width: 32px;
+  height: 32px;
+  background: #dcfce7;
+  color: #16a34a;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.doc-check-svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 3;
+}
+
+.step-icon-check {
+  width: 16px;
+  height: 16px;
+  background: #dcfce7;
+  color: #16a34a;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.step-check-svg {
+  width: 10px;
+  height: 10px;
+  stroke-width: 3;
+}
+
+.status-icon-small-check {
+  width: 16px;
+  height: 16px;
+  background: #16a34a;
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.status-check-small-svg {
+  width: 10px;
+  height: 10px;
+  stroke-width: 3;
+}
+
+.help-icon-svg {
+  width: 18px;
+  height: 18px;
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.progress-icon-doc-svg {
+  width: 16px;
+  height: 16px;
+  color: #3b82f6;
 }
 
 .active-filters {
@@ -3029,3 +3274,5 @@ function getInitials(company: string): string {
   }
 }
 </style>
+
+

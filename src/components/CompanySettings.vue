@@ -58,16 +58,11 @@ function toggleNotifications() {
   showNotifications.value = !showNotifications.value
 }
 
-const organizationName = computed(() => {
-  const profile = authStore.user?.profile as Record<string, unknown> | undefined
-  return (profile?.schoolName as string) || authStore.user?.displayName || 'Account'
-})
-
 const loading = ref(true)
 const saving = ref(false)
 
-// Form data - Initialize with empty values
-const personalInfo = ref({
+// Form data
+const companyInfo = ref({
   name: '',
   email: '',
   phoneNumber: ''
@@ -80,19 +75,18 @@ const security = ref({
   loginAlerts: true
 })
 
-const profilePicture = ref('/icons/profiles/alex-doe.jpg')
+const profilePicture = ref('/icons/profiles/john-smith.jpg')
 
 // Load user data on mount
 onMounted(() => {
   if (authStore.user) {
     const profile = authStore.user.profile as Record<string, unknown> | undefined
-    personalInfo.value = {
+    companyInfo.value = {
       name: authStore.user.displayName || '',
       email: authStore.user.email || '',
-      phoneNumber: (profile?.contactNumber as string) || (profile?.companyContactNumber as string) || (profile?.schoolContactNumber as string) || ''
+      phoneNumber: (profile?.companyContactNumber as string) || ''
     }
     
-    // Load security settings from profile if available
     if (profile?.twoFactorAuth !== undefined) {
       security.value.twoFactorAuth = profile.twoFactorAuth as boolean
     }
@@ -103,7 +97,6 @@ onMounted(() => {
   loading.value = false
 })
 
-// Functions
 function updateProfilePicture() {
   Swal.fire({
     icon: 'info',
@@ -125,22 +118,11 @@ async function saveChanges() {
     return
   }
 
-  // Validate inputs
-  if (!personalInfo.value.name.trim()) {
+  if (!companyInfo.value.name.trim()) {
     await Swal.fire({
       icon: 'error',
       title: 'Validation Error',
-      text: 'Name is required.',
-      confirmButtonColor: '#3b82f6'
-    })
-    return
-  }
-
-  if (!personalInfo.value.email.trim()) {
-    await Swal.fire({
-      icon: 'error',
-      title: 'Validation Error',
-      text: 'Email is required.',
+      text: 'Company name is required.',
       confirmButtonColor: '#3b82f6'
     })
     return
@@ -150,13 +132,11 @@ async function saveChanges() {
   
   try {
     const userRef = doc(db, 'users', authStore.user.uid)
-    const profile = authStore.user.profile as Record<string, unknown>
     
-    // Update Firestore with new profile data
     await updateDoc(userRef, {
-      displayName: personalInfo.value.name,
-      email: personalInfo.value.email,
-      'profile.contactNumber': personalInfo.value.phoneNumber,
+      displayName: companyInfo.value.name,
+      email: companyInfo.value.email,
+      'profile.companyContactNumber': companyInfo.value.phoneNumber,
       'profile.twoFactorAuth': security.value.twoFactorAuth,
       'profile.loginAlerts': security.value.loginAlerts,
       updatedAt: new Date()
@@ -185,7 +165,7 @@ async function saveChanges() {
 
 function handleImageError(event: Event) {
   const img = event.target as HTMLImageElement
-  const name = personalInfo.value.name || 'User'
+  const name = companyInfo.value.name || 'Company'
   const initials = name.split(' ').map(n => n[0]).join('').toUpperCase()
   
   const colors = ['#2563eb', '#7c3aed', '#dc2626', '#059669', '#d97706', '#0891b2']
@@ -215,7 +195,36 @@ function handleImageError(event: Event) {
       </div>
       <div class="header-right">
         <div class="notification-wrapper">
-          <BellIcon class="notification-bell" />
+          <BellIcon class="notification-bell" @click="toggleNotifications" />
+          <span v-if="notifications.filter(n => n.unread).length > 0" class="notification-badge">
+            {{ notifications.filter(n => n.unread).length }}
+          </span>
+          
+          <!-- Notification Dropdown -->
+          <div v-if="showNotifications" class="notification-dropdown">
+            <div class="notification-header">
+              <h3>Notifications</h3>
+              <span class="notification-count">{{ notifications.filter(n => n.unread).length }} new</span>
+            </div>
+            <div class="notification-list">
+              <div 
+                v-for="notification in notifications" 
+                :key="notification.id" 
+                class="notification-item"
+                :class="{ 'unread': notification.unread }"
+              >
+                <div class="notification-content">
+                  <h4>{{ notification.title }}</h4>
+                  <p>{{ notification.message }}</p>
+                  <span class="notification-time">{{ notification.time }}</span>
+                </div>
+                <div v-if="notification.unread" class="unread-dot"></div>
+              </div>
+            </div>
+            <div class="notification-footer">
+              <button class="view-all-btn">View All Notifications</button>
+            </div>
+          </div>
         </div>
         <button class="user-avatar" type="button" @click="() => {}" :title="`View Profile`">
           {{ userInitials }}
@@ -235,15 +244,15 @@ function handleImageError(event: Event) {
           <div class="profile-picture-section">
             <img 
               :src="profilePicture" 
-              :alt="personalInfo.name" 
+              :alt="companyInfo.name" 
               class="profile-picture"
               @error="handleImageError"
             />
             <button @click="updateProfilePicture" class="update-picture-btn">Change Photo</button>
           </div>
           <div class="profile-info">
-            <h2 class="profile-name">{{ personalInfo.name || 'User' }}</h2>
-            <p class="profile-email">{{ personalInfo.email }}</p>
+            <h2 class="profile-name">{{ companyInfo.name || 'Company' }}</h2>
+            <p class="profile-email">{{ companyInfo.email }}</p>
           </div>
           <button class="save-changes-btn" @click="saveChanges" :disabled="saving || loading">
             {{ saving ? 'Saving...' : 'Save Changes' }}
@@ -252,40 +261,40 @@ function handleImageError(event: Event) {
 
         <!-- Settings Grid -->
         <div class="settings-grid">
-          <!-- Personal Information Card -->
+          <!-- Company Information Card -->
           <div class="settings-card">
             <div class="card-header">
-              <h3 class="card-title">Personal Information</h3>
-              <p class="card-subtitle">Update your personal details</p>
+              <h3 class="card-title">Company Information</h3>
+              <p class="card-subtitle">Update your company details</p>
             </div>
             <div class="card-body">
               <div class="form-group">
-                <label class="form-label">Full Name</label>
+                <label class="form-label">Company Name</label>
                 <input 
-                  v-model="personalInfo.name"
+                  v-model="companyInfo.name"
                   type="text" 
                   class="form-input"
-                  placeholder="Enter your full name"
+                  placeholder="Enter company name"
                 />
               </div>
 
               <div class="form-group">
                 <label class="form-label">Email Address</label>
                 <input 
-                  v-model="personalInfo.email"
+                  v-model="companyInfo.email"
                   type="email" 
                   class="form-input"
-                  placeholder="Enter your email"
+                  placeholder="Enter email"
                 />
               </div>
 
               <div class="form-group">
                 <label class="form-label">Phone Number</label>
                 <input 
-                  v-model="personalInfo.phoneNumber"
+                  v-model="companyInfo.phoneNumber"
                   type="tel" 
                   class="form-input"
-                  placeholder="Enter your phone number"
+                  placeholder="Enter phone number"
                 />
               </div>
             </div>

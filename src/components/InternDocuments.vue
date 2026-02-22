@@ -2,12 +2,86 @@
 import { computed, ref } from 'vue'
 import Swal from 'sweetalert2'
 import { useAuthStore } from '@/stores/auth'
+import { 
+  BellIcon,
+  MagnifyingGlassIcon,
+  DocumentTextIcon,
+  CheckIcon,
+  ClockIcon,
+  ExclamationTriangleIcon,
+  ClipboardDocumentListIcon,
+  EyeIcon,
+  BriefcaseIcon,
+  TrophyIcon,
+  CloudArrowUpIcon,
+  XMarkIcon
+} from '@heroicons/vue/24/outline'
 
 const authStore = useAuthStore()
+
+const userInitials = computed(() => {
+  const name = authStore.user?.displayName || authStore.user?.email || 'User'
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2)
+})
+
+// TEMPORARY DATA: Notification dropdown state - this is a UI state variable
+const showNotifications = ref(false)
+
+// TEMPORARY DATA: Static notifications for dropdown - replace with real data from backend
+const notifications = ref([
+  {
+    id: 1,
+    title: 'Application Update',
+    message: 'Your application to TechCorp has been reviewed',
+    time: '2 hours ago',
+    unread: true
+  },
+  {
+    id: 2,
+    title: 'Interview Scheduled',
+    message: 'Interview scheduled for May 20 at 2:00 PM',
+    time: '5 hours ago',
+    unread: true
+  },
+  {
+    id: 3,
+    title: 'Document Reminder',
+    message: 'Please upload your resume',
+    time: '1 day ago',
+    unread: false
+  },
+  {
+    id: 4,
+    title: 'New Internship Match',
+    message: 'You have 3 new internship matches',
+    time: '2 days ago',
+    unread: false
+  }
+])
+
+function toggleNotifications() {
+  showNotifications.value = !showNotifications.value
+}
+
 const organizationName = computed(() => {
   const profile = authStore.user?.profile as Record<string, unknown> | undefined
   return (profile?.schoolName as string) || authStore.user?.displayName || 'Account'
 })
+
+const emit = defineEmits<{
+  openMessages: []
+  navigateToProfile: []
+}>()
+
+function handleAvatarClick() {
+  emit('navigateToProfile')
+}
 
 const searchQuery = ref('')
 
@@ -320,9 +394,15 @@ function cancelUpload() {
         <h1 class="header-title">My Documents</h1>
       </div>
       <div class="header-right">
-        <button @click="$emit('openMessages')" class="message-icon-btn">
-          <img src="/icons/icon-message.png" alt="Messages" class="message-icon" />
-        </button>
+        <div class="notification-wrapper">
+          <BellIcon class="notification-icon-bell" />
+        </div>
+        <div class="avatar" @click="handleAvatarClick" title="View Profile">{{ userInitials }}</div>
+      </div>
+    </div>
+
+    <div class="documents-main">
+      <div class="controls-wrapper">
         <div class="search-container">
           <input 
             type="text" 
@@ -330,23 +410,14 @@ function cancelUpload() {
             class="search-input"
             v-model="searchQuery"
           />
-          <span class="search-icon">🔍</span>
+          <MagnifyingGlassIcon class="search-icon-svg" />
         </div>
         <button class="upload-btn" @click="uploadDocument">
-          📄 Document upload
+          <DocumentTextIcon class="upload-btn-icon" />
+          Document upload
         </button>
-        <div class="status-indicators">
-          <div class="status-item">
-            <div class="status-dot red"></div>
-          </div>
-          <div class="status-item">
-            <div class="status-dot green"></div>
-            <span class="status-text">Active</span>
-          </div>
-          <div class="ai-badge">AI</div>
-        </div>
+
       </div>
-    </div>
 
     <div class="main-layout">
       <!-- Documents Grid -->
@@ -365,9 +436,9 @@ function cancelUpload() {
                   'needs-update': doc.status === 'Needs Update'
                 }"
               >
-                <span v-if="doc.status === 'Verified'" class="status-icon">✓</span>
-                <span v-else-if="doc.status === 'Pending Review'" class="status-icon">⏳</span>
-                <span v-else class="status-icon">⚠️</span>
+                <CheckIcon v-if="doc.status === 'Verified'" class="status-icon-svg" />
+                <ClockIcon v-else-if="doc.status === 'Pending Review'" class="status-icon-svg" />
+                <ExclamationTriangleIcon v-else class="status-icon-svg" />
                 {{ doc.status }}
               </span>
             </div>
@@ -376,14 +447,20 @@ function cancelUpload() {
           <div class="doc-content">
             <h3 class="doc-title">{{ doc.name }}</h3>
             <div class="doc-meta">
-              <span class="doc-type">📄 {{ doc.type }}</span>
+              <span class="doc-type">
+                <DocumentTextIcon class="doc-meta-icon" />
+                {{ doc.type }}
+              </span>
               <span class="doc-size">{{ doc.size }}</span>
-              <span class="doc-date">⏰ {{ doc.daysAgo }}</span>
+              <span class="doc-date">
+                <ClockIcon class="doc-meta-icon" />
+                {{ doc.daysAgo }}
+              </span>
             </div>
             
             <div v-if="doc.portfolioNote" class="doc-note">
               <div class="note-header">
-                <span class="note-icon">💼</span>
+                <BriefcaseIcon class="note-icon-svg-small" />
                 <span class="note-text">{{ doc.portfolioNote }}</span>
               </div>
               <p class="note-description">{{ doc.additionalInfo }}</p>
@@ -391,11 +468,11 @@ function cancelUpload() {
             
             <div class="doc-stats">
               <div class="stat-item">
-                <span class="stat-icon">📋</span>
+                <ClipboardDocumentListIcon class="stat-icon-svg" />
                 <span class="stat-text">Used in {{ doc.usedIn }}</span>
               </div>
               <div class="stat-item">
-                <span class="stat-icon">👁️</span>
+                <EyeIcon class="stat-icon-svg" />
                 <span class="stat-text">Viewed {{ doc.viewedTimes }}</span>
               </div>
             </div>
@@ -423,7 +500,8 @@ function cancelUpload() {
           </div>
           
           <div class="health-item">
-            <span class="health-warning">⚠️ Missing References section</span>
+            <ExclamationTriangleIcon class="health-warning-icon" />
+            <span class="health-warning">Missing References section</span>
           </div>
           
           <div class="health-item">
@@ -440,7 +518,8 @@ function cancelUpload() {
           </div>
           
           <div class="health-item">
-            <span class="health-warning">⚠️ Needs Recent projects</span>
+            <ExclamationTriangleIcon class="health-warning-icon" />
+            <span class="health-warning">Needs Recent projects</span>
           </div>
         </div>
 
@@ -461,9 +540,9 @@ function cancelUpload() {
           <div class="recommendations-list">
             <div v-for="rec in recommendations" :key="rec.id" class="recommendation-item">
               <div class="rec-icon">
-                <span v-if="rec.type === 'portfolio'">💼</span>
-                <span v-else-if="rec.type === 'certification'">🏆</span>
-                <span v-else>📄</span>
+                <BriefcaseIcon v-if="rec.type === 'portfolio'" class="rec-icon-svg" />
+                <TrophyIcon v-else-if="rec.type === 'certification'" class="rec-icon-svg" />
+                <DocumentTextIcon v-else class="rec-icon-svg" />
               </div>
               <p class="rec-text">{{ rec.text }}</p>
             </div>
@@ -507,7 +586,8 @@ function cancelUpload() {
             
             <div class="modal-note">
               <p class="note-text">
-                📋 Are these documents not required? 
+                <ClipboardDocumentListIcon class="note-icon-svg" />
+                Are these documents not required? 
                 <a href="#" class="note-link">Check what documents are required</a>
               </p>
             </div>
@@ -524,7 +604,7 @@ function cancelUpload() {
               @dragover="handleDragOver"
               @click="triggerFileInput"
             >
-              <div class="upload-icon">☁️</div>
+              <CloudArrowUpIcon class="upload-icon-svg" />
               <p class="upload-text">Tap to upload file or drag file here</p>
               <p class="upload-subtext">Supported formats: PDF, DOCX (Max 10MB)</p>
               <input 
@@ -539,7 +619,7 @@ function cancelUpload() {
             <!-- Selected File Display -->
             <div v-if="selectedFile" class="selected-file">
               <div class="file-info">
-                <span class="file-icon">📄</span>
+                <DocumentTextIcon class="file-icon-svg" />
                 <div class="file-details">
                   <span class="file-name">{{ selectedFile.name }}</span>
                   <span class="file-size">{{ Math.round(selectedFile.size / 1024) }} KB</span>
@@ -582,26 +662,37 @@ function cancelUpload() {
         </div>
       </div>
     </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .documents-content {
-  padding: 24px;
+  padding: 0;
   background: #f8fafc;
   min-height: 100vh;
 }
 
+.documents-main {
+  padding: 24px;
+}
+
+.controls-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
 /* Header */
 .documents-header {
+  background: #dbeafe;
+  padding: 16px 32px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 32px;
-  background: white;
-  padding: 16px 24px;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border-bottom: 1px solid #bfdbfe;
+  margin-bottom: 0;
 }
 
 .header-left {
@@ -613,13 +704,14 @@ function cancelUpload() {
 .header-icon {
   width: 24px;
   height: 24px;
-  filter: hue-rotate(220deg) saturate(2);
+  object-fit: contain;
+  filter: brightness(0) saturate(100%) invert(27%) sepia(51%) saturate(2878%) hue-rotate(220deg) brightness(104%) contrast(97%);
 }
 
 .header-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: #1f2937;
+  font-size: 24px;
+  font-weight: 700;
+  color: #1e40af;
   margin: 0;
 }
 
@@ -629,26 +721,38 @@ function cancelUpload() {
   gap: 16px;
 }
 
-.message-icon-btn {
-  background: none;
-  border: none;
+.notification-icon-bell {
+  width: 24px;
+  height: 24px;
+  color: #6b7280;
   cursor: pointer;
-  padding: 8px;
-  border-radius: 8px;
-  transition: background 0.2s;
+  transition: all 0.2s ease;
+}
+
+.notification-icon-bell:hover {
+  color: #2563eb;
+  transform: scale(1.1);
+}
+
+.avatar {
+  width: 36px;
+  height: 36px;
+  background: #3b82f6;
+  color: #fff;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
 }
 
-.message-icon-btn:hover {
-  background: rgba(59, 130, 246, 0.1);
-}
-
-.message-icon {
-  width: 20px;
-  height: 20px;
-  filter: hue-rotate(220deg) saturate(2);
+.avatar:hover {
+  background: #2563eb;
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
 }
 
 .search-container {
@@ -668,11 +772,13 @@ function cancelUpload() {
   border-color: #3b82f6;
 }
 
-.search-icon {
+.search-icon-svg {
   position: absolute;
   right: 12px;
   top: 50%;
   transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
   color: #6b7280;
 }
 
@@ -691,8 +797,77 @@ function cancelUpload() {
   transition: background 0.2s;
 }
 
+.upload-btn-icon {
+  width: 18px;
+  height: 18px;
+}
+
 .upload-btn:hover {
   background: #2563eb;
+}
+
+.status-icon-svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 3;
+}
+
+.doc-meta-icon {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
+.stat-icon-svg {
+  width: 16px;
+  height: 16px;
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.health-warning-icon {
+  width: 16px;
+  height: 16px;
+  color: #f59e0b;
+  flex-shrink: 0;
+}
+
+.note-icon-svg {
+  width: 16px;
+  height: 16px;
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 4px;
+  color: #3b82f6;
+}
+
+.note-icon-svg-small {
+  width: 16px;
+  height: 16px;
+  color: #f59e0b;
+  flex-shrink: 0;
+}
+
+.file-icon-svg {
+  width: 24px;
+  height: 24px;
+  color: #3b82f6;
+  flex-shrink: 0;
+}
+
+.rec-icon-svg {
+  width: 20px;
+  height: 20px;
+  color: #3b82f6;
+}
+
+.upload-icon-svg {
+  width: 48px;
+  height: 48px;
+  color: #3b82f6;
+  margin: 0 auto 12px;
 }
 
 .status-indicators {
