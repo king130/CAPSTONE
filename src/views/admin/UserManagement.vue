@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import Swal from 'sweetalert2'
-import { collection, doc, onSnapshot, orderBy, query, updateDoc } from 'firebase/firestore'
+import { collection, doc, onSnapshot, orderBy, query, setDoc, updateDoc } from 'firebase/firestore'
 import { db } from '@/services/firebase'
 import { useAuthStore } from '@/stores/auth'
 
@@ -67,6 +67,54 @@ function formatDate(value: unknown) {
   return '—'
 }
 
+const ROLES = ['student', 'school', 'company', 'admin', 'guest'] as const
+
+async function updateUserRole(user: UserRow, newRole: string) {
+  if (user.uid === authStore.user?.uid && newRole !== 'admin') {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Action Blocked',
+      text: 'You cannot remove your own admin role.',
+      confirmButtonColor: '#2563eb'
+    })
+    return
+  }
+
+  const result = await Swal.fire({
+    icon: 'question',
+    title: 'Update Role?',
+    text: `Change ${user.displayName || user.email}'s role to ${newRole}?`,
+    showCancelButton: true,
+    confirmButtonText: 'Update',
+    confirmButtonColor: '#2563eb',
+    cancelButtonText: 'Cancel'
+  })
+
+  if (!result.isConfirmed) return
+
+  try {
+    await updateDoc(doc(db, 'users', user.uid), {
+      role: newRole,
+      profileSetupComplete: newRole !== 'guest' && newRole !== null,
+      updatedAt: new Date()
+    })
+    await Swal.fire({
+      icon: 'success',
+      title: 'Role Updated',
+      text: `User is now ${newRole}.`,
+      timer: 1500,
+      showConfirmButton: false
+    })
+  } catch (err) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Update Failed',
+      text: err instanceof Error ? err.message : 'Could not update role.',
+      confirmButtonColor: '#2563eb'
+    })
+  }
+}
+
 async function setUserStatus(user: UserRow, enabled: boolean) {
   if (user.uid === authStore.user?.uid) {
     await Swal.fire({
@@ -110,6 +158,55 @@ async function setUserStatus(user: UserRow, enabled: boolean) {
 
   await updateDoc(doc(db, 'users', user.uid), { isActive: enabled })
 }
+
+const syncingProfiles = ref(false)
+
+async function syncPublicProfiles() {
+  const toSync = users.value.filter((u) => u.role === 'school' || u.role === 'company')
+  if (toSync.length === 0) {
+    await Swal.fire({
+      icon: 'info',
+      title: 'Nothing to Sync',
+      text: 'No school or company accounts found.',
+      confirmButtonColor: '#2563eb',
+    })
+    return
+  }
+  syncingProfiles.value = true
+  try {
+    for (const u of toSync) {
+      const p = (u.profile || {}) as Record<string, unknown>
+      const orgName =
+        (u.role === 'school' ? p.institutionName : p.companyName) as string | undefined
+      await setDoc(
+        doc(db, 'profiles_public', u.uid),
+        {
+          uid: u.uid,
+          displayName: u.displayName || 'User',
+          role: u.role,
+          orgName: orgName || u.displayName || u.email?.split('@')[0] || null,
+          email: u.email || null,
+        },
+        { merge: true }
+      )
+    }
+    await Swal.fire({
+      icon: 'success',
+      title: 'Profiles Synced',
+      text: `Synced ${toSync.length} school/company profile(s) to search. They will now appear when adding contracts or starting chats.`,
+      confirmButtonColor: '#2563eb',
+    })
+  } catch (err) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Sync Failed',
+      text: err instanceof Error ? err.message : 'Could not sync profiles.',
+      confirmButtonColor: '#2563eb',
+    })
+  } finally {
+    syncingProfiles.value = false
+  }
+}
 </script>
 
 <template>
@@ -119,7 +216,16 @@ async function setUserStatus(user: UserRow, enabled: boolean) {
         <h1>User Management</h1>
         <p class="subtitle">Manage access, roles, and account status.</p>
       </div>
-      <div class="filters">
+      <div class="header-right">
+        <button
+          class="btn-sync"
+          type="button"
+          :disabled="syncingProfiles"
+          @click="syncPublicProfiles"
+        >
+          {{ syncingProfiles ? 'Syncing...' : 'Sync profiles to search' }}
+        </button>
+        <div class="filters">
         <select v-model="filterRole">
           <option value="all">All Roles</option>
           <option value="student">Student</option>
@@ -137,6 +243,7 @@ async function setUserStatus(user: UserRow, enabled: boolean) {
           <option value="active">Active</option>
           <option value="disabled">Disabled</option>
         </select>
+        </div>
       </div>
     </div>
 
@@ -157,7 +264,16 @@ async function setUserStatus(user: UserRow, enabled: boolean) {
           <tr v-for="user in filteredUsers" :key="user.uid">
             <td>{{ user.displayName || '—' }}</td>
             <td>{{ user.email || '—' }}</td>
-            <td class="role">{{ user.role || '—' }}</td>
+            <td class="role">
+              <select
+                :value="user.role || ''"
+                @change="(e) => updateUserRole(user, (e.target as HTMLSelectElement).value)"
+                class="role-select"
+              >
+                <option value="">—</option>
+                <option v-for="r in ROLES" :key="r" :value="r">{{ r }}</option>
+              </select>
+            </td>
             <td>{{ user.isTemporary ? 'Yes' : 'No' }}</td>
             <td>
               <span :class="['status', user.isActive === false ? 'disabled' : 'active']">
@@ -226,6 +342,31 @@ h1 {
   font-size: 13px;
 }
 
+.header-right {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.btn-sync {
+  padding: 8px 16px;
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.btn-sync:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+.btn-sync:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .filters {
   display: flex;
   gap: 8px;
@@ -267,6 +408,20 @@ th {
 
 .role {
   text-transform: capitalize;
+}
+
+.role-select {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  min-width: 100px;
+}
+
+.role-select:hover {
+  border-color: #2563eb;
 }
 
 .actions {

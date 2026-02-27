@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
+const router = useRouter()
 const authStore = useAuthStore()
 
 // Define props for active menu item
@@ -16,7 +17,17 @@ const emit = defineEmits<{
 
 async function handleMenuClick(itemId: string) {
   if (itemId === 'logout') {
-    await authStore.logout()
+    try {
+      await authStore.logout()
+    } catch (e) {
+      console.warn('Logout error:', e)
+    }
+    router.push('/')
+    return
+  }
+  if (itemId === 'profile') {
+    router.push('/profile')
+    return
   }
   emit('menuClick', itemId)
 }
@@ -73,6 +84,14 @@ async function handleMenuClick(itemId: string) {
     </nav>
 
     <div class="sidebar-bottom">
+      <div
+        class="nav-item"
+        :class="{ active: activeItem === 'profile' }"
+        @click="handleMenuClick('profile')"
+      >
+        <img src="/icons/icon-profile.png" alt="Profile" class="nav-icon-img" />
+        <span>Profile</span>
+      </div>
       <div
         class="nav-item"
         @click="handleMenuClick('logout')"

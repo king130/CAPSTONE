@@ -1,50 +1,27 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import Navbar from '@/components/Navbar.vue'
+import { subscribeActiveInternships, type InternshipRecord } from '@/services/internships'
 
-const internships = ref([
-  {
-    id: 1,
-    title: 'Software Engineer Intern',
-    company: 'Innovate Corp.',
-    location: 'New York, NY',
-    match: 92,
-    description: 'Join Our dynamic team to develop innovative software solutions. You\'ll work on cutting-edge projects and contribute the projects.',
-    skills: ['Python', 'AWS', 'Machine Learning', 'Django'],
-    logo: 'IC'
-  },
-  {
-    id: 2,
-    title: 'Data Analyst Intern',
-    company: 'DataTech Solutions',
-    location: 'San Francisco, CA',
-    match: 88,
-    description: 'Analyze large datasets and create insights for business decisions. Work with cross-functional teams on data-driven projects.',
-    skills: ['Python', 'SQL', 'Machine Learning', 'Excel'],
-    logo: 'DT'
-  },
-  {
-    id: 3,
-    title: 'UI/UX Designer Intern',
-    company: 'Design Studio Pro',
-    location: 'Los Angeles, CA',
-    match: 85,
-    description: 'Create beautiful and intuitive user interfaces. Collaborate with product teams to design user-centered experiences.',
-    skills: ['Figma', 'Prototyping', 'Design System'],
-    logo: 'DS'
-  },
-  {
-    id: 4,
-    title: 'Business Development Intern',
-    company: 'Growth Ventures',
-    location: 'Chicago, IL',
-    match: 90,
-    description: 'Support business growth initiatives and client relationships. Assist in market research and strategic planning.',
-    skills: ['Sales', 'Marketing', 'CRM', 'Analytics'],
-    logo: 'GV'
-  }
-])
+const internships = ref<Array<InternshipRecord & { logo?: string; match?: number; company?: string; skills?: string[] }>>([])
+let unsub: (() => void) | null = null
+
+onMounted(() => {
+  unsub = subscribeActiveInternships((items) => {
+    internships.value = items.map((i) => ({
+      ...i,
+      logo: (i.companyName || 'CO').slice(0, 2).toUpperCase(),
+      company: i.companyName,
+      match: 85,
+      skills: i.requirements || [],
+    }))
+  })
+})
+
+onUnmounted(() => {
+  if (unsub) unsub()
+})
 </script>
 
 <template>
@@ -126,7 +103,7 @@ const internships = ref([
     <footer class="footer">
       <div class="footer-content">
         <div class="footer-logo">OJT Path</div>
-        <div class="footer-copyright">© 2024 OJT PATH Inc. All rights reserved.</div>
+        <div class="footer-copyright">© 2026 OJT PATH Inc. All rights reserved.</div>
         <div class="footer-links">
           <a href="#">Privacy</a>
           <a href="#">Term of Service</a>

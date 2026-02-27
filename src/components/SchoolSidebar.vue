@@ -17,23 +17,7 @@
         <span>Dashboard</span>
       </div>
 
-      <div
-        class="nav-item"
-        :class="{ active: activeItem === 'internship-post' }"
-        @click="setActiveItem('internship-post')"
-      >
-        <img src="/icons/icon-post_new_internship.png" alt="Internship post" class="nav-icon-img" />
-        <span>Internship post</span>
-      </div>
-
-      <div
-        class="nav-item"
-        :class="{ active: activeItem === 'applications' }"
-        @click="setActiveItem('applications')"
-      >
-        <img src="/icons/icon-application.png" alt="Internship Applications" class="nav-icon-img" />
-        <span>Internship Applications</span>
-      </div>
+      
 
       <div
         class="nav-item"
@@ -42,6 +26,14 @@
       >
         <img src="/icons/company-icon.png" alt="Companies" class="nav-icon-img" />
         <span>Companies</span>
+      </div>
+      <div
+        class="nav-item"
+        :class="{ active: activeItem === 'contracts' }"
+        @click="setActiveItem('contracts')"
+      >
+        <img src="/icons/icon-docs.png" alt="Contracts" class="nav-icon-img" />
+        <span>Contracts</span>
       </div>
 
       <div
@@ -73,11 +65,29 @@
 
       <div
         class="nav-item"
+        :class="{ active: activeItem === 'student-emails' }"
+        @click="setActiveItem('student-emails')"
+      >
+        <img src="/icons/icon-student.png" alt="Student Emails" class="nav-icon-img" />
+        <span>Student Emails</span>
+      </div>
+
+      <div
+        class="nav-item"
         :class="{ active: activeItem === 'student-interns' }"
         @click="setActiveItem('student-interns')"
       >
         <img src="/icons/icon-student.png" alt="Student Interns" class="nav-icon-img" />
         <span>Student Interns</span>
+      </div>
+
+      <div
+        class="nav-item"
+        :class="{ active: activeItem === 'profile' }"
+        @click="setActiveItem('profile')"
+      >
+        <img src="/icons/icon-profile.png" alt="Profile" class="nav-icon-img" />
+        <span>Profile</span>
       </div>
     </nav>
 
@@ -129,10 +139,10 @@ function setActiveItem(item: string) {
 async function logout() {
   try {
     await authStore.logout()
-    await router.push('/login')
   } catch (error) {
-    console.error('Logout failed:', error)
+    console.warn('Logout error:', error)
   }
+  router.push('/')
 }
 </script>
 

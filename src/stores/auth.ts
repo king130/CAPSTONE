@@ -10,6 +10,7 @@ import {
   type UserProfile,
   type RegisterPayload,
 } from '@/services/auth'
+import { ensurePublicProfile } from '@/services/profilesPublic'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<UserProfile | null>(null)
@@ -28,32 +29,62 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function init() {
     if (initializing.value) return
+    
+    console.log('🔐 Auth store: Starting initialization...')
     initializing.value = true
-    subscribeToAuthState(async (firebaseUser) => {
-      clearProfileSubscription()
-      if (!firebaseUser) {
-        user.value = null
-        initializing.value = false
-        return
-      }
-      unsubscribeProfile.value = subscribeToUserProfile(firebaseUser.uid, async (profile) => {
-        if (!profile) {
+    
+    return new Promise<void>((resolve) => {
+      subscribeToAuthState(async (firebaseUser) => {
+        console.log('🔐 Auth state changed:', firebaseUser ? firebaseUser.email : 'null')
+        clearProfileSubscription()
+        
+        if (!firebaseUser) {
           user.value = null
+          initializing.value = false
+          console.log('✅ Auth initialized (no user)')
+          resolve()
+          return
+        }
+        
+        unsubscribeProfile.value = subscribeToUserProfile(firebaseUser.uid, async (profile) => {
+          console.log('👤 User profile fetched:', profile ? profile.email : 'null', '| Role:', profile?.role || 'null')
+          
+          if (!profile) {
+            user.value = null
+            blockedReason.value = null
+            initializing.value = false
+            console.log('✅ Auth initialized (no profile)')
+            resolve()
+            return
+          }
+          
+          if (profile.isActive === false) {
+            blockedReason.value = 'Account Disabled'
+            user.value = null
+            clearProfileSubscription()
+            await logoutUser()
+            initializing.value = false
+            console.log('❌ Auth initialized (account disabled)')
+            resolve()
+            return
+          }
+          
+          user.value = profile
           blockedReason.value = null
           initializing.value = false
-          return
-        }
-        if (profile.isActive === false) {
-          blockedReason.value = 'Account Disabled'
-          user.value = null
-          clearProfileSubscription()
-          await logoutUser()
-          initializing.value = false
-          return
-        }
-        user.value = profile
-        blockedReason.value = null
-        initializing.value = false
+          if (profile.role === 'school' || profile.role === 'company') {
+            const p = profile.profile as Record<string, unknown> | undefined
+            const orgName = (profile.role === 'school' ? p?.institutionName : p?.companyName) as string | undefined
+            ensurePublicProfile(profile.uid, {
+              displayName: profile.displayName || 'User',
+              role: profile.role,
+              orgName: orgName || profile.displayName || profile.email?.split('@')[0],
+              email: profile.email,
+            }).catch(() => {})
+          }
+          console.log('✅ Auth initialized (user:', profile.email, 'role:', profile.role || 'guest', ')')
+          resolve()
+        })
       })
     })
   }
@@ -93,6 +124,16 @@ export const useAuthStore = defineStore('auth', () => {
         throw new Error('Account Disabled')
       }
       user.value = profile
+      if (profile.role === 'school' || profile.role === 'company') {
+        const p = profile.profile as Record<string, unknown> | undefined
+        const orgName = (profile.role === 'school' ? p?.institutionName : p?.companyName) as string | undefined
+        ensurePublicProfile(profile.uid, {
+          displayName: profile.displayName || 'User',
+          role: profile.role,
+          orgName: orgName || profile.displayName || profile.email?.split('@')[0],
+          email: profile.email,
+        }).catch(() => {})
+      }
       return profile
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'Login failed'
@@ -114,6 +155,7 @@ export const useAuthStore = defineStore('auth', () => {
     loading,
     error,
     blockedReason,
+    initializing,
     init,
     register,
     login,

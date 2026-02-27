@@ -18,15 +18,16 @@ import {
   where,
 } from 'firebase/firestore'
 import { auth, db } from './firebase'
+import { ensurePublicProfile } from './profilesPublic'
 
-export type UserRole = 'student' | 'company' | 'school' | 'admin'
+export type UserRole = 'student' | 'company' | 'school' | 'admin' | 'guest' | null
 
 export interface RegisterPayload {
   fullName: string
   email: string
   password: string
-  role: UserRole
-  profile: Record<string, unknown>
+  role?: UserRole
+  profile?: Record<string, unknown>
   subscriptionPlan?: string
   billingCycle?: string
   schoolSubscriptionCode?: string
@@ -39,7 +40,8 @@ export interface UserProfile {
   role: UserRole
   isTemporary?: boolean
   isActive?: boolean
-  profile: Record<string, unknown>
+  profileSetupComplete?: boolean
+  profile?: Record<string, unknown>
   subscription?: {
     plan: string
     billingCycle: string
@@ -71,12 +73,13 @@ export async function validateSchoolSubscription(code: string) {
     where('subscription.status', '==', 'active'),
   )
   const snapshot = await getDocs(q)
-  return snapshot.docs.length > 0 ? snapshot.docs[0].id : null
+  return snapshot.docs.length > 0 ? snapshot.docs[0]!.id : null
 }
 
 export async function registerUser(payload: RegisterPayload) {
-  const { email, password, fullName, role, profile, subscriptionPlan, billingCycle, schoolSubscriptionCode } = payload
+  const { email, password, fullName, role = null, profile = {}, subscriptionPlan, billingCycle, schoolSubscriptionCode } = payload
 
+  // Validate school subscription code if provided (for role selection later)
   if (role === 'student' && schoolSubscriptionCode) {
     const schoolId = await validateSchoolSubscription(schoolSubscriptionCode)
     if (!schoolId) {
@@ -84,21 +87,25 @@ export async function registerUser(payload: RegisterPayload) {
     }
   }
 
+  // Create Firebase Auth user
   const credential = await createUserWithEmailAndPassword(auth, email, password)
   await updateProfile(credential.user, { displayName: fullName })
 
+  // Create Firestore profile - NO ROLE by default (guest)
   const userDoc: UserProfile = {
     uid: credential.user.uid,
     email,
     displayName: fullName,
-    role,
+    role: role || null, // Guest if no role provided
     isTemporary: false,
     isActive: true,
-    profile,
+    profileSetupComplete: role === 'student' || role === 'school' || role === 'company', // Complete when role is set
+    profile: profile || {},
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   }
 
+  // Only add subscription for school/company accounts
   if (role === 'school' || role === 'company') {
     userDoc.subscription = {
       plan: subscriptionPlan || 'free',
@@ -106,9 +113,22 @@ export async function registerUser(payload: RegisterPayload) {
       status: role === 'school' ? 'pending' : 'pending',
       subscriptionCode: role === 'school' ? generateSubscriptionCode(fullName) : undefined,
     }
+    userDoc.profileSetupComplete = true // Has role, so setup is complete
   }
 
   await setDoc(doc(db, 'users', credential.user.uid), userDoc)
+
+  if (role === 'school' || role === 'company') {
+    const p = profile as Record<string, unknown>
+    const orgName = (role === 'school' ? p?.institutionName : p?.companyName) as string | undefined
+    await ensurePublicProfile(credential.user.uid, {
+      displayName: fullName,
+      role,
+      orgName: orgName || fullName,
+      email,
+    }).catch(() => {})
+  }
+
   return userDoc
 }
 

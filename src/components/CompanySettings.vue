@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { doc, updateDoc } from 'firebase/firestore'
 import { db } from '@/services/firebase'
+import { ensurePublicProfile } from '@/services/profilesPublic'
 import Swal from 'sweetalert2'
 import { BellIcon } from '@heroicons/vue/24/outline'
 
@@ -135,12 +136,20 @@ async function saveChanges() {
     
     await updateDoc(userRef, {
       displayName: companyInfo.value.name,
-      email: companyInfo.value.email,
+      'profile.companyName': companyInfo.value.name,
       'profile.companyContactNumber': companyInfo.value.phoneNumber,
+      'profile.companyEmail': companyInfo.value.email,
       'profile.twoFactorAuth': security.value.twoFactorAuth,
       'profile.loginAlerts': security.value.loginAlerts,
       updatedAt: new Date()
     })
+
+    await ensurePublicProfile(authStore.user.uid, {
+      displayName: companyInfo.value.name,
+      role: 'company',
+      orgName: companyInfo.value.name,
+      email: authStore.user?.email,
+    }).catch(() => {})
 
     await Swal.fire({
       icon: 'success',

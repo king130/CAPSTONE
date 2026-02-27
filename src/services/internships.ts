@@ -14,12 +14,18 @@ import { db } from './firebase'
 export interface InternshipRecord {
   id: string
   title: string
+  description?: string
+  companyId: string
   companyName: string
   location: string
   type: string
   duration: string
   slotsAvailable: number
   requirements?: string[]
+  allowance?: string
+  status: 'active' | 'draft' | 'closed'
+  createdAt?: unknown
+  updatedAt?: unknown
 }
 
 export function subscribeInternships(callback: (items: InternshipRecord[]) => void) {
@@ -34,16 +40,34 @@ export function subscribeInternships(callback: (items: InternshipRecord[]) => vo
   })
 }
 
+export function subscribeActiveInternships(callback: (items: InternshipRecord[]) => void) {
+  return subscribeInternships((items) => {
+    const active = items.filter((i) => i.status === 'active')
+    callback(active)
+  })
+}
+
+export function subscribeCompanyInternships(companyId: string, callback: (items: InternshipRecord[]) => void) {
+  return subscribeInternships((items) => {
+    const company = items.filter((i) => i.companyId === companyId)
+    callback(company)
+  })
+}
+
 export async function getInternship(internshipId: string) {
   const snapshot = await getDoc(doc(db, 'internships', internshipId))
   return snapshot.exists() ? (snapshot.data() as InternshipRecord) : null
 }
 
-export async function createInternship(payload: Omit<InternshipRecord, 'id'>) {
+export type CreateInternshipPayload = Omit<InternshipRecord, 'id' | 'createdAt' | 'updatedAt'>
+
+export async function createInternship(payload: CreateInternshipPayload) {
   const internshipsRef = collection(db, 'internships')
   const docRef = await addDoc(internshipsRef, {
     ...payload,
+    status: payload.status || 'active',
     createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   })
   return docRef.id
 }

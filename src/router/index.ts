@@ -1,62 +1,147 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { AUTH_DISABLED } from '@/config/auth'
 import Landing from '@/views/Landing.vue'
 import Login from '@/views/Login.vue'
-import Register from '@/views/Register.vue'
+import RegisterSimple from '@/views/RegisterSimple.vue'
+import RoleSelection from '@/views/RoleSelection.vue'
+import Profile from '@/views/Profile.vue'
 import FindInternships from '@/views/FindInternships.vue'
 import Dashboard from '@/views/company/Company.vue'
 import School from '@/views/school/School.vue'
 import Intern from '@/views/intern/Intern.vue'
 import AccountDisabled from '@/views/AccountDisabled.vue'
-import AdminLogin from '@/views/admin/AdminLogin.vue'
 import AdminDashboard from '@/views/admin/AdminDashboard.vue'
 import UserManagement from '@/views/admin/UserManagement.vue'
 import TemporaryAccounts from '@/views/admin/TemporaryAccounts.vue'
 import SystemOverview from '@/views/admin/SystemOverview.vue'
 import { useAuthStore } from '@/stores/auth'
+import type { UserRole } from '@/services/auth'
+
+/**
+ * Get dashboard route based on user role
+ */
+function getRoleDashboard(role: UserRole): string {
+  switch (role) {
+    case 'admin':
+      return '/admin/overview'
+    case 'company':
+      return '/dashboard'
+    case 'school':
+      return '/school'
+    case 'student':
+      return '/intern'
+    case 'guest':
+    case null:
+      return '/find-internships'
+    default:
+      return '/find-internships'
+  }
+}
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
+    // Public routes
     { path: '/', name: 'landing', component: Landing },
     { path: '/login', name: 'login', component: Login },
-    { path: '/register', name: 'register', component: Register },
+    { path: '/register', name: 'register', component: RegisterSimple },
     { path: '/find-internships', name: 'find-internships', component: FindInternships },
-    { path: '/dashboard', name: 'dashboard', component: Dashboard },
-    { path: '/school', name: 'school', component: School },
-    { path: '/intern', name: 'intern', component: Intern },
     { path: '/account-disabled', name: 'account-disabled', component: AccountDisabled },
-    { path: '/admin/login', name: 'admin-login', component: AdminLogin },
+    
+    // Guest routes (logged in but no role)
+    { path: '/role-selection', name: 'role-selection', component: RoleSelection, meta: { requiresAuth: true, allowGuest: true } },
+    { path: '/profile', name: 'profile', component: Profile, meta: { requiresAuth: true, allowGuest: true } },
+    
+    // Role-specific dashboards
+    { path: '/dashboard', name: 'dashboard', component: Dashboard, meta: { requiresAuth: true, requiresRole: 'company' } },
+    { path: '/school', name: 'school', component: School, meta: { requiresAuth: true, requiresRole: 'school' } },
+    { path: '/intern', name: 'intern', component: Intern, meta: { requiresAuth: true, requiresRole: 'student' } },
+    
+    // Admin routes (use main /login - admin redirects to /admin/overview)
+    { path: '/admin/login', redirect: '/login' },
     {
       path: '/admin',
       component: AdminDashboard,
-      meta: { requiresAdmin: true },
+      meta: { requiresAuth: true, requiresRole: 'admin' },
       children: [
         { path: '', redirect: '/admin/overview' },
-        { path: 'overview', name: 'admin-overview', component: SystemOverview, meta: { requiresAdmin: true } },
-        { path: 'users', name: 'admin-users', component: UserManagement, meta: { requiresAdmin: true } },
-        { path: 'temporary', name: 'admin-temporary', component: TemporaryAccounts, meta: { requiresAdmin: true } },
+        { path: 'overview', name: 'admin-overview', component: SystemOverview, meta: { requiresAuth: true, requiresRole: 'admin' } },
+        { path: 'users', name: 'admin-users', component: UserManagement, meta: { requiresAuth: true, requiresRole: 'admin' } },
+        { path: 'temporary', name: 'admin-temporary', component: TemporaryAccounts, meta: { requiresAuth: true, requiresRole: 'admin' } },
       ],
     },
   ],
 })
 
 router.beforeEach((to) => {
-  const authStore = useAuthStore()
+  // Auth disabled: allow all routes without checks
+  if (AUTH_DISABLED) {
+    return true
+  }
 
+  const authStore = useAuthStore()
+  
+  // CRITICAL: Block routing if auth is still initializing
+  if (authStore.initializing) {
+    console.warn('⚠️ Blocking navigation - auth still initializing')
+    return false
+  }
+  
+  const isAuthenticated = !!authStore.user
+  const userRole = authStore.user?.role
+  console.log('🛡️ Router guard:', to.path, '| User:', authStore.user?.email || 'null', '| Role:', userRole || 'null')
+
+  // Check for blocked/disabled accounts
   if (authStore.blockedReason && to.name !== 'account-disabled') {
     return { name: 'account-disabled' }
   }
 
-  if (to.meta.requiresAdmin && authStore.user?.role !== 'admin') {
-    return { name: 'admin-login' }
+  // AUTHENTICATED USERS
+  if (isAuthenticated) {
+    // Redirect authenticated users away from login/register
+    if (to.name === 'login' || to.name === 'register') {
+      if (!userRole || userRole === 'guest' || userRole === null) {
+        return { path: '/find-internships' }
+      }
+      return { path: getRoleDashboard(userRole) }
+    }
+
+    // Redirect from landing page
+    if (to.name === 'landing') {
+      if (!userRole || userRole === 'guest' || userRole === null) {
+        return { path: '/find-internships' }
+      }
+      return { path: getRoleDashboard(userRole) }
+    }
+
+    // Check if route requires specific role
+    if (to.meta.requiresRole) {
+      const requiredRole = to.meta.requiresRole as string
+      
+      // If user has no role, redirect to role selection
+      if (!userRole || userRole === 'guest' || userRole === null) {
+        return { path: '/find-internships' }
+      }
+      
+      // If user has wrong role, redirect to their dashboard
+      if (userRole !== requiredRole) {
+        console.log(`🚫 Access denied: ${requiredRole} required, user is ${userRole}`)
+        return { path: getRoleDashboard(userRole) }
+      }
+    }
+
+    // Allow access to routes that permit guests
+    if (to.meta.allowGuest) {
+      return true
+    }
   }
 
-  if (to.meta.requiresCompany && authStore.user?.role !== 'company' && authStore.user?.role !== 'school') {
-    return { name: 'login' }
-  }
-
-  if (to.meta.requiresStudent && authStore.user?.role !== 'student') {
-    return { name: 'login' }
+  // UNAUTHENTICATED USERS
+  if (!isAuthenticated) {
+    // Redirect to login if route requires auth
+    if (to.meta.requiresAuth) {
+      return { name: 'login' }
+    }
   }
 
   return true

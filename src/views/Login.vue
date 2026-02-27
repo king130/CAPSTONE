@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import Swal from 'sweetalert2'
 import { RouterLink, useRouter } from 'vue-router'
 import { ref } from 'vue'
@@ -10,44 +10,55 @@ const email = ref('')
 const password = ref('')
 const showPassword = ref(false)
 
-async function handleAuthSuccess(profile: { role?: string } | null) {
-  if (!profile?.role) {
-    throw new Error('Account setup incomplete. Your user profile is missing. Please contact support or re-register.')
-  }
-  const message = profile.role === 'company' 
-    ? 'Welcome to the Company Dashboard.' 
-    : profile.role === 'school' 
-    ? 'Welcome to the School Dashboard.'
-    : 'Welcome back!'
-
-  await Swal.fire({
-    icon: 'success',
-    iconColor: '#16a34a',
-    title: 'Login Successful!',
-    text: message,
-    confirmButtonText: 'Continue',
-    confirmButtonColor: '#2563eb',
-    customClass: {
-      popup: 'capstone-swal-popup',
-      title: 'capstone-swal-title',
-      htmlContainer: 'capstone-swal-text',
-      confirmButton: 'capstone-swal-confirm',
-    },
-  })
-
-  if (profile.role === 'company') {
-    router.push('/dashboard')
-  } else if (profile.role === 'school') {
-    router.push('/school')
-  } else {
-    router.push('/intern')
+// Helper function to get role dashboard
+function getRoleDashboard(role: string | null): string {
+  switch (role) {
+    case 'admin':
+      return '/admin/overview'
+    case 'company':
+      return '/dashboard'
+    case 'school':
+      return '/school'
+    case 'student':
+      return '/intern'
+    case 'guest':
+    case null:
+      return '/find-internships'
+    default:
+      return '/find-internships'
   }
 }
 
 async function onLogin() {
   try {
     const profile = await authStore.login(email.value.trim(), password.value)
-    await handleAuthSuccess(profile)
+    
+    // Check if user has a role
+    if (!profile?.role || profile.role === 'guest' || profile.role === null) {
+      router.push('/find-internships')
+      return
+    }
+
+    // Show success message
+    const roleMessages: Record<string, string> = {
+      admin: 'Welcome back, Administrator!',
+      company: 'Welcome to the Company Dashboard',
+      school: 'Welcome to the School Dashboard',
+      student: 'Welcome back!'
+    }
+
+    await Swal.fire({
+      icon: 'success',
+      iconColor: '#16a34a',
+      title: 'Login Successful!',
+      text: roleMessages[profile.role] || 'Welcome back!',
+      timer: 1500,
+      showConfirmButton: false
+    })
+
+    // Router will handle redirect based on role
+    router.push(getRoleDashboard(profile.role))
+    
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid credentials.'
     await Swal.fire({
@@ -56,61 +67,8 @@ async function onLogin() {
       title: 'Login Failed!',
       text: message,
       confirmButtonText: 'Try Again',
-      confirmButtonColor: '#2563eb',
-      customClass: {
-        popup: 'capstone-swal-popup',
-        title: 'capstone-swal-title',
-        htmlContainer: 'capstone-swal-text',
-        confirmButton: 'capstone-swal-confirm',
-      },
+      confirmButtonColor: '#2563eb'
     })
-  }
-}
-
-async function useDemoAccount() {
-  const demoEmail = 'student@demo.com'
-  const demoPassword = 'DemoPass123!'
-  email.value = demoEmail
-  password.value = demoPassword
-
-  try {
-    const profile = await authStore.login(demoEmail, demoPassword)
-    await handleAuthSuccess(profile)
-  } catch (error) {
-    try {
-      const profile = await authStore.register({
-        fullName: 'Alex Student',
-        email: demoEmail,
-        password: demoPassword,
-        role: 'student',
-        profile: {
-          studentId: '2026-0001',
-          schoolName: 'Cavite State University',
-          course: 'Computer Science',
-          yearLevel: '4th Year',
-          preferredField: 'Software Development',
-          contactNumber: '09171234567',
-        },
-      })
-      await handleAuthSuccess(profile)
-    } catch (registerError) {
-      const message =
-        registerError instanceof Error ? registerError.message : 'Unable to create demo account.'
-      await Swal.fire({
-        icon: 'error',
-        iconColor: '#dc2626',
-        title: 'Demo Login Failed',
-        text: message,
-        confirmButtonText: 'Try Again',
-        confirmButtonColor: '#2563eb',
-        customClass: {
-          popup: 'capstone-swal-popup',
-          title: 'capstone-swal-title',
-          htmlContainer: 'capstone-swal-text',
-          confirmButton: 'capstone-swal-confirm',
-        },
-      })
-    }
   }
 }
 </script>
@@ -162,17 +120,13 @@ async function useDemoAccount() {
             <a href="#">Forgot password</a>
           </div>
 
-          <button type="submit" :disabled="authStore.loading">Log In</button>
-          <button type="button" class="demo-login" @click="useDemoAccount" :disabled="authStore.loading">
-            Use Demo Account
+          <button type="submit" :disabled="authStore.loading">
+            {{ authStore.loading ? 'Logging in...' : 'Log In' }}
           </button>
 
           <p class="signup">
             Don’t have an account?
             <RouterLink to="/register">Sign up</RouterLink>
-          </p>
-          <p class="admin-link">
-            <RouterLink to="/admin/login">Admin Login</RouterLink>
           </p>
         </form>
       </div>

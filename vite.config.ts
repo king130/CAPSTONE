@@ -15,4 +15,15 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url))
     },
   },
+  test: {
+    globals: true,
+    environment: 'happy-dom',
+    css: true,
+    setupFiles: ['./src/test-setup.ts'],
+    server: {
+      deps: {
+        inline: ['vue-router'],
+      },
+    },
+  },
 })

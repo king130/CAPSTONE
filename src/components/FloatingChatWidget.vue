@@ -10,17 +10,20 @@ import {
   ChatBubbleLeftRightIcon,
 } from '@heroicons/vue/24/outline'
 import {
+  createOrGetDirectChat,
   ensureDefaultChat,
+  mergeChatMemberNames,
   sendMessage as sendChatMessage,
   subscribeToChats,
   subscribeToMessages,
   type ChatMessage,
   type ChatThread,
 } from '@/services/chat'
+import { getPublicProfile, listPublicProfiles, type PublicProfile } from '@/services/profilesPublic'
 
 // Props for customization
 const props = defineProps<{
-  userType?: 'intern' | 'company'
+  userType?: 'intern' | 'company' | 'school'
 }>()
 
 // State management
@@ -53,11 +56,17 @@ type MessageItem = {
 }
 
 const conversations = ref<ConversationItem[]>([])
+const threadsMap = ref<Record<string, ChatThread>>({})
 const selectedConversation = ref<string | null>(null)
-const messages = ref<MessageItem[]>([])
+const rawMessages = ref<ChatMessage[]>([])
 const currentUserId = computed(() => authStore.user?.uid || '')
 const unsubChats = ref<null | (() => void)>(null)
 const unsubMessages = ref<null | (() => void)>(null)
+const showNewChatPanel = ref(false)
+const chatPartners = ref<PublicProfile[]>([])
+const startingChat = ref(false)
+/** Cache of uid -> display name for chat members (used when chat doc has no memberNames) */
+const memberNamesCache = ref<Record<string, string>>({})
 
 // Group info data
 const groupInfo = ref({
@@ -111,7 +120,8 @@ function closeChat() {
 
 function selectConversation(id: string) {
   selectedConversation.value = id
-  
+  rawMessages.value = []
+
   // Check if this is a mock conversation
   if (id.startsWith('mock-')) {
     loadMockMessages(id)
@@ -124,21 +134,51 @@ const activeConversation = computed(() => {
   return conversations.value.find(c => c.id === selectedConversation.value)
 })
 
+const mockMessages = ref<MessageItem[]>([])
+
+const messages = computed(() => {
+  const chatId = selectedConversation.value
+  if (!chatId) return []
+  if (chatId.startsWith('mock-')) return mockMessages.value
+  return rawMessages.value.map((m) => mapMessage(m, chatId))
+})
+
+function getOtherPartyName(thread: ChatThread): string {
+  if (thread.members.length !== 2) return thread.title || 'Chat'
+  const otherId = thread.members.find((m) => m !== currentUserId.value)
+  if (!otherId) return thread.title || 'Chat'
+  const fromDoc = thread.memberNames?.[otherId]
+  const fromCache = memberNamesCache.value[otherId]
+  return fromDoc || fromCache || 'User'
+}
+
 function mapThread(thread: ChatThread): ConversationItem {
+  const isDirect = thread.members.length === 2
+  const displayName = isDirect ? getOtherPartyName(thread) : (thread.title || 'Support')
   return {
     id: thread.id,
-    name: thread.title || 'Support',
-    subtitle: thread.members.length > 1 ? 'Group Chat' : 'Direct Chat',
+    name: displayName,
+    subtitle: isDirect ? 'Direct Chat' : 'Group Chat',
     avatar: '/icons/logo-main.png',
     lastMessage: thread.lastMessage || 'No messages yet',
     time: '',
     unread: 0,
     online: false,
-    isGroup: thread.members.length > 1,
+    isGroup: !isDirect,
   }
 }
 
-function mapMessage(message: ChatMessage): MessageItem {
+function getSenderName(senderId: string, chatId: string): string {
+  if (senderId === currentUserId.value) return 'You'
+  const thread = threadsMap.value[chatId]
+  const name =
+    thread?.memberNames?.[senderId] ||
+    memberNamesCache.value[senderId] ||
+    'User'
+  return name
+}
+
+function mapMessage(message: ChatMessage, chatId: string): MessageItem {
   const isOwn = message.senderId === currentUserId.value
   const createdAt =
     message.createdAt && typeof message.createdAt === 'object' && 'toDate' in message.createdAt
@@ -148,7 +188,7 @@ function mapMessage(message: ChatMessage): MessageItem {
       : null
   return {
     id: message.id,
-    sender: isOwn ? 'You' : 'Member',
+    sender: getSenderName(message.senderId, chatId),
     avatar: '/icons/logo-main.png',
     message: message.text,
     time: createdAt ? createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
@@ -161,7 +201,7 @@ function startMessageListener(chatId: string) {
     unsubMessages.value()
   }
   unsubMessages.value = subscribeToMessages(chatId, (snapshot) => {
-    messages.value = snapshot.map(mapMessage)
+    rawMessages.value = snapshot
   })
 }
 
@@ -174,7 +214,7 @@ async function sendMessage() {
   if (activeConversation.value.id.startsWith('mock-')) {
     const now = new Date()
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    messages.value.push({
+    mockMessages.value.push({
       id: `msg-${Date.now()}`,
       sender: 'You',
       avatar: '/icons/profiles/alex-doe.jpg',
@@ -198,25 +238,47 @@ async function startChatListeners() {
     loadMockConversations()
     return
   }
-  
+
   try {
     const defaultChatId = await ensureDefaultChat(currentUserId.value)
-    unsubChats.value = subscribeToChats(currentUserId.value, (threads) => {
-      console.log('FloatingChatWidget: Received threads from Firebase:', threads)
-      if (threads.length === 0) {
-        console.log('FloatingChatWidget: No threads found, loading mock data')
-        loadMockConversations()
-      } else {
-        conversations.value = threads.map(mapThread)
-        if (!selectedConversation.value && conversations.value.length > 0) {
-          const initial = conversations.value.find((chat) => chat.id === defaultChatId) || conversations.value[0]
-          selectedConversation.value = initial.id
-          startMessageListener(initial.id)
+    unsubChats.value = subscribeToChats(
+      currentUserId.value,
+      async (threads) => {
+        console.log('FloatingChatWidget: Received threads from Firebase:', threads)
+        if (threads.length === 0) {
+          loadMockConversations()
+        } else {
+          threads.forEach((t) => {
+            threadsMap.value[t.id] = t
+          })
+          for (const t of threads) {
+            if (t.members.length === 2) {
+              const otherId = t.members.find((m) => m !== currentUserId.value)
+              if (otherId && !t.memberNames?.[otherId] && !memberNamesCache.value[otherId]) {
+                const profile = await getPublicProfile(otherId)
+                if (profile) {
+                  const name = profile.orgName || profile.displayName
+                  memberNamesCache.value = {
+                    ...memberNamesCache.value,
+                    [otherId]: name,
+                  }
+                  mergeChatMemberNames(t.id, { [otherId]: name }).catch(() => {})
+                }
+              }
+            }
+          }
+          conversations.value = threads.map(mapThread)
+          if (!selectedConversation.value && conversations.value.length > 0) {
+            const initial = conversations.value.find((chat) => chat.id === defaultChatId) || conversations.value[0]
+            selectedConversation.value = initial.id
+            startMessageListener(initial.id)
+          }
         }
-      }
-    })
+      },
+      () => loadMockConversations()
+    )
   } catch (error) {
-    console.error('FloatingChatWidget: Error loading chats, using mock data:', error)
+    console.warn('FloatingChatWidget: Chat unavailable (permission or network), using mock data:', error)
     loadMockConversations()
   }
 }
@@ -277,7 +339,7 @@ function loadMockConversations() {
 }
 
 function loadMockMessages(conversationId: string) {
-  messages.value = [
+  mockMessages.value = [
     {
       id: 'msg-1',
       sender: 'Support',
@@ -319,7 +381,8 @@ watch(currentUserId, () => {
     unsubMessages.value = null
   }
   conversations.value = []
-  messages.value = []
+  rawMessages.value = []
+  mockMessages.value = []
   selectedConversation.value = null
   startChatListeners()
 })
@@ -331,6 +394,78 @@ onUnmounted(() => {
 
 function toggleGroupInfo() {
   showGroupInfo.value = !showGroupInfo.value
+}
+
+async function openNewChatPanel() {
+  const role = props.userType || authStore.user?.role
+  if (role === 'company') {
+    chatPartners.value = await listPublicProfiles('school')
+  } else if (role === 'school') {
+    chatPartners.value = await listPublicProfiles('company')
+  } else if (role === 'student' || role === 'intern') {
+    const [schools, companies] = await Promise.all([
+      listPublicProfiles('school'),
+      listPublicProfiles('company'),
+    ])
+    chatPartners.value = [...schools, ...companies]
+  } else {
+    return
+  }
+  showNewChatPanel.value = true
+}
+
+async function startChatWith(partner: PublicProfile) {
+  const uid = currentUserId.value
+  if (!uid || uid === partner.uid) return
+  startingChat.value = true
+  const myName =
+    (authStore.user?.profile as Record<string, unknown>)?.institutionName ||
+    (authStore.user?.profile as Record<string, unknown>)?.companyName ||
+    authStore.user?.displayName ||
+    authStore.user?.email?.split('@')[0] ||
+    'User'
+  const partnerName = partner.orgName || partner.displayName
+  try {
+    const chatId = await createOrGetDirectChat(uid, partner.uid, {
+      title: partnerName,
+      userName1: myName,
+      userName2: partnerName,
+    })
+    showNewChatPanel.value = false
+    const existing = conversations.value.find((c) => c.id === chatId)
+    if (existing) {
+      selectedConversation.value = chatId
+      startMessageListener(chatId)
+    } else {
+      const newThread: ChatThread = {
+        id: chatId,
+        members: [uid, partner.uid].sort(),
+        title: partnerName,
+        memberNames: { [uid]: myName, [partner.uid]: partnerName },
+      }
+      threadsMap.value = { ...threadsMap.value, [chatId]: newThread }
+      conversations.value = [
+        ...conversations.value,
+        {
+          id: chatId,
+          name: partnerName,
+          subtitle: 'Direct Chat',
+          avatar: '/icons/logo-main.png',
+          lastMessage: '',
+          time: '',
+          unread: 0,
+          online: false,
+          isGroup: false,
+        },
+      ]
+      selectedConversation.value = chatId
+      startMessageListener(chatId)
+    }
+  } catch (e) {
+    console.warn('Failed to start chat:', e)
+  } finally {
+    startingChat.value = false
+  }
 }
 
 function handleImageError(event: Event) {
@@ -383,6 +518,32 @@ function handleImageError(event: Event) {
       <aside class="profiles-sidebar">
         <div class="sidebar-header">
           <h2 class="sidebar-title">Chats</h2>
+          <button class="btn-new-chat" @click="openNewChatPanel" title="New conversation">
+            <PlusIcon class="icon-sm" />
+          </button>
+        </div>
+
+        <!-- New Chat Panel -->
+        <div v-if="showNewChatPanel" class="new-chat-panel">
+          <div class="new-chat-header">
+            <span>Start conversation</span>
+            <button class="btn-close-panel" @click="showNewChatPanel = false">
+              <XMarkIcon class="icon-sm" />
+            </button>
+          </div>
+          <div v-if="chatPartners.length === 0" class="new-chat-empty">No users available. Ask them to complete their profile.</div>
+          <div v-else class="new-chat-list">
+            <div
+              v-for="p in chatPartners"
+              :key="p.uid"
+              class="new-chat-item"
+              :class="{ disabled: p.uid === currentUserId }"
+              @click="p.uid !== currentUserId && startChatWith(p)"
+            >
+              <span class="new-chat-name">{{ p.orgName || p.displayName }}</span>
+              <span class="new-chat-role">{{ p.role }}</span>
+            </div>
+          </div>
         </div>
 
         <div class="sidebar-search">
@@ -402,7 +563,7 @@ function handleImageError(event: Event) {
           >
             <div class="profile-avatar-wrapper">
               <img :src="conversation.avatar" :alt="conversation.name" class="profile-avatar" @error="handleImageError" />
-              <span v-if="conversation.online" class="online-badge"></span>
+              <span v-if="conversation.online && conversation.isGroup" class="online-badge"></span>
             </div>
             <div class="profile-info-sidebar">
               <h3 class="profile-name-sidebar">{{ conversation.name }}</h3>
@@ -419,11 +580,11 @@ function handleImageError(event: Event) {
           <div class="profile-info">
             <div class="profile-avatar-large-wrapper">
               <img :src="activeConversation.avatar" :alt="activeConversation.name" class="profile-avatar-large" @error="handleImageError" />
-              <span v-if="activeConversation.online" class="online-badge-large"></span>
+              <span v-if="activeConversation.online && activeConversation.isGroup" class="online-badge-large"></span>
             </div>
             <div class="profile-details">
               <h2 class="profile-name">{{ activeConversation.name }}</h2>
-              <p class="profile-status">{{ activeConversation.online ? 'Active now' : 'Offline' }}</p>
+              <p class="profile-status">{{ activeConversation.online ? 'Active now' : (activeConversation.isGroup ? 'Offline' : 'Direct Chat') }}</p>
             </div>
           </div>
         </div>
@@ -628,7 +789,75 @@ function handleImageError(event: Event) {
 .sidebar-header {
   padding: 16px 20px;
   border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
+
+.btn-new-chat {
+  padding: 6px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  cursor: pointer;
+  color: #374151;
+}
+.btn-new-chat:hover { background: #f3f4f6; }
+
+.new-chat-panel {
+  padding: 12px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.new-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #374151;
+}
+
+.btn-close-panel {
+  padding: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #6b7280;
+}
+
+.new-chat-empty {
+  font-size: 0.875rem;
+  color: #6b7280;
+  padding: 8px 0;
+}
+
+.new-chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.new-chat-item {
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  transition: background 0.15s;
+}
+.new-chat-item:hover:not(.disabled) { background: #eff6ff; }
+.new-chat-item.disabled { opacity: 0.5; cursor: not-allowed; }
+
+.new-chat-name { font-weight: 600; color: #111827; display: block; }
+.new-chat-role { font-size: 0.75rem; color: #6b7280; text-transform: capitalize; }
+
+.icon-sm { width: 18px; height: 18px; }
 
 .sidebar-title {
   font-size: 24px;

@@ -1,9 +1,15 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import Swal from 'sweetalert2'
 import Sidebar from '../../components/Sidebar.vue'
 import CompanySettings from '../../components/CompanySettings.vue'
 import FloatingChatWidget from '../../components/FloatingChatWidget.vue'
 import { useAuthStore } from '@/stores/auth'
+import { createInternship, subscribeCompanyInternships, type InternshipRecord } from '@/services/internships'
+import { subscribeCompanyApplications, subscribeCompanyApplicationsByInternships, updateApplicationStatus, type ApplicationRecord } from '@/services/applications'
+import { createContractRequest, subscribeCompanyContracts, type ContractRecord } from '@/services/contracts'
+import { ensurePublicProfile, listPublicProfiles, type PublicProfile } from '@/services/profilesPublic'
 import { 
   DocumentIcon, 
   ClockIcon, 
@@ -32,6 +38,7 @@ import {
 } from '@heroicons/vue/24/outline'
 
 const authStore = useAuthStore()
+const router = useRouter()
 const companyName = computed(() => {
   const profile = authStore.user?.profile as Record<string, unknown> | undefined
   return (profile?.companyName as string) || 
@@ -178,53 +185,179 @@ const companyTypes = ref<string[]>([])
 const duration = ref('4-6 Months')
 const searchQuery = ref('')
 
-// TEMPORARY DATA: Sample internships list - replace with real data from backend
-const internshipsList = ref([
-  {
-    id: 1,
-    title: 'Software Engineer Intern',
-    company: 'Innovate Corp.',
-    location: 'New York, NY',
-    match: 92,
-    recommended: true,
-    description: 'Join Our dynamic team to develop innovative software solutions. You\'ll work on cutting-edge projects and contribute the projects.',
-    skills: ['Python', 'AWS', 'Machine Learning', 'Django'],
-    logo: 'IC'
-  },
-  {
-    id: 2,
-    title: 'Data Analyst Intern',
-    company: 'Innovate Corp.',
-    location: 'New York, NY',
-    match: 92,
-    recommended: true,
-    description: 'Join Our dynamic team to develop innovative software solutions. You\'ll work on cutting-edge projects and contribute the projects.',
-    skills: ['Python', 'SQL', 'Machine Learning', 'Excel'],
-    logo: 'IC'
-  },
-  {
-    id: 3,
-    title: 'UI/UX Designer Intern',
-    company: 'Innovate Corp.',
-    location: 'New York, NY',
-    match: 92,
-    recommended: true,
-    description: 'Join Our dynamic team to develop innovative software solutions. You\'ll work on cutting-edge projects and contribute the projects.',
-    skills: ['Figma', 'Prototyping', 'Design System'],
-    logo: 'IC'
-  },
-  {
-    id: 4,
-    title: 'Business Development Intern',
-    company: 'Innovate Corp.',
-    location: 'New York, NY',
-    match: 92,
-    recommended: true,
-    description: 'Join Our dynamic team to develop innovative software solutions. You\'ll work on cutting-edge projects and contribute the projects.',
-    skills: ['Python', 'AWS', 'Machine Learning', 'Django'],
-    logo: 'IC'
+// Company's posted internships - from Firebase
+const internshipsList = ref<Array<InternshipRecord & { logo?: string; company?: string; match?: number; recommended?: boolean; skills?: string[] }>>([])
+let unsubCompanyInternships: (() => void) | null = null
+
+// Company's applications (Quick Apply from students) - from Firebase
+const applications = ref<ApplicationRecord[]>([])
+let unsubCompanyApplications: (() => void) | null = null
+let unsubByInternships: (() => void) | null = null
+
+function mergeApplications(byCompanyId: ApplicationRecord[], byInternships: ApplicationRecord[]) {
+  const seen = new Set<string>()
+  const merged: ApplicationRecord[] = []
+  for (const a of [...byCompanyId, ...byInternships]) {
+    if (!seen.has(a.id)) {
+      seen.add(a.id)
+      merged.push(a)
+    }
   }
-])
+  merged.sort((a, b) => {
+    const aTime = (a.createdAt as { toMillis?: () => number })?.toMillis?.() ?? 0
+    const bTime = (b.createdAt as { toMillis?: () => number })?.toMillis?.() ?? 0
+    return bTime - aTime
+  })
+  return merged
+}
+
+const applicationsByCompanyId = ref<ApplicationRecord[]>([])
+const applicationsByInternships = ref<ApplicationRecord[]>([])
+
+// Contracts (company-school)
+const companyContracts = ref<ContractRecord[]>([])
+const schoolsForContract = ref<PublicProfile[]>([])
+const showCreateContractModal = ref(false)
+const contractForm = ref({
+  schoolId: '',
+  schoolName: '',
+  contractType: 'Memorandum of Agreement (MOA) for OJT Internship',
+  purpose: 'To establish a partnership for the placement of students in on-the-job training (OJT) internships.',
+  startDate: '',
+  endDate: '',
+  companyResponsibilities: 'Provide internship slots; assign mentors; ensure safe work environment; evaluate intern performance.',
+  schoolResponsibilities: 'Endorse qualified students; monitor intern progress; ensure compliance with academic requirements.',
+  terms: 'This agreement shall be effective upon acceptance by both parties. Either party may terminate with 30 days written notice.',
+})
+const creatingContract = ref(false)
+let unsubCompanyContracts: (() => void) | null = null
+
+watch(
+  () => [applicationsByCompanyId.value, applicationsByInternships.value],
+  () => {
+    applications.value = mergeApplications(applicationsByCompanyId.value, applicationsByInternships.value)
+  },
+  { deep: true, immediate: true }
+)
+
+function setupSubscriptions(uid: string) {
+  if (unsubCompanyInternships) unsubCompanyInternships()
+  if (unsubCompanyApplications) unsubCompanyApplications()
+  if (unsubByInternships) unsubByInternships()
+  if (unsubCompanyContracts) unsubCompanyContracts()
+
+  ensurePublicProfile(uid, {
+    displayName: companyName.value,
+    role: 'company',
+    orgName: companyName.value,
+    email: authStore.user?.email,
+  }).catch(() => {})
+
+  unsubCompanyContracts = subscribeCompanyContracts(uid, (items) => {
+    companyContracts.value = items
+  })
+
+  unsubCompanyInternships = subscribeCompanyInternships(uid, (items) => {
+    internshipsList.value = items.map((i) => ({
+      ...i,
+      logo: (i.companyName || 'CO').slice(0, 2).toUpperCase(),
+      company: i.companyName,
+      match: 100,
+      recommended: false,
+      skills: i.requirements || [],
+    }))
+    const ids = items.map((i) => i.id)
+    if (unsubByInternships) unsubByInternships()
+    unsubByInternships = subscribeCompanyApplicationsByInternships(ids, (apps) => {
+      applicationsByInternships.value = apps
+    })
+  })
+
+  unsubCompanyApplications = subscribeCompanyApplications(uid, (items) => {
+    applicationsByCompanyId.value = items
+  })
+}
+
+let stopAuthWatch: (() => void) | null = null
+
+onMounted(() => {
+  function trySetup() {
+    const uid = authStore.user?.uid
+    if (uid && authStore.user?.role === 'company') setupSubscriptions(uid)
+  }
+  trySetup()
+  stopAuthWatch = watch(
+    () => [authStore.initializing, authStore.user?.uid, authStore.user?.role] as const,
+    () => {
+      if (!authStore.initializing) trySetup()
+    },
+    { immediate: true }
+  )
+})
+
+onUnmounted(() => {
+  if (stopAuthWatch) stopAuthWatch()
+  if (unsubCompanyInternships) unsubCompanyInternships()
+  if (unsubCompanyApplications) unsubCompanyApplications()
+  if (unsubByInternships) unsubByInternships()
+  if (unsubCompanyContracts) unsubCompanyContracts()
+})
+
+async function openCreateContractModal() {
+  schoolsForContract.value = await listPublicProfiles('school')
+  contractForm.value = {
+    schoolId: '',
+    schoolName: '',
+    contractType: 'Memorandum of Agreement (MOA) for OJT Internship',
+    purpose: 'To establish a partnership for the placement of students in on-the-job training (OJT) internships.',
+    startDate: new Date().toISOString().slice(0, 10),
+    endDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    companyResponsibilities: 'Provide internship slots; assign mentors; ensure safe work environment; evaluate intern performance.',
+    schoolResponsibilities: 'Endorse qualified students; monitor intern progress; ensure compliance with academic requirements.',
+    terms: 'This agreement shall be effective upon acceptance by both parties. Either party may terminate with 30 days written notice.',
+  }
+  showCreateContractModal.value = true
+}
+
+async function submitContractRequest() {
+  const uid = authStore.user?.uid
+  if (!uid || !contractForm.value.schoolId || !contractForm.value.schoolName) {
+    Swal.fire({ icon: 'warning', title: 'Select a school', text: 'Please select a school to send the contract request.' })
+    return
+  }
+  creatingContract.value = true
+  try {
+    await createContractRequest({
+      companyId: uid,
+      companyName: companyName.value,
+      schoolId: contractForm.value.schoolId,
+      schoolName: contractForm.value.schoolName,
+      contractType: contractForm.value.contractType || undefined,
+      purpose: contractForm.value.purpose || undefined,
+      startDate: contractForm.value.startDate || undefined,
+      endDate: contractForm.value.endDate || undefined,
+      companyResponsibilities: contractForm.value.companyResponsibilities || undefined,
+      schoolResponsibilities: contractForm.value.schoolResponsibilities || undefined,
+      terms: contractForm.value.terms || undefined,
+    })
+    Swal.fire({ icon: 'success', title: 'Contract Sent', text: 'Your contract request has been sent to the school.' })
+    showCreateContractModal.value = false
+  } catch (e) {
+    Swal.fire({ icon: 'error', title: 'Error', text: e instanceof Error ? e.message : 'Failed to send contract.' })
+  } finally {
+    creatingContract.value = false
+  }
+}
+
+function onContractSchoolSelect(e: Event) {
+  const target = e.target as HTMLSelectElement
+  const id = target.value
+  const school = schoolsForContract.value.find((s) => s.uid === id)
+  if (school) {
+    contractForm.value.schoolId = id
+    contractForm.value.schoolName = school.orgName || school.displayName
+  }
+}
 
 function removeSkill(skill: string) {
   selectedSkills.value = selectedSkills.value.filter(s => s !== skill)
@@ -239,24 +372,35 @@ function clearAllFilters() {
   duration.value = '4-6 Months'
 }
 
-// TEMPORARY DATA: Create internship form state - these are UI state variables
+// Create internship form state
 const showCreateForm = ref(false)
 const currentFormStep = ref(1)
 const formTitle = ref('')
 const formDescription = ref('')
-const formSkills = ref(['HTML', 'CSS', 'Javascript'])
+const formSkills = ref<string[]>([])
 const newSkillInput = ref('')
-const slotsAvailable = ref('1')
+const slotsAvailable = ref(1)
 const startDateForm = ref('')
 const endDateForm = ref('')
-const locationType = ref('Remote')
+const formLocation = ref('')
+const formDuration = ref('')
+const formType = ref('on-site')
+const formDepartment = ref('')
+const formHoursPerWeek = ref(20)
+const formAllowance = ref('')
 
-// TEMPORARY DATA: Additional form fields for step 2 - replace with real data from backend
 const preferredCourse = ref('')
 const minimumGPA = ref('')
 const requiredSkills = ref('')
 const yearLevel = ref('')
 const additionalRequirements = ref('')
+const primaryResponsibilities = ref('')
+const learningObjectives = ref('')
+const projectsDeliverables = ref('')
+const applicationInstructions = ref('')
+const contactInfo = ref('')
+
+const submittingInternship = ref(false)
 
 function openCreateForm() {
   showCreateForm.value = true
@@ -302,13 +446,97 @@ function handleKeyPress(event: KeyboardEvent) {
 }
 
 function saveDraft() {
-  // Handle save draft logic
-  console.log('Saving draft...')
+  submitInternship('draft')
 }
 
-function submitForApproval() {
-  // Handle submit for approval logic
-  console.log('Submitting for approval...')
+async function submitForApproval() {
+  await submitInternship('active')
+}
+
+async function submitInternship(status: 'active' | 'draft') {
+  const uid = authStore.user?.uid
+  if (!uid) {
+    await Swal.fire({ icon: 'error', title: 'Not logged in', text: 'Please log in to post an internship.' })
+    return
+  }
+
+  if (!formTitle.value.trim()) {
+    await Swal.fire({ icon: 'warning', title: 'Missing title', text: 'Please enter an internship title.' })
+    return
+  }
+  if (!formDescription.value.trim()) {
+    await Swal.fire({ icon: 'warning', title: 'Missing description', text: 'Please enter an internship description.' })
+    return
+  }
+  if (!formLocation.value.trim()) {
+    await Swal.fire({ icon: 'warning', title: 'Missing location', text: 'Please enter a location.' })
+    return
+  }
+
+  submittingInternship.value = true
+  try {
+    const requirements = requiredSkills.value
+      ? requiredSkills.value.split(/[,\n]/).map((s) => s.trim()).filter(Boolean)
+      : formSkills.value.length ? formSkills.value : []
+
+    await createInternship({
+      title: formTitle.value.trim(),
+      description: formDescription.value.trim(),
+      companyId: uid,
+      companyName: companyName.value,
+      location: formLocation.value.trim(),
+      type: formType.value,
+      duration: formDuration.value ? `${formDuration.value} weeks` : '12 weeks',
+      slotsAvailable: typeof slotsAvailable.value === 'number' ? slotsAvailable.value : parseInt(String(slotsAvailable.value), 10) || 1,
+      requirements,
+      allowance: formAllowance.value || undefined,
+      status,
+    })
+
+    await Swal.fire({
+      icon: 'success',
+      title: status === 'active' ? 'Internship Posted!' : 'Draft Saved',
+      text: status === 'active' ? 'Your internship is now visible to students.' : 'Your draft has been saved.',
+      confirmButtonColor: '#2563eb',
+    })
+
+    closeCreateForm()
+    resetCreateForm()
+  } catch (err) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Failed to post',
+      text: err instanceof Error ? err.message : 'Could not save internship.',
+      confirmButtonColor: '#2563eb',
+    })
+  } finally {
+    submittingInternship.value = false
+  }
+}
+
+function resetCreateForm() {
+  formTitle.value = ''
+  formDescription.value = ''
+  formLocation.value = ''
+  formDuration.value = ''
+  formType.value = 'on-site'
+  formDepartment.value = ''
+  formSkills.value = []
+  slotsAvailable.value = 1
+  formHoursPerWeek.value = 20
+  formAllowance.value = ''
+  preferredCourse.value = ''
+  minimumGPA.value = ''
+  requiredSkills.value = ''
+  yearLevel.value = ''
+  additionalRequirements.value = ''
+  primaryResponsibilities.value = ''
+  learningObjectives.value = ''
+  projectsDeliverables.value = ''
+  applicationInstructions.value = ''
+  contactInfo.value = ''
+  startDateForm.value = ''
+  endDateForm.value = ''
 }
 
 // TEMPORARY DATA: Sample attendance records for reports view - replace with real data from backend
@@ -338,67 +566,53 @@ const performanceMetrics = ref([
   { skill: 'Problem Solving', rating: 4.9 },
 ])
 
-// TEMPORARY DATA: Applications view filter state - these are UI state variables
-const selectedInternship = ref('')
+// Applications view filter state
+const selectedInternshipFilter = ref('')
 const searchStudent = ref('')
 
-// TEMPORARY DATA: Sample applications list - replace with real data from backend
-const applications = ref([
-  {
-    id: 1,
-    studentName: 'Jane Doe',
-    course: 'BS Computer Science',
-    internJob: 'IT Support',
-    skillsMatch: 85,
-    applicationDate: '2024-09-01',
-    status: 'New'
-  },
-  {
-    id: 2,
-    studentName: 'John Smith',
-    course: 'BS Information Technology',
-    internJob: 'Data Analyst',
-    skillsMatch: 70,
-    applicationDate: '2024-09-02',
-    status: 'Reviewed'
-  },
-  {
-    id: 3,
-    studentName: 'Alice Johnson',
-    course: 'BS Computer Engineering',
-    internJob: 'UI/UX Designer',
-    skillsMatch: 92,
-    applicationDate: '2024-09-03',
-    status: 'Accepted'
-  },
-  {
-    id: 4,
-    studentName: 'Michael Brown',
-    course: 'BS Computer Science',
-    internJob: 'Web Developer',
-    skillsMatch: 78,
-    applicationDate: '2024-09-04',
-    status: 'Declined'
-  },
-  {
-    id: 5,
-    studentName: 'Sarah Davis',
-    course: 'BS Information Technology',
-    internJob: 'Cloud Engineer',
-    skillsMatch: 88,
-    applicationDate: '2024-09-05',
-    status: 'Interview'
-  },
-  {
-    id: 6,
-    studentName: 'David Wilson',
-    course: 'BS Computer Engineering',
-    internJob: 'Q/A',
-    skillsMatch: 75,
-    applicationDate: '2024-09-06',
-    status: 'New'
+// Filtered applications for display
+const filteredApplications = computed(() => {
+  let list = applications.value
+  if (selectedInternshipFilter.value) {
+    list = list.filter((a) => String(a.internshipId) === String(selectedInternshipFilter.value))
   }
-])
+  if (searchStudent.value.trim()) {
+    const q = searchStudent.value.toLowerCase().trim()
+    list = list.filter(
+      (a) =>
+        (a.studentName || '').toLowerCase().includes(q) ||
+        (a.studentEmail || '').toLowerCase().includes(q) ||
+        (a.studentCourse || '').toLowerCase().includes(q)
+    )
+  }
+  return list
+})
+
+function formatApplicationDate(createdAt: unknown): string {
+  if (!createdAt) return '—'
+  const d = (createdAt as { toDate?: () => Date })?.toDate?.() ?? new Date(String(createdAt))
+  return d instanceof Date && !isNaN(d.getTime())
+    ? d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+    : '—'
+}
+
+async function handleAcceptApplication(app: ApplicationRecord) {
+  try {
+    await updateApplicationStatus(app.id, 'accepted')
+    await Swal.fire({ icon: 'success', title: 'Accepted', text: 'Application accepted.', confirmButtonColor: '#2563eb' })
+  } catch (err) {
+    await Swal.fire({ icon: 'error', title: 'Failed', text: err instanceof Error ? err.message : 'Could not update.' })
+  }
+}
+
+async function handleDeclineApplication(app: ApplicationRecord) {
+  try {
+    await updateApplicationStatus(app.id, 'declined')
+    await Swal.fire({ icon: 'success', title: 'Declined', text: 'Application declined.', confirmButtonColor: '#2563eb' })
+  } catch (err) {
+    await Swal.fire({ icon: 'error', title: 'Failed', text: err instanceof Error ? err.message : 'Could not update.' })
+  }
+}
 
 // TEMPORARY DATA: Sample journal activity for journals view - replace with real data from backend
 const recentJournalActivity = ref([
@@ -513,50 +727,46 @@ function submitJournalForReview() {
   closeAddJournalPanel()
 }
 
-// TEMPORARY DATA: Sample company profile data - replace with real data from backend
-const companyProfile = computed(() => ({
-  name: companyName.value,
-  industry: 'Information Technology',
-  email: authStore.user?.email || 'contact@company.com',
-  phone: '+63 (046) 123-4567',
-  address: 'Cavite Technology Park, Dasmarinas, Cavite',
-  website: 'www.techcorp.com',
-  businessType: 'Software Development',
-  founded: '2010',
-  companySize: '500-1000 employees',
-  primaryDepartments: 'Engineering, Marketing',
-  preferredBackground: 'IT, Business, Communications',
-  internshipDuration: '3-6 months',
-  availableSlots: '15 positions',
-  description: 'TechCorp Solutions is a leading technology company specializing in innovative software development and digital transformation services. We provide comprehensive internship programs that offer hands-on experience with cutting-edge technologies.',
-  totalInternsHosted: 127,
-  averageDuration: '6 months',
-  completionRate: '94%',
-  studentSatisfaction: 4.8,
-  profileCompletion: 85
-}))
-
-// TEMPORARY DATA: Profile edit mode state - UI state variable
-const profileEditMode = ref(false)
+// Company profile data from auth store
+const companyProfile = computed(() => {
+  const p = (authStore.user?.profile || {}) as Record<string, unknown>
+  const filled = [
+    !!p.companyName,
+    !!p.companyType,
+    !!p.industryType,
+    !!p.companyAddress,
+    !!p.companyEmail,
+    !!p.contactPersonName,
+    !!p.contactPersonTitle,
+    !!p.contactPersonEmail,
+    !!p.companyContactNumber,
+  ].filter(Boolean).length
+  const profileCompletion = Math.min(100, Math.round((filled / 9) * 100))
+  return {
+    name: (p.companyName as string) || companyName.value,
+    industry: (p.industryType as string) || '—',
+    email: (p.companyEmail as string) || authStore.user?.email || '—',
+    phone: (p.companyContactNumber as string) || '—',
+    address: (p.companyAddress as string) || '—',
+    website: (p.website as string) || '—',
+    businessType: (p.companyType as string) || '—',
+    founded: (p.founded as string) || '—',
+    companySize: (p.companySize as string) || '—',
+    primaryDepartments: (p.primaryDepartments as string) || '—',
+    preferredBackground: (p.preferredBackground as string) || '—',
+    internshipDuration: (p.internshipDuration as string) || '—',
+    availableSlots: (p.availableSlots as string) || '—',
+    description: (p.description as string) || 'Complete your profile to add a company description.',
+    totalInternsHosted: (p.totalInternsHosted as number) || 0,
+    averageDuration: (p.averageDuration as string) || '—',
+    completionRate: (p.completionRate as string) || '—',
+    studentSatisfaction: (p.studentSatisfaction as number) || 0,
+    profileCompletion,
+  }
+})
 
 function editProfile() {
-  profileEditMode.value = true
-}
-
-function saveProfile() {
-  profileEditMode.value = false
-  // TODO: Save profile changes
-  console.log('Profile saved')
-}
-
-function cancelEdit() {
-  profileEditMode.value = false
-  // TODO: Reset changes
-}
-
-function editDescription() {
-  // TODO: Open description editor
-  console.log('Edit description')
+  router.push('/profile')
 }
 
 // TEMPORARY DATA: Time tracking date state - UI state variable
@@ -1178,7 +1388,7 @@ function saveSettings() {
                     <div class="company-logo">{{ internship.logo }}</div>
                     <div class="card-info">
                       <h4>{{ internship.title }}</h4>
-                      <p class="company-name">{{ internship.company }}</p>
+                      <p class="company-name">{{ internship.company || internship.companyName }}</p>
                       <p class="location">
                         <MapPinIcon class="icon-size-sm" /> {{ internship.location }}
                       </p>
@@ -1194,7 +1404,7 @@ function saveSettings() {
                   <p class="card-description">{{ internship.description }}</p>
                   <div class="skills-tags">
                     <span
-                      v-for="skill in internship.skills"
+                      v-for="skill in (internship.skills || internship.requirements || [])"
                       :key="skill"
                       class="skill-tag-card"
                     >
@@ -1233,12 +1443,9 @@ function saveSettings() {
               <div class="applications-filters">
                 <div class="filter-group">
                   <label class="filter-label">Filter by Internship:</label>
-                  <select v-model="selectedInternship" class="filter-select">
+                  <select v-model="selectedInternshipFilter" class="filter-select">
                     <option value="">All Internships</option>
-                    <option value="it-support">IT Support</option>
-                    <option value="data-analyst">Data Analyst</option>
-                    <option value="ui-ux">UI/UX Designer</option>
-                    <option value="web-dev">Web Developer</option>
+                    <option v-for="i in internshipsList" :key="i.id" :value="i.id">{{ i.title }}</option>
                   </select>
                 </div>
                 <div class="search-group">
@@ -1270,35 +1477,37 @@ function saveSettings() {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="app in applications" :key="app.id">
-                    <td>
-                      <a href="#" class="student-link">{{ app.studentName }}</a>
+                  <tr v-if="filteredApplications.length === 0">
+                    <td colspan="8" class="empty-applications">
+                      No applications yet. Student Quick Apply submissions will appear here.
                     </td>
-                    <td>{{ app.course }}</td>
-                    <td>{{ app.internJob }}</td>
+                  </tr>
+                  <tr v-for="app in filteredApplications" :key="app.id">
+                    <td>
+                      <span class="student-link">{{ app.studentName || app.studentEmail || 'Student' }}</span>
+                    </td>
+                    <td>{{ app.studentCourse || '—' }}</td>
+                    <td>{{ app.internshipTitle || '—' }}</td>
                     <td>
                       <div class="match-cell">
-                        <span class="match-percentage">{{ app.skillsMatch }}%</span>
+                        <span class="match-percentage">—</span>
                         <div class="match-bar-wrapper">
-                          <div
-                            class="match-bar"
-                            :style="{ width: app.skillsMatch + '%' }"
-                          ></div>
+                          <div class="match-bar" :style="{ width: '0%' }"></div>
                         </div>
                       </div>
                     </td>
                     <td>
-                      <button class="download-btn" title="Download Resume">
+                      <button class="download-btn" title="Resume" :disabled="app.documentsPending || !app.resume">
                         <ArrowDownTrayIcon class="icon-size" />
                       </button>
                     </td>
-                    <td>{{ app.applicationDate }}</td>
+                    <td>{{ formatApplicationDate(app.createdAt) }}</td>
                     <td>
                       <span
                         class="status-badge-app"
-                        :class="app.status.toLowerCase()"
+                        :class="(app.status || 'pending').toLowerCase()"
                       >
-                        {{ app.status }}
+                        {{ (app.status || 'pending').charAt(0).toUpperCase() + (app.status || 'pending').slice(1) }}
                       </span>
                     </td>
                     <td>
@@ -1308,15 +1517,17 @@ function saveSettings() {
                         </button>
                         <button
                           class="action-icon"
-                          :class="{ disabled: app.status === 'Accepted' }"
+                          :class="{ disabled: app.status === 'accepted' }"
                           title="Accept"
+                          @click="handleAcceptApplication(app)"
                         >
                           <CheckIcon class="icon-size" />
                         </button>
                         <button
                           class="action-icon"
-                          :class="{ disabled: app.status === 'Accepted' }"
+                          :class="{ disabled: app.status === 'accepted' }"
                           title="Decline"
+                          @click="handleDeclineApplication(app)"
                         >
                           <XMarkIcon class="icon-size" />
                         </button>
@@ -1328,6 +1539,107 @@ function saveSettings() {
             </div>
           </div>
         </main>
+      </div>
+
+      <!-- Contracts View (Company-School) -->
+      <div v-if="currentView === 'contracts'">
+        <header class="top-header">
+          <div class="header-left">
+            <img src="/icons/icon-docs.png" alt="Contracts" class="header-icon-img" />
+            <h1>School Contracts</h1>
+          </div>
+          <div class="header-right">
+            <button class="btn-add-journal" @click="openCreateContractModal">Request Contract with School</button>
+            <div class="avatar" @click="handleNavChange('profile')" title="View Profile">{{ userInitials }}</div>
+          </div>
+        </header>
+        <main class="main-content">
+          <div class="applications-container">
+            <h2 class="applications-title">Your Contract Requests</h2>
+            <div v-if="companyContracts.length === 0" class="empty-applications">
+              No contracts yet. Request a contract with a school to establish a partnership.
+            </div>
+            <table v-else class="applications-table">
+              <thead>
+                <tr>
+                  <th>School</th>
+                  <th>Type</th>
+                  <th>Duration</th>
+                  <th>Status</th>
+                  <th>Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="c in companyContracts" :key="c.id">
+                  <td>{{ c.schoolName }}</td>
+                  <td>{{ c.contractType || 'MOA' }}</td>
+                  <td>{{ c.startDate && c.endDate ? `${c.startDate} – ${c.endDate}` : '—' }}</td>
+                  <td>
+                    <span class="status-badge-app" :class="(c.status || 'pending').toLowerCase()">
+                      {{ (c.status || 'pending').charAt(0).toUpperCase() + (c.status || 'pending').slice(1) }}
+                    </span>
+                  </td>
+                  <td>{{ formatApplicationDate(c.createdAt) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </main>
+      </div>
+
+      <!-- Create Contract Modal -->
+      <div v-if="showCreateContractModal" class="modal-overlay contract-modal-overlay" @click.self="showCreateContractModal = false">
+        <div class="modal-content contract-modal-content">
+          <div class="contract-modal-header">
+            <h2>Memorandum of Agreement (MOA)</h2>
+            <p class="contract-modal-subtitle">Request internship partnership with a school</p>
+          </div>
+          <div class="contract-modal-body">
+            <div class="form-group">
+              <label>Select School <span class="required">*</span></label>
+              <select v-model="contractForm.schoolId" @change="onContractSchoolSelect" required class="form-select">
+                <option value="">-- Select School --</option>
+                <option v-for="s in schoolsForContract" :key="s.uid" :value="s.uid">{{ s.orgName || s.displayName }}</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Contract Type</label>
+              <input type="text" v-model="contractForm.contractType" class="form-input" readonly />
+            </div>
+            <div class="form-group">
+              <label>Purpose</label>
+              <textarea v-model="contractForm.purpose" rows="2" class="form-textarea" placeholder="Partnership purpose..."></textarea>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Effective Date</label>
+                <input type="date" v-model="contractForm.startDate" class="form-input" />
+              </div>
+              <div class="form-group">
+                <label>Expiration Date</label>
+                <input type="date" v-model="contractForm.endDate" class="form-input" />
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Company Responsibilities</label>
+              <textarea v-model="contractForm.companyResponsibilities" rows="3" class="form-textarea" placeholder="e.g. Provide internship slots, assign mentors..."></textarea>
+            </div>
+            <div class="form-group">
+              <label>School Responsibilities</label>
+              <textarea v-model="contractForm.schoolResponsibilities" rows="3" class="form-textarea" placeholder="e.g. Endorse qualified students, monitor progress..."></textarea>
+            </div>
+            <div class="form-group">
+              <label>General Terms & Conditions</label>
+              <textarea v-model="contractForm.terms" rows="3" class="form-textarea" placeholder="Termination, amendments, etc."></textarea>
+            </div>
+          </div>
+          <div class="contract-modal-actions">
+            <button class="btn-secondary" @click="showCreateContractModal = false">Cancel</button>
+            <button class="btn-primary" :disabled="creatingContract || !contractForm.schoolId" @click="submitContractRequest">
+              {{ creatingContract ? 'Sending...' : 'Send Contract Request' }}
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Journals View (Journal Overview) -->
@@ -1772,7 +2084,7 @@ function saveSettings() {
 
                 <div class="form-group">
                   <label class="form-label">Department / Team <span class="required">*</span></label>
-                  <select class="form-select">
+                  <select v-model="formDepartment" class="form-select">
                     <option value="">Select Department</option>
                     <option value="engineering">Engineering</option>
                     <option value="marketing">Marketing</option>
@@ -1795,15 +2107,15 @@ function saveSettings() {
                   <label class="form-label">Internship Type</label>
                   <div class="radio-group">
                     <label class="radio-option">
-                      <input type="radio" name="internshipType" value="on-site" />
+                      <input type="radio" name="internshipType" value="on-site" v-model="formType" />
                       <span class="radio-label">On-site</span>
                     </label>
                     <label class="radio-option">
-                      <input type="radio" name="internshipType" value="remote" />
+                      <input type="radio" name="internshipType" value="remote" v-model="formType" />
                       <span class="radio-label">Remote</span>
                     </label>
                     <label class="radio-option">
-                      <input type="radio" name="internshipType" value="hybrid" />
+                      <input type="radio" name="internshipType" value="hybrid" v-model="formType" />
                       <span class="radio-label">Hybrid</span>
                     </label>
                   </div>
@@ -1813,6 +2125,7 @@ function saveSettings() {
                   <label class="form-label">Location <span class="required">*</span></label>
                   <input
                     type="text"
+                    v-model="formLocation"
                     placeholder="e.g. Bacoor, Cavite, PH (for on-site/hybrid)"
                     class="form-input"
                   />
@@ -1822,6 +2135,7 @@ function saveSettings() {
                   <label class="form-label">Duration <span class="required">*</span></label>
                   <input
                     type="number"
+                    v-model="formDuration"
                     placeholder="12"
                     class="form-input duration-input"
                   />
@@ -1832,6 +2146,7 @@ function saveSettings() {
                   <label class="form-label">Required Internship Hours / Week <span class="required">*</span></label>
                   <input
                     type="number"
+                    v-model="formHoursPerWeek"
                     placeholder="20"
                     class="form-input"
                   />
@@ -1947,6 +2262,7 @@ function saveSettings() {
                 <div class="form-group">
                   <label class="form-label">Primary Responsibilities <span class="required">*</span></label>
                   <textarea
+                    v-model="primaryResponsibilities"
                     placeholder="Describe the main tasks and responsibilities the intern will handle"
                     class="form-textarea"
                     rows="5"
@@ -1956,6 +2272,7 @@ function saveSettings() {
                 <div class="form-group">
                   <label class="form-label">Learning Objectives</label>
                   <textarea
+                    v-model="learningObjectives"
                     placeholder="What will the intern learn from this experience? What skills will they develop?"
                     class="form-textarea"
                     rows="4"
@@ -1965,6 +2282,7 @@ function saveSettings() {
                 <div class="form-group">
                   <label class="form-label">Projects & Deliverables</label>
                   <textarea
+                    v-model="projectsDeliverables"
                     placeholder="Specific projects or deliverables the intern will work on"
                     class="form-textarea"
                     rows="4"
@@ -2019,6 +2337,7 @@ function saveSettings() {
                 <div class="form-group">
                   <label class="form-label">Application Instructions</label>
                   <textarea
+                    v-model="applicationInstructions"
                     placeholder="Special instructions for applicants (e.g., required documents, portfolio requirements)"
                     class="form-textarea"
                     rows="4"
@@ -2026,8 +2345,19 @@ function saveSettings() {
                 </div>
 
                 <div class="form-group">
+                  <label class="form-label">Allowance (optional)</label>
+                  <input
+                    type="text"
+                    v-model="formAllowance"
+                    placeholder="e.g. ₱5,000/month or None"
+                    class="form-input"
+                  />
+                </div>
+
+                <div class="form-group">
                   <label class="form-label">Contact Information</label>
                   <textarea
+                    v-model="contactInfo"
                     placeholder="Contact details for questions about this internship"
                     class="form-textarea"
                     rows="3"
@@ -2039,12 +2369,12 @@ function saveSettings() {
                     <span class="arrow-icon">←</span>
                     Previous Section
                   </button>
-                  <button class="btn-save-draft" @click="saveDraft" disabled title="Coming soon">
+                  <button class="btn-save-draft" @click="saveDraft" :disabled="submittingInternship">
                     <img src="/icons/icon-save.png" alt="Save" class="btn-icon" />
                     Save Draft
                   </button>
-                  <button class="btn-next-section" @click="submitForApproval" disabled title="Coming soon">
-                    Submit for Approval
+                  <button class="btn-next-section" @click="submitForApproval" :disabled="submittingInternship">
+                    {{ submittingInternship ? 'Posting...' : 'Submit for Approval' }}
                     <span class="arrow-icon">
                       <CheckIcon class="icon-size-sm" />
                     </span>
@@ -4811,6 +5141,13 @@ function saveSettings() {
   vertical-align: middle;
 }
 
+.empty-applications {
+  text-align: center;
+  padding: 48px 24px !important;
+  color: #6b7280;
+  font-size: 0.95rem;
+}
+
 .student-link {
   color: #2563eb;
   text-decoration: underline;
@@ -4875,7 +5212,8 @@ function saveSettings() {
   text-transform: capitalize;
 }
 
-.status-badge-app.new {
+.status-badge-app.new,
+.status-badge-app.pending {
   background: #dbeafe;
   color: #1e40af;
 }

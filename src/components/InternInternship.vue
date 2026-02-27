@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import { subscribeActiveInternships, getInternship, type InternshipRecord } from '@/services/internships'
+import { submitApplication } from '@/services/applications'
+import Swal from 'sweetalert2'
 import { 
   BellIcon,
   MapPinIcon,
@@ -88,14 +91,15 @@ function handleAvatarClick() {
 
 // Search and filter state
 const searchQuery = ref('')
-const selectedFilters = ref(['Software Engineer', 'UI/UX Designer', 'Web Developer'])
+const selectedFilters = ref<string[]>([])
 const locationFilter = ref('')
-const skillsFilter = ref(['Python', 'Data Analysis'])
+const skillsFilter = ref<string[]>([])
+const newSkillFilter = ref('')
 const availabilityStart = ref('2024-06-01')
 const availabilityEnd = ref('2024-12-31')
 const companyTypes = ref(['Startup', 'Enterprise', 'Non-profit', 'Government'])
-const selectedCompanyTypes = ref(['Startup'])
-const duration = ref('4-6 Months')
+const selectedCompanyTypes = ref<string[]>([])
+const duration = ref('')
 
 // Modal state
 const showDetailsModal = ref(false)
@@ -103,6 +107,7 @@ const selectedInternship = ref<any>(null)
 const showApplicationModal = ref(false)
 const showReviewModal = ref(false)
 const applicationProgress = ref(28)
+const submittingApplication = ref(false)
 
 // Application form data
 const applicationData = ref({
@@ -114,162 +119,103 @@ const applicationData = ref({
   ]
 })
 
-// Available internships data
-const internships = ref([
-  {
-    id: 1,
-    title: 'Software Development Intern',
-    company: 'Tech Solutions Inc.',
-    location: 'New York, NY (Hybrid)',
-    match: 92,
-    recommended: true,
-    description: 'Join our dynamic team as a Software Development Intern and contribute to cutting-edge projects. You will gain hands-on experience in full-stack development, working with experienced engineers to design, implement, and test software solutions. This internship offers a unique opportunity to learn industry best practices and make a tangible impact.',
-    skills: ['Python', 'React', 'SQL', 'AWS', 'Machine Learning'],
-    type: 'Full-time',
-    duration: '6 months',
-    posted: '2 days ago',
-    responsibilities: [
-      'Assist in developing and maintaining web applications using Python and React.',
-      'Participate in code reviews and debugging sessions.',
-      'Contribute to the design and architecture of new features.',
-      'Document technical specifications and application functionality.'
-    ],
-    requirements: [
-      'Currently pursuing a Bachelor\'s or Master\'s degree in Computer Science or a related field.',
-      'Proficiency in at least one programming language (Python, Java, C++).',
-      'Familiarity with web development frameworks (e.g., React, Django) and database technologies (SQL).',
-      'Strong problem-solving skills and ability to work in a team environment.',
-      'Excellent communication skills, both written and verbal.'
-    ],
-    schedule: {
-      startDate: 'June 23, 2024',
-      endDate: 'August 30, 2024',
-      dailyHours: 'Hybrid (3 days in-office, 2 days remote)',
-      totalHours: '400 hours required'
-    },
-    aboutCompany: 'Tech Solutions Inc. is a leading innovator in cloud-based software services, empowering businesses globally with scalable and secure solutions. We foster a culture of creativity, collaboration, and continuous learning, driving technological advancements that shape the future.',
-    mission: 'Our mission is to build intelligent software that simplifies complex processes and enhances user experience. Join us to be part of team that\'s building the next generation of enterprise applications.',
-    compatibility: {
-      score: 92,
-      matches: ['Python (Matched)', 'React (Matched)', 'SQL (Matched)'],
-      missing: ['AWS (Missing)', 'Machine Learning (Missing)']
-    }
-  },
-  {
-    id: 2,
-    title: 'Data Analyst Intern',
-    company: 'Innovate Corp.',
-    location: 'New York, NY',
-    match: 91,
-    recommended: true,
-    description: 'Join Our dynamic team to develop innovative software solutions. You\'ll work on cutting-edge projects and contribute the projects.',
-    skills: ['Python', 'SQL', 'Machine Learning', 'Excel'],
-    type: 'Full-time',
-    duration: '4 months',
-    posted: '3 days ago',
-    responsibilities: [
-      'Analyze large datasets to identify trends and patterns.',
-      'Create data visualizations and reports.',
-      'Support business decision-making with data insights.',
-      'Collaborate with cross-functional teams.'
-    ],
-    requirements: [
-      'Currently pursuing a degree in Data Science, Statistics, or related field.',
-      'Proficiency in Python and SQL.',
-      'Experience with data visualization tools.',
-      'Strong analytical and problem-solving skills.'
-    ],
-    schedule: {
-      startDate: 'July 1, 2024',
-      endDate: 'October 31, 2024',
-      dailyHours: 'Full-time (40 hours/week)',
-      totalHours: '320 hours required'
-    },
-    aboutCompany: 'Innovate Corp. is a technology company focused on data-driven solutions.',
-    mission: 'We help businesses make better decisions through advanced analytics.',
-    compatibility: {
-      score: 91,
-      matches: ['Python (Matched)', 'SQL (Matched)'],
-      missing: ['Machine Learning (Missing)', 'Excel (Missing)']
-    }
-  },
-  {
-    id: 3,
-    title: 'UI/UX Designer Intern',
-    company: 'Innovate Corp.',
-    location: 'New York, NY',
-    match: 82,
-    recommended: true,
-    description: 'Join Our dynamic team to develop innovative software solutions. You\'ll work on cutting-edge projects and contribute the projects.',
-    skills: ['Figma', 'Prototyping', 'Design Systems'],
-    type: 'Full-time',
-    duration: '5 months',
-    posted: '1 week ago',
-    responsibilities: [
-      'Design user interfaces for web and mobile applications.',
-      'Create wireframes and prototypes.',
-      'Conduct user research and usability testing.',
-      'Collaborate with development teams.'
-    ],
-    requirements: [
-      'Currently pursuing a degree in Design, HCI, or related field.',
-      'Proficiency in design tools like Figma or Sketch.',
-      'Understanding of user-centered design principles.',
-      'Strong portfolio showcasing design work.'
-    ],
-    schedule: {
-      startDate: 'June 15, 2024',
-      endDate: 'November 15, 2024',
-      dailyHours: 'Full-time (40 hours/week)',
-      totalHours: '400 hours required'
-    },
-    aboutCompany: 'Innovate Corp. is a technology company focused on user experience.',
-    mission: 'We create intuitive and beautiful digital experiences.',
-    compatibility: {
-      score: 82,
-      matches: ['Figma (Matched)', 'Prototyping (Matched)'],
-      missing: ['Design Systems (Missing)']
-    }
-  },
-  {
-    id: 4,
-    title: 'Business Development Intern',
-    company: 'Innovate Corp.',
-    location: 'New York, NY',
-    match: 87,
-    recommended: true,
-    description: 'Join Our dynamic team to develop innovative software solutions. You\'ll work on cutting-edge projects and contribute the projects.',
-    skills: ['Python', 'AWS', 'Machine Learning', 'Django'],
-    type: 'Full-time',
-    duration: '6 months',
-    posted: '5 days ago',
-    responsibilities: [
-      'Support business development initiatives.',
-      'Conduct market research and analysis.',
-      'Assist in client presentations and proposals.',
-      'Help identify new business opportunities.'
-    ],
-    requirements: [
-      'Currently pursuing a degree in Business, Marketing, or related field.',
-      'Strong communication and presentation skills.',
-      'Analytical mindset with attention to detail.',
-      'Interest in technology and business strategy.'
-    ],
-    schedule: {
-      startDate: 'July 15, 2024',
-      endDate: 'January 15, 2025',
-      dailyHours: 'Full-time (40 hours/week)',
-      totalHours: '480 hours required'
-    },
-    aboutCompany: 'Innovate Corp. is a growing technology company.',
-    mission: 'We help businesses grow through innovative solutions.',
-    compatibility: {
-      score: 87,
-      matches: ['Business Strategy (Matched)', 'Communication (Matched)'],
-      missing: ['Market Research (Missing)']
-    }
+// Internships from Firebase
+type InternshipDisplay = InternshipRecord & {
+  company?: string
+  skills?: string[]
+  match?: number
+  recommended?: boolean
+  responsibilities?: string[]
+  requirements?: string[]
+  schedule?: { startDate?: string; endDate?: string; dailyHours?: string; totalHours?: string }
+  aboutCompany?: string
+  mission?: string
+  compatibility?: { score: number; matches: string[]; missing: string[] }
+}
+
+const internships = ref<InternshipDisplay[]>([])
+let unsub: (() => void) | null = null
+
+onMounted(() => {
+  unsub = subscribeActiveInternships((items) => {
+    internships.value = items.map((i) => ({
+      ...i,
+      company: i.companyName,
+      skills: i.requirements || [],
+      match: 85,
+      recommended: false,
+      responsibilities: i.description ? [i.description] : [],
+      requirements: i.requirements || [],
+      schedule: {
+        startDate: 'TBD',
+        endDate: 'TBD',
+        dailyHours: i.type || 'Full-time',
+        totalHours: i.duration || 'TBD'
+      },
+      aboutCompany: i.description || 'No description available.',
+      mission: 'Join our team and grow your skills.',
+      compatibility: {
+        score: 85,
+        matches: (i.requirements || []).slice(0, 3).map((s) => `${s} (Matched)`),
+        missing: []
+      }
+    }))
+  })
+})
+
+onUnmounted(() => {
+  if (unsub) unsub()
+})
+
+// Filtered internships - reactive filtering
+const filteredInternships = computed(() => {
+  let result = internships.value
+
+  if (searchQuery.value.trim()) {
+    const q = searchQuery.value.toLowerCase().trim()
+    result = result.filter(
+      (i) =>
+        (i.title || '').toLowerCase().includes(q) ||
+        (i.companyName || '').toLowerCase().includes(q) ||
+        (i.description || '').toLowerCase().includes(q) ||
+        (i.requirements || []).some((r) => r.toLowerCase().includes(q))
+    )
   }
-])
+
+  if (locationFilter.value.trim()) {
+    const loc = locationFilter.value.toLowerCase().trim()
+    result = result.filter((i) => (i.location || '').toLowerCase().includes(loc))
+  }
+
+  if (skillsFilter.value.length > 0) {
+    result = result.filter((i) =>
+      skillsFilter.value.some((s) =>
+        (i.requirements || []).some((r) => r.toLowerCase().includes(s.toLowerCase()))
+      )
+    )
+  }
+
+  if (selectedCompanyTypes.value.length > 0) {
+    result = result.filter((i) => {
+      const cn = (i.companyName || '').toLowerCase()
+      return selectedCompanyTypes.value.some((t) => cn.includes(t.toLowerCase()))
+    })
+  }
+
+  if (duration.value) {
+    result = result.filter((i) => (i.duration || '').toLowerCase().includes(duration.value.toLowerCase()))
+  }
+
+  return result
+})
+
+function addSkillFilter() {
+  const skill = newSkillFilter.value.trim()
+  if (skill && !skillsFilter.value.includes(skill)) {
+    skillsFilter.value = [...skillsFilter.value, skill]
+    newSkillFilter.value = ''
+  }
+}
 
 function removeFilter(filter: string) {
   const index = selectedFilters.value.indexOf(filter)
@@ -286,7 +232,7 @@ function removeSkillFilter(skill: string) {
 }
 
 function applyFilters() {
-  console.log('Applying filters...')
+  // Filters are applied reactively via filteredInternships computed
 }
 
 function clearAllFilters() {
@@ -294,18 +240,34 @@ function clearAllFilters() {
   skillsFilter.value = []
   locationFilter.value = ''
   selectedCompanyTypes.value = []
+  duration.value = ''
+  searchQuery.value = ''
+  availabilityStart.value = '2024-06-01'
+  availabilityEnd.value = '2024-12-31'
 }
 
-function quickApply(internshipId: number) {
-  const internship = internships.value.find(i => i.id === internshipId)
+function quickApply(internshipId: string | number) {
+  const role = authStore.user?.role
+  if (role !== 'student') {
+    Swal.fire({
+      icon: 'warning',
+      title: 'Students Only',
+      text: role === 'guest' || !authStore.user
+        ? 'Please log in as a student to apply for internships.'
+        : 'Only students can apply for internships.',
+      confirmButtonColor: '#2563eb',
+    })
+    return
+  }
+  const internship = internships.value.find((i) => i.id === internshipId || String(i.id) === String(internshipId))
   if (internship) {
     selectedInternship.value = internship
     showApplicationModal.value = true
   }
 }
 
-function viewDetails(internshipId: number) {
-  const internship = internships.value.find(i => i.id === internshipId)
+function viewDetails(internshipId: string | number) {
+  const internship = internships.value.find((i) => i.id === internshipId || String(i.id) === String(internshipId))
   if (internship) {
     selectedInternship.value = internship
     showDetailsModal.value = true
@@ -344,9 +306,52 @@ function removeDocument(docIndex: number) {
   }
 }
 
-function submitApplication() {
-  console.log('Submitting application for:', selectedInternship.value?.title)
-  closeModal()
+async function submitApplicationWithBypass() {
+  const uid = authStore.user?.uid
+  const internship = selectedInternship.value
+  if (!uid || !internship) return
+  if (authStore.user?.role !== 'student') {
+    await Swal.fire({ icon: 'warning', title: 'Students Only', text: 'Only students can apply.' })
+    return
+  }
+  submittingApplication.value = true
+  try {
+    let companyId = internship.companyId
+    if (!companyId && internship.id) {
+      const full = await getInternship(String(internship.id))
+      companyId = full?.companyId || ''
+    }
+    const profile = authStore.user?.profile as Record<string, unknown> | undefined
+    await submitApplication({
+      studentId: uid,
+      internshipId: String(internship.id),
+      companyId: companyId || '',
+      internshipTitle: internship.title || '',
+      studentName: authStore.user?.displayName || authStore.user?.email || 'Student',
+      studentEmail: authStore.user?.email || '',
+      studentCourse: (profile?.course as string) || (profile?.program as string) || '',
+      status: 'pending',
+      resume: null,
+      documents: null,
+      documentsPending: true,
+    })
+    await Swal.fire({
+      icon: 'success',
+      title: 'Application Submitted',
+      text: `Your application for "${internship.title}" has been saved. You can upload documents later from your profile.`,
+      confirmButtonColor: '#2563eb',
+    })
+    closeModal()
+  } catch (err) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Application Failed',
+      text: err instanceof Error ? err.message : 'Could not submit application. Please try again.',
+      confirmButtonColor: '#2563eb',
+    })
+  } finally {
+    submittingApplication.value = false
+  }
 }
 
 function goToPreviousStep() {
@@ -359,8 +364,9 @@ function reviewApplication() {
   showReviewModal.value = true
 }
 
-function getInitials(company: string): string {
-  return company.split(' ').map(word => word[0]).join('').toUpperCase().slice(0, 2)
+function getInitials(company: string | undefined): string {
+  if (!company) return 'CO'
+  return company.split(' ').map((word) => word[0]).join('').toUpperCase().slice(0, 2)
 }
 </script>
 
@@ -400,7 +406,17 @@ function getInitials(company: string): string {
         <!-- Skills Filter -->
         <div class="filter-group">
           <label class="filter-label">Skills</label>
-          <div class="selected-skills">
+          <div class="skill-filter-add">
+            <input
+              v-model="newSkillFilter"
+              type="text"
+              placeholder="Add skill (e.g. Python)"
+              class="filter-input"
+              @keyup.enter="addSkillFilter"
+            />
+            <button @click="addSkillFilter" class="add-skill-btn" type="button">+</button>
+          </div>
+          <div class="selected-skills" v-if="skillsFilter.length > 0">
             <div v-for="skill in skillsFilter" :key="skill" class="skill-tag">
               <span>{{ skill }}</span>
               <button @click="removeSkillFilter(skill)" class="remove-tag">×</button>
@@ -438,15 +454,17 @@ function getInitials(company: string): string {
         <div class="filter-group">
           <label class="filter-label">Duration</label>
           <select v-model="duration" class="filter-select">
-            <option value="1-3 Months">1-3 Months</option>
-            <option value="4-6 Months">4-6 Months</option>
-            <option value="6+ Months">6+ Months</option>
+            <option value="">All Durations</option>
+            <option value="1-3">1-3 Months</option>
+            <option value="4-6">4-6 Months</option>
+            <option value="6+">6+ Months</option>
+            <option value="weeks">Weeks</option>
           </select>
         </div>
 
         <!-- Filter Actions -->
         <div class="filter-actions">
-          <button @click="applyFilters" class="apply-btn" disabled title="Coming soon">Apply filters</button>
+          <button @click="applyFilters" class="apply-btn">Apply filters</button>
           <button @click="clearAllFilters" class="clear-btn">Clear All</button>
         </div>
       </div>
@@ -470,14 +488,14 @@ function getInitials(company: string): string {
 
         <!-- Internships Grid -->
         <div class="internships-grid">
-          <div v-for="internship in internships" :key="internship.id" class="internship-card">
+          <div v-for="internship in filteredInternships" :key="internship.id" class="internship-card">
             <div class="card-header">
               <div class="company-avatar">
-                <span class="company-initials">{{ getInitials(internship.company) }}</span>
+                <span class="company-initials">{{ getInitials(internship.company || internship.companyName) }}</span>
               </div>
               <div class="internship-info">
                 <h3 class="internship-title">{{ internship.title }}</h3>
-                <p class="company-name">{{ internship.company }}</p>
+                <p class="company-name">{{ internship.company || internship.companyName }}</p>
                 <div class="location-info">
                   <MapPinIcon class="location-icon-svg" />
                   <span class="location-text">{{ internship.location }}</span>
@@ -522,11 +540,11 @@ function getInitials(company: string): string {
         <div class="modal-header">
           <div class="internship-header-info">
             <div class="company-avatar large">
-              <span class="company-initials">{{ getInitials(selectedInternship.company) }}</span>
+              <span class="company-initials">{{ getInitials(selectedInternship.company || selectedInternship.companyName) }}</span>
             </div>
-            <div class="header-details">
+              <div class="header-details">
               <h2 class="modal-title">{{ selectedInternship.title }}</h2>
-              <p class="modal-company">{{ selectedInternship.company }}</p>
+              <p class="modal-company">{{ selectedInternship.company || selectedInternship.companyName }}</p>
               <div class="modal-location">
                 <MapPinIcon class="location-icon-svg" />
                 <span>{{ selectedInternship.location }}</span>
@@ -550,7 +568,7 @@ function getInitials(company: string): string {
               <div class="section">
                 <h3 class="section-title">Responsibilities</h3>
                 <ul class="responsibility-list">
-                  <li v-for="responsibility in selectedInternship.responsibilities" :key="responsibility" class="responsibility-item">
+                  <li v-for="responsibility in (selectedInternship.responsibilities || [])" :key="responsibility" class="responsibility-item">
                     <ChevronRightIcon class="bullet-icon-svg" />
                     {{ responsibility }}
                   </li>
@@ -561,7 +579,7 @@ function getInitials(company: string): string {
               <div class="section">
                 <h3 class="section-title">Requirements</h3>
                 <ul class="requirement-list">
-                  <li v-for="requirement in selectedInternship.requirements" :key="requirement" class="requirement-item">
+                  <li v-for="requirement in (selectedInternship.requirements || [])" :key="requirement" class="requirement-item">
                     <DocumentTextIcon class="bullet-icon-svg" />
                     {{ requirement }}
                   </li>
@@ -569,27 +587,27 @@ function getInitials(company: string): string {
               </div>
 
               <!-- Schedule -->
-              <div class="section">
+              <div class="section" v-if="selectedInternship.schedule">
                 <h3 class="section-title">Schedule</h3>
                 <div class="schedule-details">
                   <div class="schedule-item">
-                    <strong>Start Date:</strong> {{ selectedInternship.schedule.startDate }}
+                    <strong>Start Date:</strong> {{ selectedInternship.schedule?.startDate || 'TBD' }}
                   </div>
                   <div class="schedule-item">
-                    <strong>End Date:</strong> {{ selectedInternship.schedule.endDate }}
+                    <strong>End Date:</strong> {{ selectedInternship.schedule?.endDate || 'TBD' }}
                   </div>
                   <div class="schedule-item">
-                    <strong>Daily Hours:</strong> {{ selectedInternship.schedule.dailyHours }}
+                    <strong>Type:</strong> {{ selectedInternship.schedule?.dailyHours || selectedInternship.type || 'Full-time' }}
                   </div>
                   <div class="schedule-item">
-                    <strong>Total Hours:</strong> {{ selectedInternship.schedule.totalHours }}
+                    <strong>Duration:</strong> {{ selectedInternship.schedule?.totalHours || selectedInternship.duration || 'TBD' }}
                   </div>
                 </div>
               </div>
 
               <!-- About Company -->
               <div class="section">
-                <h3 class="section-title">About {{ selectedInternship.company }}</h3>
+                <h3 class="section-title">About {{ selectedInternship.company || selectedInternship.companyName }}</h3>
                 <p class="section-content">{{ selectedInternship.aboutCompany }}</p>
                 <p class="section-content">{{ selectedInternship.mission }}</p>
               </div>
@@ -601,16 +619,16 @@ function getInitials(company: string): string {
               <div class="compatibility-card">
                 <div class="compatibility-header">
                   <h3 class="compatibility-title">Your Compatibility</h3>
-                  <div class="compatibility-score">{{ selectedInternship.compatibility.score }}% Match</div>
+                  <div class="compatibility-score">{{ selectedInternship.compatibility?.score || 85 }}% Match</div>
                 </div>
                 <p class="compatibility-subtitle">Based on your profile skills and course</p>
                 
                 <div class="skills-match">
-                  <div v-for="skill in selectedInternship.compatibility.matches" :key="skill" class="skill-match-item matched">
+                  <div v-for="skill in (selectedInternship.compatibility?.matches || [])" :key="skill" class="skill-match-item matched">
                     <CheckIcon class="match-icon-svg" />
                     <span class="skill-text">{{ skill }}</span>
                   </div>
-                  <div v-for="skill in selectedInternship.compatibility.missing" :key="skill" class="skill-match-item missing">
+                  <div v-for="skill in (selectedInternship.compatibility?.missing || [])" :key="skill" class="skill-match-item missing">
                     <span class="match-icon">○</span>
                     <span class="skill-text">{{ skill }}</span>
                   </div>
@@ -642,7 +660,7 @@ function getInitials(company: string): string {
             <img src="/icons/logo-main.png" alt="Logo" class="app-logo" />
           </div>
           <div class="header-right">
-            <span class="company-name">Acme Corp. Company</span>
+            <span class="company-name">{{ selectedInternship.company || selectedInternship.companyName }}</span>
             <div class="user-avatar">AC</div>
           </div>
         </div>
@@ -832,6 +850,9 @@ function getInitials(company: string): string {
         <!-- Application Footer -->
         <div class="application-footer">
           <button @click="goToPreviousStep" class="footer-btn secondary" disabled title="Coming soon">Previous: Personal Info</button>
+          <button @click="submitApplicationWithBypass" class="footer-btn bypass" :disabled="submittingApplication">
+            {{ submittingApplication ? 'Submitting...' : 'Apply Without Documents' }}
+          </button>
           <button @click="reviewApplication" class="footer-btn primary" disabled title="Coming soon">Review Application →</button>
         </div>
       </div>
@@ -1270,6 +1291,32 @@ function getInitials(company: string): string {
 
 .date-separator {
   color: #6b7280;
+}
+
+.skill-filter-add {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.skill-filter-add .filter-input {
+  flex: 1;
+}
+
+.add-skill-btn {
+  width: 36px;
+  height: 36px;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 18px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.add-skill-btn:hover {
+  background: #2563eb;
 }
 
 .checkbox-group {
@@ -2592,6 +2639,16 @@ function getInitials(company: string): string {
 .footer-btn.secondary:hover {
   background: #f3f4f6;
   color: #374151;
+}
+
+.footer-btn.bypass {
+  background: #10b981;
+  color: white;
+  border: none;
+}
+
+.footer-btn.bypass:hover:not(:disabled) {
+  background: #059669;
 }
 
 .footer-btn.primary {

@@ -6,8 +6,12 @@ const router = useRouter()
 const authStore = useAuthStore()
 
 async function handleLogout() {
-  await authStore.logout()
-  router.push('/admin/login')
+  try {
+    await authStore.logout()
+  } catch (e) {
+    console.warn('Logout error:', e)
+  }
+  router.push('/')
 }
 </script>
 

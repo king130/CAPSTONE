@@ -97,6 +97,12 @@ h1 {
   color: #4b5563;
 }
 
+.field-hint {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 4px;
+}
+
 .field > input {
   padding: 8px 10px;
   border-radius: 6px;

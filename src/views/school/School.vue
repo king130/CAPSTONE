@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import SchoolSidebar from '../../components/SchoolSidebar.vue'
 import FloatingChatWidget from '../../components/FloatingChatWidget.vue'
 import { useAuthStore } from '@/stores/auth'
+import { subscribeSchoolStudents, addSchoolStudent, removeSchoolStudent, type SchoolStudentRecord } from '@/services/schoolStudents'
+import { subscribeSchoolContracts, acceptContract, rejectContract, type ContractRecord } from '@/services/contracts'
+import { ensurePublicProfile } from '@/services/profilesPublic'
 import Swal from 'sweetalert2'
-import { BellIcon } from '@heroicons/vue/24/outline'
+import { BellIcon, PlusIcon, TrashIcon, EnvelopeIcon } from '@heroicons/vue/24/outline'
 
 const authStore = useAuthStore()
 const schoolName = computed(() => {
@@ -15,7 +19,12 @@ const schoolName = computed(() => {
 const currentView = ref('dashboard')
 const activeSettingsTab = ref('account')
 
+const router = useRouter()
 const handleMenuClick = (item: string) => {
+  if (item === 'profile') {
+    router.push('/profile')
+    return
+  }
   currentView.value = item
 }
 
@@ -582,6 +591,121 @@ const requiredDocumentsList = ref([
   { id: 5, name: 'Transcript of Records', required: true }
 ])
 
+// Student Emails (school-distributed Gmail) - from Firebase
+const schoolStudentEmails = ref<SchoolStudentRecord[]>([])
+let unsubSchoolStudents: (() => void) | null = null
+const newStudentEmail = ref('')
+const newStudentName = ref('')
+const newStudentCourse = ref('')
+const newStudentYearLevel = ref('')
+const addingStudentEmail = ref(false)
+
+const schoolContracts = ref<ContractRecord[]>([])
+let unsubSchoolContracts: (() => void) | null = null
+
+onMounted(() => {
+  const uid = authStore.user?.uid
+  if (uid && authStore.user?.role === 'school') {
+    ensurePublicProfile(uid, {
+      displayName: schoolName.value,
+      role: 'school',
+      orgName: schoolName.value,
+      email: authStore.user?.email,
+    }).catch(() => {})
+    unsubSchoolStudents = subscribeSchoolStudents(uid, (items) => {
+      schoolStudentEmails.value = items
+    })
+    unsubSchoolContracts = subscribeSchoolContracts(uid, (items) => {
+      schoolContracts.value = items
+    })
+  }
+})
+
+onUnmounted(() => {
+  if (unsubSchoolStudents) unsubSchoolStudents()
+  if (unsubSchoolContracts) unsubSchoolContracts()
+})
+
+async function handleAcceptContract(c: ContractRecord) {
+  try {
+    await acceptContract(c.id)
+    Swal.fire({ icon: 'success', title: 'Contract Accepted', text: 'The contract is now active.' })
+  } catch (e) {
+    Swal.fire({ icon: 'error', title: 'Error', text: e instanceof Error ? e.message : 'Failed to accept.' })
+  }
+}
+
+async function handleRejectContract(c: ContractRecord) {
+  const { value: reason } = await Swal.fire({
+    title: 'Reject Contract',
+    input: 'textarea',
+    inputLabel: 'Reason (optional)',
+    inputPlaceholder: 'Enter reason for rejection...',
+    showCancelButton: true,
+  })
+  try {
+    await rejectContract(c.id, reason || undefined)
+    Swal.fire({ icon: 'success', title: 'Contract Rejected', text: 'The company has been notified.' })
+  } catch (e) {
+    Swal.fire({ icon: 'error', title: 'Error', text: e instanceof Error ? e.message : 'Failed to reject.' })
+  }
+}
+
+async function addStudentEmail() {
+  const uid = authStore.user?.uid
+  const email = newStudentEmail.value.trim()
+  if (!uid || !email) return
+  addingStudentEmail.value = true
+  try {
+    await addSchoolStudent(uid, email, {
+      studentName: newStudentName.value.trim() || undefined,
+      course: newStudentCourse.value.trim() || undefined,
+      yearLevel: newStudentYearLevel.value.trim() || undefined,
+    })
+    await Swal.fire({
+      icon: 'success',
+      title: 'Student Email Added',
+      text: `${email} can now register and log in as a student. Share this email with the student.`,
+      confirmButtonColor: '#2563eb',
+    })
+    newStudentEmail.value = ''
+    newStudentName.value = ''
+    newStudentCourse.value = ''
+    newStudentYearLevel.value = ''
+  } catch (err) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Failed',
+      text: err instanceof Error ? err.message : 'Could not add student email.',
+      confirmButtonColor: '#2563eb',
+    })
+  } finally {
+    addingStudentEmail.value = false
+  }
+}
+
+async function removeStudentEmail(record: SchoolStudentRecord) {
+  const result = await Swal.fire({
+    icon: 'warning',
+    title: 'Remove Student Email?',
+    text: `${record.email} will no longer be able to register as a student.`,
+    showCancelButton: true,
+    confirmButtonColor: '#2563eb',
+    cancelButtonColor: '#6b7280',
+  })
+  if (!result.isConfirmed) return
+  try {
+    await removeSchoolStudent(record.id)
+    await Swal.fire({ icon: 'success', title: 'Removed', confirmButtonColor: '#2563eb' })
+  } catch (err) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Failed',
+      text: err instanceof Error ? err.message : 'Could not remove.',
+      confirmButtonColor: '#2563eb',
+    })
+  }
+}
 
 </script>
 
@@ -1639,9 +1763,67 @@ const requiredDocumentsList = ref([
             <div class="company-sidebar-actions">
               <button class="btn-edit-company">📝 Edit Company Details</button>
               <button class="btn-view-moas">📄 View All MOAs</button>
+          </div>
+          </div>
+          </div>
+      </div>
+
+      <div v-else-if="currentView === 'contracts'">
+        <header class="top-header">
+          <div class="header-left">
+            <img src="/icons/icon-docs.png" alt="Contracts" class="header-icon-img" />
+            <h1>Company Contract Requests</h1>
+          </div>
+          <div class="header-right">
+            <BellIcon class="notification-icon-bell" />
+            <span class="school-name">{{ schoolName }}</span>
+            <div class="avatar">AC</div>
+          </div>
+        </header>
+        <main class="main-content">
+          <div class="student-emails-section">
+            <h2 class="section-title">Incoming Contract Requests</h2>
+            <p class="section-subtitle">Review and accept or reject contract requests from companies.</p>
+            <div v-if="schoolContracts.length === 0" class="empty-state">
+              No contract requests yet.
+            </div>
+            <div v-else class="contracts-list">
+              <div v-for="c in schoolContracts" :key="c.id" class="contract-card">
+                <div class="contract-doc-header">
+                  <span class="contract-doc-title">MEMORANDUM OF AGREEMENT</span>
+                  <span class="contract-doc-parties">{{ c.companyName }} ↔ {{ c.schoolName }}</span>
+                </div>
+                <div class="contract-info">
+                  <div class="contract-header-row">
+                    <h3>{{ c.companyName }}</h3>
+                    <span class="status-badge" :class="(c.status || 'pending').toLowerCase()">{{ c.status }}</span>
+                  </div>
+                  <p class="contract-type">{{ c.contractType || 'Memorandum of Agreement (MOA)' }}</p>
+                  <p v-if="c.purpose" class="contract-purpose">{{ c.purpose }}</p>
+                  <div v-if="c.startDate || c.endDate" class="contract-dates">
+                    <strong>Duration:</strong> {{ c.startDate && c.endDate ? `${c.startDate} – ${c.endDate}` : (c.startDate || c.endDate || '—') }}
+                  </div>
+                  <div v-if="c.companyResponsibilities" class="contract-section">
+                    <strong>Company Responsibilities:</strong>
+                    <p>{{ c.companyResponsibilities }}</p>
+                  </div>
+                  <div v-if="c.schoolResponsibilities" class="contract-section">
+                    <strong>School Responsibilities:</strong>
+                    <p>{{ c.schoolResponsibilities }}</p>
+                  </div>
+                  <div v-if="c.terms" class="contract-section">
+                    <strong>Terms & Conditions:</strong>
+                    <p>{{ c.terms }}</p>
+                  </div>
+                </div>
+                <div v-if="c.status === 'pending'" class="contract-actions">
+                  <button class="btn-approve" @click="handleAcceptContract(c)">Accept Contract</button>
+                  <button class="btn-reject" @click="handleRejectContract(c)">Reject</button>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
+        </main>
       </div>
 
       <div v-else-if="currentView === 'submit-report'">
@@ -2103,6 +2285,90 @@ const requiredDocumentsList = ref([
                 </tr>
               </tbody>
             </table>
+          </div>
+        </main>
+      </div>
+
+      <!-- Student Emails: School-distributed Gmail for student login -->
+      <div v-else-if="currentView === 'student-emails'">
+        <header class="top-header">
+          <div class="header-left">
+            <img src="/icons/icon-student.png" alt="Student Emails" class="header-icon-img" />
+            <h1>Student Emails</h1>
+          </div>
+          <div class="header-right">
+            <BellIcon class="notification-icon-bell" />
+            <span class="school-name">{{ schoolName }}</span>
+            <div class="avatar">AC</div>
+          </div>
+        </header>
+        <main class="main-content">
+          <div class="student-emails-section">
+            <div class="section-card">
+              <h2 class="section-title">Distribute Student Gmail</h2>
+              <p class="section-subtitle">Add the email addresses (Gmail) you assign to students. Students will use these to register and log in to the system.</p>
+              <div class="add-student-form">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Email (Gmail)</label>
+                    <input v-model="newStudentEmail" type="email" placeholder="student@school.edu.ph" class="form-input" />
+                  </div>
+                  <div class="form-group">
+                    <label>Student Name (optional)</label>
+                    <input v-model="newStudentName" type="text" placeholder="Juan Dela Cruz" class="form-input" />
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Course (optional)</label>
+                    <input v-model="newStudentCourse" type="text" placeholder="BS Computer Science" class="form-input" />
+                  </div>
+                  <div class="form-group">
+                    <label>Year Level (optional)</label>
+                    <input v-model="newStudentYearLevel" type="text" placeholder="4th Year" class="form-input" />
+                  </div>
+                </div>
+                <button @click="addStudentEmail" class="btn-add-email" :disabled="!newStudentEmail.trim() || addingStudentEmail">
+                  <PlusIcon class="icon-sm" /> {{ addingStudentEmail ? 'Adding...' : 'Add Student Email' }}
+                </button>
+              </div>
+            </div>
+            <div class="section-card">
+              <h2 class="section-title">Student Email List</h2>
+              <p class="section-subtitle">Students with these emails can register and log in. Share the email with each student.</p>
+              <div v-if="schoolStudentEmails.length === 0" class="empty-state">
+                <EnvelopeIcon class="empty-icon" />
+                <p>No student emails added yet. Add emails above to get started.</p>
+              </div>
+              <div v-else class="emails-table-wrap">
+                <table class="emails-table">
+                  <thead>
+                    <tr>
+                      <th>EMAIL</th>
+                      <th>NAME</th>
+                      <th>COURSE</th>
+                      <th>YEAR LEVEL</th>
+                      <th>STATUS</th>
+                      <th>ACTIONS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="s in schoolStudentEmails" :key="s.id">
+                      <td>{{ s.email }}</td>
+                      <td>{{ s.studentName || '—' }}</td>
+                      <td>{{ s.course || '—' }}</td>
+                      <td>{{ s.yearLevel || '—' }}</td>
+                      <td><span class="status-badge" :class="s.status">{{ s.status }}</span></td>
+                      <td>
+                        <button @click="removeStudentEmail(s)" class="btn-remove" title="Remove">
+                          <TrashIcon class="icon-sm" />
+                        </button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </main>
       </div>
@@ -3028,10 +3294,74 @@ const requiredDocumentsList = ref([
     </div>
 
     <!-- Floating Chat Widget -->
-    <FloatingChatWidget />
+    <FloatingChatWidget userType="school" />
   </div>
 </template>
 
 <style scoped src="../../styles/School.css">
+</style>
+
+<style scoped>
+.contracts-list { display: flex; flex-direction: column; gap: 16px; }
+.contract-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 24px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+.contract-doc-header { padding-bottom: 12px; margin-bottom: 12px; border-bottom: 2px solid #e5e7eb; text-align: center; }
+.contract-doc-title { display: block; font-size: 0.75rem; font-weight: 700; letter-spacing: 1.5px; color: #374151; }
+.contract-doc-parties { display: block; font-size: 0.85rem; color: #6b7280; margin-top: 4px; }
+.contract-header-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.contract-info h3 { margin: 0; font-size: 1.125rem; font-weight: 600; color: #111827; }
+.contract-type { margin: 4px 0 8px 0; font-size: 0.8rem; font-weight: 600; color: #4b5563; text-transform: uppercase; letter-spacing: 0.5px; }
+.contract-purpose { margin: 0 0 12px 0; font-size: 0.95rem; color: #374151; line-height: 1.5; }
+.contract-dates { margin: 0 0 12px 0; font-size: 0.875rem; color: #6b7280; }
+.contract-section { margin: 0 0 12px 0; }
+.contract-section strong { display: block; font-size: 0.8rem; color: #6b7280; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+.contract-section p { margin: 0; font-size: 0.9rem; color: #374151; line-height: 1.5; white-space: pre-wrap; }
+.contract-info p { margin: 0 0 8px 0; font-size: 0.875rem; color: #6b7280; }
+.contract-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.contract-actions .btn-approve { padding: 8px 16px; background: #059669; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; }
+.contract-actions .btn-reject { padding: 8px 16px; background: #dc2626; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; }
+.status-badge { font-size: 0.75rem; padding: 4px 8px; border-radius: 6px; text-transform: capitalize; }
+.status-badge.pending { background: #fef3c7; color: #92400e; }
+.status-badge.active { background: #d1fae5; color: #065f46; }
+.status-badge.rejected { background: #fee2e2; color: #991b1b; }
+.empty-state { padding: 24px; text-align: center; color: #6b7280; }
+
+.student-emails-section { padding: 24px; }
+.student-emails-section .section-card {
+  background: white;
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+.student-emails-section .section-title { font-size: 1.25rem; font-weight: 600; margin: 0 0 8px 0; color: #111827; }
+.student-emails-section .section-subtitle { color: #6b7280; margin: 0 0 20px 0; font-size: 0.9rem; }
+.add-student-form .form-row { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+.add-student-form .form-group { flex: 1; min-width: 200px; }
+.add-student-form .form-group label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 6px; color: #374151; }
+.add-student-form .form-input { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.9rem; }
+.btn-add-email { display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer; }
+.btn-add-email:hover:not(:disabled) { background: #1d4ed8; }
+.btn-add-email:disabled { opacity: 0.6; cursor: not-allowed; }
+.icon-sm { width: 18px; height: 18px; }
+.empty-state { text-align: center; padding: 48px 24px; color: #6b7280; }
+.empty-state .empty-icon { width: 48px; height: 48px; margin-bottom: 16px; opacity: 0.5; }
+.emails-table-wrap { overflow-x: auto; }
+.emails-table { width: 100%; border-collapse: collapse; }
+.emails-table th, .emails-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+.emails-table th { font-size: 0.75rem; font-weight: 600; color: #6b7280; text-transform: uppercase; }
+.emails-table .status-badge { padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 500; }
+.emails-table .status-badge.pending { background: #dbeafe; color: #1e40af; }
+.emails-table .status-badge.registered { background: #d1fae5; color: #065f46; }
+.btn-remove { background: none; border: none; padding: 8px; cursor: pointer; color: #ef4444; border-radius: 6px; }
+.btn-remove:hover { background: #fef2f2; }
 </style>
 

@@ -32,6 +32,14 @@
       </div>
       <div
         class="nav-item"
+        :class="{ active: activeNav === 'contracts' }"
+        @click="setActiveNav('contracts')"
+      >
+        <img src="/icons/icon-docs.png" alt="Contracts" class="nav-icon-img" />
+        <span>Contracts</span>
+      </div>
+      <div
+        class="nav-item"
         :class="{ active: activeNav === 'journals' }"
         @click="setActiveNav('journals')"
       >
@@ -114,11 +122,15 @@ const setActiveNav = (nav: string) => {
 }
 
 const handleLogout = async () => {
-  await authStore.logout()
+  try {
+    await authStore.logout()
+  } catch (e) {
+    console.warn('Logout error (continuing anyway):', e)
+  }
   localStorage.removeItem('authToken')
   localStorage.removeItem('userSession')
   sessionStorage.clear()
-  router.push('/login')
+  router.push('/')
 }
 
 // Define emits

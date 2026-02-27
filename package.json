@@ -12,11 +12,16 @@
     "preview": "vite preview",
     "build-only": "vite build",
     "type-check": "vue-tsc --build",
-    "format": "prettier --write --experimental-cli src/"
+    "format": "prettier --write --experimental-cli src/",
+    "test": "vitest --run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui"
   },
   "dependencies": {
     "@heroicons/vue": "^2.2.0",
-    "firebase": "^10.14.1",
+    "firebase": "^12.9.0",
+    "firebase-admin": "^13.6.1",
+    "griddy-icons": "^0.1.2",
     "pinia": "^3.0.4",
     "sweetalert2": "^11.26.17",
     "vue": "^3.5.26",
@@ -27,8 +32,12 @@
     "@tsconfig/node24": "^24.0.3",
     "@types/node": "^24.10.4",
     "@vitejs/plugin-vue": "^6.0.3",
+    "@vitest/ui": "^4.0.18",
+    "@vue/test-utils": "^2.4.6",
     "@vue/tsconfig": "^0.8.1",
     "autoprefixer": "^10.4.23",
+    "fast-check": "^4.5.3",
+    "happy-dom": "^20.7.0",
     "npm-run-all2": "^8.0.4",
     "postcss": "^8.5.6",
     "prettier": "3.7.4",
@@ -36,6 +45,7 @@
     "typescript": "~5.9.3",
     "vite": "^7.3.0",
     "vite-plugin-vue-devtools": "^8.0.5",
+    "vitest": "^4.0.18",
     "vue-tsc": "^3.2.2"
   }
 }
