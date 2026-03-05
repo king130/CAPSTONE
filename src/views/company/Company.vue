@@ -1,15 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import Swal from 'sweetalert2'
+import { ref, computed } from 'vue'
 import Sidebar from '../../components/Sidebar.vue'
 import CompanySettings from '../../components/CompanySettings.vue'
 import FloatingChatWidget from '../../components/FloatingChatWidget.vue'
 import { useAuthStore } from '@/stores/auth'
-import { createInternship, subscribeCompanyInternships, type InternshipRecord } from '@/services/internships'
-import { subscribeCompanyApplications, subscribeCompanyApplicationsByInternships, updateApplicationStatus, type ApplicationRecord } from '@/services/applications'
-import { createContractRequest, subscribeCompanyContracts, type ContractRecord } from '@/services/contracts'
-import { ensurePublicProfile, listPublicProfiles, type PublicProfile } from '@/services/profilesPublic'
 import { 
   DocumentIcon, 
   ClockIcon, 
@@ -34,7 +28,8 @@ import {
   EnvelopeIcon,
   PhoneIcon,
   PencilIcon,
-  CloudIcon
+  CloudIcon,
+  InformationCircleIcon
 } from '@heroicons/vue/24/outline'
 
 const authStore = useAuthStore()
@@ -391,16 +386,9 @@ const formAllowance = ref('')
 
 const preferredCourse = ref('')
 const minimumGPA = ref('')
-const requiredSkills = ref('')
+const formSelectedSkills = ref([])
 const yearLevel = ref('')
 const additionalRequirements = ref('')
-const primaryResponsibilities = ref('')
-const learningObjectives = ref('')
-const projectsDeliverables = ref('')
-const applicationInstructions = ref('')
-const contactInfo = ref('')
-
-const submittingInternship = ref(false)
 
 function openCreateForm() {
   showCreateForm.value = true
@@ -1072,6 +1060,18 @@ function saveSettings() {
   // Add save logic here
   currentView.value = 'dashboard'
 }
+
+// Cleanup Tom Select on component unmount
+onUnmounted(() => {
+  if (tomSelectInstance) {
+    try {
+      tomSelectInstance.destroy()
+    } catch (e) {
+      // Ignore errors
+    }
+    tomSelectInstance = null
+  }
+})
 </script>
 
 <template>
@@ -1449,15 +1449,18 @@ function saveSettings() {
                   </select>
                 </div>
                 <div class="search-group">
-                  <span class="search-icon">
-                    <MagnifyingGlassIcon class="icon-size" />
-                  </span>
-                  <input
-                    type="text"
-                    v-model="searchStudent"
-                    placeholder="Search Student..."
-                    class="search-input-applications"
-                  />
+                  <label class="filter-label">Search:</label>
+                  <div class="search-input-wrapper">
+                    <span class="search-icon">
+                      <MagnifyingGlassIcon class="icon-size" />
+                    </span>
+                    <input
+                      type="text"
+                      v-model="searchStudent"
+                      placeholder="Search Student..."
+                      class="search-input-applications"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -2064,7 +2067,7 @@ function saveSettings() {
             <!-- Left Column: Form -->
             <div class="form-column">
               <!-- Internship Details Section -->
-              <div class="form-card">
+              <div class="form-card" v-if="currentFormStep === 1">
                 <div class="form-card-header">
                   <img src="/icons/icon-internship_details.png" alt="Internship Details" class="section-icon" />
                   <h2 class="section-title">Internship Details</h2>
@@ -2123,9 +2126,38 @@ function saveSettings() {
 
                 <div class="form-group">
                   <label class="form-label">Location <span class="required">*</span></label>
+                  <select class="form-select">
+                    <option value="">Select City/Municipality in Cavite</option>
+                    <option value="Bacoor">Bacoor City</option>
+                    <option value="Cavite City">Cavite City</option>
+                    <option value="Dasmariñas">Dasmariñas City</option>
+                    <option value="General Trias">General Trias City</option>
+                    <option value="Imus">Imus City</option>
+                    <option value="Tagaytay">Tagaytay City</option>
+                    <option value="Trece Martires">Trece Martires City</option>
+                    <option value="Alfonso">Alfonso</option>
+                    <option value="Amadeo">Amadeo</option>
+                    <option value="Carmona">Carmona</option>
+                    <option value="General Emilio Aguinaldo">General Emilio Aguinaldo</option>
+                    <option value="General Mariano Alvarez">General Mariano Alvarez</option>
+                    <option value="Indang">Indang</option>
+                    <option value="Kawit">Kawit</option>
+                    <option value="Magallanes">Magallanes</option>
+                    <option value="Maragondon">Maragondon</option>
+                    <option value="Mendez">Mendez</option>
+                    <option value="Naic">Naic</option>
+                    <option value="Noveleta">Noveleta</option>
+                    <option value="Rosario">Rosario</option>
+                    <option value="Silang">Silang</option>
+                    <option value="Tanza">Tanza</option>
+                    <option value="Ternate">Ternate</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">Barangay <span class="required">*</span></label>
                   <input
                     type="text"
-                    v-model="formLocation"
                     placeholder="e.g. Bacoor, Cavite, PH (for on-site/hybrid)"
                     class="form-input"
                   />
@@ -2169,39 +2201,37 @@ function saveSettings() {
                 </div>
                 <p class="section-description">Define the requirements and responsibilities for this internship position.</p>
                 
-                <div class="form-row">
-                  <div class="form-group half-width">
-                    <label class="form-label">Preferred Course/Program <span class="required">*</span></label>
-                    <input
-                      type="text"
-                      v-model="preferredCourse"
-                      placeholder="e.g. Computer Science, Information Technology"
-                      class="form-input"
-                    />
-                  </div>
-
-                  <div class="form-group half-width">
-                    <label class="form-label">Minimum GPA</label>
-                    <input
-                      type="number"
-                      v-model="minimumGPA"
-                      placeholder="e.g. 3.0"
-                      step="0.1"
-                      min="1.0"
-                      max="4.0"
-                      class="form-input"
-                    />
-                  </div>
+                <div class="form-group">
+                  <label class="form-label">Preferred Course/Program <span class="required">*</span></label>
+                  <select v-model="preferredCourse" class="form-select">
+                    <option value="">Select Course/Program</option>
+                    <option v-for="course in courseOptions" :key="course.value" :value="course.value">
+                      {{ course.label }}
+                    </option>
+                  </select>
                 </div>
 
-                <div class="form-group">
+                <div class="form-group" v-if="preferredCourse">
                   <label class="form-label">Required Skills & Technologies <span class="required">*</span></label>
-                  <textarea
-                    v-model="requiredSkills"
-                    placeholder="List the essential skills, programming languages, tools, or technologies required for this position"
-                    class="form-textarea"
-                    rows="4"
-                  ></textarea>
+                  <select 
+                    :key="preferredCourse"
+                    id="skills-select" 
+                    multiple 
+                    placeholder="Select required skills..."
+                    class="form-select-multiple"
+                  >
+                    <option v-for="skill in availableSkills" :key="skill" :value="skill">
+                      {{ skill }}
+                    </option>
+                  </select>
+                  <p class="form-hint">Select multiple skills that are required for this position</p>
+                </div>
+
+                <div class="form-group" v-if="!preferredCourse">
+                  <p class="info-message">
+                    <InformationCircleIcon class="info-icon" />
+                    Please select a course/program first to see available skills
+                  </p>
                 </div>
 
                 <div class="form-row">
@@ -2253,7 +2283,7 @@ function saveSettings() {
               <!-- Tasks & Responsibilities Section (Step 3) -->
               <div class="form-card" v-if="currentFormStep === 3">
                 <div class="form-card-header">
-                  <img src="/icons/icon-internship.png" alt="Tasks" class="section-icon" />
+                  <img src="/icons/icon-internship.png" alt="Tasks" class="section-icon blue-icon" />
                   <h2 class="section-title">Tasks & Responsibilities</h2>
                   <span class="status-badge in-progress">In Progress</span>
                 </div>
@@ -5034,7 +5064,7 @@ function saveSettings() {
 .applications-filters {
   display: flex;
   gap: 20px;
-  align-items: flex-end;
+  align-items: flex-start;
   flex-wrap: wrap;
 }
 
@@ -5042,12 +5072,15 @@ function saveSettings() {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .filter-label {
   font-size: 13px;
   font-weight: 600;
   color: #374151;
+  height: 18px;
+  line-height: 18px;
 }
 
 .filter-select {
@@ -5059,6 +5092,7 @@ function saveSettings() {
   color: #111827;
   cursor: pointer;
   min-width: 180px;
+  height: 42px;
   transition: all 0.2s;
 }
 
@@ -5069,9 +5103,16 @@ function saveSettings() {
 }
 
 .search-group {
-  position: relative;
   flex: 1;
   min-width: 250px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.search-input-wrapper {
+  position: relative;
+  width: 100%;
 }
 
 .search-icon {
@@ -5081,6 +5122,7 @@ function saveSettings() {
   transform: translateY(-50%);
   font-size: 18px;
   color: #6b7280;
+  pointer-events: none;
 }
 
 .search-input-applications {
@@ -5092,6 +5134,7 @@ function saveSettings() {
   background: #fff;
   transition: all 0.2s;
   box-sizing: border-box;
+  height: 42px;
 }
 
 .search-input-applications:focus {
@@ -6615,6 +6658,88 @@ function saveSettings() {
   line-height: 1.6;
   color: #374151;
   margin: 0;
+}
+
+/* Tom Select Styles */
+.form-select-multiple {
+  width: 100%;
+}
+
+.form-hint {
+  font-size: 13px;
+  color: #6b7280;
+  margin-top: 8px;
+  font-style: italic;
+}
+
+.info-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  color: #1e40af;
+  font-size: 14px;
+  margin: 0;
+}
+
+.info-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  stroke-width: 2;
+}
+
+/* Tom Select Custom Styling */
+:deep(.ts-wrapper) {
+  width: 100%;
+}
+
+:deep(.ts-control) {
+  padding: 8px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 14px;
+  background: #fff;
+  min-height: 42px;
+}
+
+:deep(.ts-control:focus) {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+:deep(.ts-dropdown) {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+:deep(.ts-dropdown .option) {
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+:deep(.ts-dropdown .option.active) {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+:deep(.item) {
+  background: #2563eb;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  margin: 2px;
+}
+
+:deep(.remove) {
+  border-left: 1px solid rgba(255, 255, 255, 0.3);
+  padding-left: 6px;
+  margin-left: 6px;
 }
 </style>
 

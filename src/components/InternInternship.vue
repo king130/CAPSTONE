@@ -805,7 +805,6 @@ function getInitials(company: string | undefined): string {
                 <div class="progress-items">
                   <div class="progress-item completed">
                     <CheckIcon class="progress-icon-svg" />
-                    <span class="progress-text">Personal Information</span>
                   </div>
                   <div class="progress-item current">
                     <DocumentTextIcon class="progress-icon-doc-svg" />
