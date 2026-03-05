@@ -1,10 +1,33 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, computed } from 'vue'
 import SchoolSidebar from '../../components/SchoolSidebar.vue'
 import FloatingChatWidget from '../../components/FloatingChatWidget.vue'
 import { useAuthStore } from '@/stores/auth'
 import Swal from 'sweetalert2'
-import { BellIcon } from '@heroicons/vue/24/outline'
+import {
+  BellIcon,
+  HandRaisedIcon,
+  MapPinIcon,
+  ExclamationTriangleIcon,
+  InformationCircleIcon,
+  CalendarIcon,
+  UsersIcon,
+  CurrencyDollarIcon,
+  ClipboardDocumentListIcon,
+  CheckCircleIcon,
+  CheckIcon,
+  XMarkIcon,
+  MagnifyingGlassIcon,
+  EnvelopeIcon,
+  EllipsisVerticalIcon,
+  PhotoIcon,
+  VideoCameraIcon,
+  DocumentIcon,
+  HandThumbUpIcon,
+  ChatBubbleLeftIcon,
+  ArrowPathRoundedSquareIcon,
+  ClockIcon,
+} from '@heroicons/vue/24/outline'
 
 const authStore = useAuthStore()
 const schoolName = computed(() => {
@@ -25,7 +48,90 @@ const setActiveSettingsTab = (tab: string) => {
 
 // Student sidebar state
 const showStudentSidebar = ref(false)
+
+// Upload document modal state
+const showUploadDocumentModal = ref(false)
+const schoolSelectedFiles = ref<File[]>([])
+
+function triggerSchoolFileInput() {
+  const fileInput = document.getElementById('school-file-upload-input') as HTMLInputElement
+  fileInput?.click()
+}
+
+function handleSchoolFileSelect(event: Event) {
+  const target = event.target as HTMLInputElement
+  if (target.files) {
+    const filesArray = Array.from(target.files)
+    schoolSelectedFiles.value = [...schoolSelectedFiles.value, ...filesArray]
+  }
+}
+
+function handleSchoolFileDrop(event: DragEvent) {
+  event.preventDefault()
+  if (event.dataTransfer?.files) {
+    const filesArray = Array.from(event.dataTransfer.files)
+    schoolSelectedFiles.value = [...schoolSelectedFiles.value, ...filesArray]
+  }
+}
+
+function handleSchoolDragOver(event: DragEvent) {
+  event.preventDefault()
+}
+
+function removeSchoolFile(index: number) {
+  schoolSelectedFiles.value.splice(index, 1)
+}
+
+function formatSchoolFileSize(bytes: number): string {
+  if (bytes === 0) return '0 Bytes'
+  const k = 1024
+  const sizes = ['Bytes', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
+}
+
+function cancelSchoolUpload() {
+  showUploadDocumentModal.value = false
+  schoolSelectedFiles.value = []
+}
+
+async function confirmSchoolUpload() {
+  if (schoolSelectedFiles.value.length > 0) {
+    showUploadDocumentModal.value = false
+    
+    await Swal.fire({
+      icon: 'success',
+      iconColor: '#16a34a',
+      title: 'Documents Uploaded Successfully!',
+      text: `${schoolSelectedFiles.value.length} file(s) have been uploaded and are now being processed.`,
+      confirmButtonText: 'Continue',
+      confirmButtonColor: '#3b82f6',
+      customClass: {
+        popup: 'capstone-swal-popup',
+        title: 'capstone-swal-title',
+        htmlContainer: 'capstone-swal-text',
+        confirmButton: 'capstone-swal-confirm',
+      },
+    })
+    
+    schoolSelectedFiles.value = []
+  }
+}
+
 const selectedStudent = ref<any>(null)
+
+// Student search
+const studentSearchQuery = ref('')
+
+const filteredStudents = computed(() => {
+  const query = studentSearchQuery.value.trim().toLowerCase()
+  if (!query) return studentsData.value
+  return studentsData.value.filter((student) => 
+    student.name.toLowerCase().includes(query) ||
+    student.studentId.toLowerCase().includes(query) ||
+    student.course.toLowerCase().includes(query)
+  )
+})
 
 // Approval modal state
 const showApprovalModal = ref(false)
@@ -611,7 +717,10 @@ const requiredDocumentsList = ref([
         <main class="main-content">
           <!-- Welcome Banner -->
           <div class="welcome-banner">
-            <h2>Hello, Admin! 👋</h2>
+            <h2>
+              Hello, Admin! 
+              <HandRaisedIcon class="welcome-icon" />
+            </h2>
             <p>You have {{ dashboardStats.applications.active }} pending applications and {{ recommendedInternships.length }} recommended internship.</p>
           </div>
 
@@ -702,7 +811,10 @@ const requiredDocumentsList = ref([
                 <div class="internship-content">
                   <h4>{{ internship.title }}</h4>
                   <p class="company">{{ internship.company }}</p>
-                  <p class="location">📍 {{ internship.location }}</p>
+                  <p class="location">
+                    <MapPinIcon class="location-icon-inline" />
+                    {{ internship.location }}
+                  </p>
                   
                   <div class="skills-tags">
                     <span v-for="skill in internship.skills" :key="skill" class="skill-tag">
@@ -744,8 +856,8 @@ const requiredDocumentsList = ref([
               <div class="deadlines-list">
                 <div v-for="deadline in upcomingDeadlines" :key="deadline.id" class="deadline-item">
                   <div class="deadline-icon" :class="deadline.type">
-                    <span v-if="deadline.type === 'warning'">⚠️</span>
-                    <span v-else>ℹ️</span>
+                    <ExclamationTriangleIcon v-if="deadline.type === 'warning'" class="deadline-icon-svg" />
+                    <InformationCircleIcon v-else class="deadline-icon-svg" />
                   </div>
                   <div class="deadline-content">
                     <p class="deadline-title">{{ deadline.title }}</p>
@@ -753,7 +865,10 @@ const requiredDocumentsList = ref([
                   </div>
                 </div>
               </div>
-              <a href="#" class="view-all-link">📅 View calendar</a>
+              <a href="#" class="view-all-link">
+                <CalendarIcon class="calendar-icon-inline" />
+                View calendar
+              </a>
             </section>
           </div>
         </main>
@@ -792,7 +907,9 @@ const requiredDocumentsList = ref([
               
               <!-- Alert Banner -->
               <div class="alert-banner">
-                <div class="alert-icon">⚠️</div>
+                <div class="alert-icon">
+                  <ExclamationTriangleIcon class="alert-icon-svg" />
+                </div>
                 <div class="alert-content">
                   <strong>3 New Internship Post Awaiting Review</strong>
                   <p>Review now to make them available to students</p>
@@ -808,7 +925,7 @@ const requiredDocumentsList = ref([
                     <div class="company-info">
                       <div class="company-name">
                         TechStart Solutions
-                        <span class="verified-badge">✓</span>
+                        <CheckCircleIcon class="verified-badge-icon" />
                       </div>
                       <div class="company-type">Information Technology</div>
                     </div>
@@ -819,23 +936,23 @@ const requiredDocumentsList = ref([
                     <h3 class="post-title">Full Stack Development Intern</h3>
                     <div class="post-details">
                       <div class="detail-item">
-                        <span class="detail-icon">📍</span>
+                        <MapPinIcon class="detail-icon-svg" />
                         <span>Bacoor City</span>
                       </div>
                       <div class="detail-item">
-                        <span class="detail-icon">📅</span>
+                        <CalendarIcon class="detail-icon-svg" />
                         <span>3 months (June - August 2024)</span>
                       </div>
                       <div class="detail-item">
-                        <span class="detail-icon">👥</span>
+                        <UsersIcon class="detail-icon-svg" />
                         <span>5 openings</span>
                       </div>
                       <div class="detail-item">
-                        <span class="detail-icon">💰</span>
+                        <CurrencyDollarIcon class="detail-icon-svg" />
                         <span>₱15,000/month</span>
                       </div>
                       <div class="detail-item">
-                        <span class="detail-icon">📋</span>
+                        <ClipboardDocumentListIcon class="detail-icon-svg" />
                         <span>Full-time Status</span>
                       </div>
                     </div>
@@ -866,7 +983,7 @@ const requiredDocumentsList = ref([
                     <div class="company-info">
                       <div class="company-name">
                         DataCorp Analytics
-                        <span class="verified-badge">✓</span>
+                        <CheckCircleIcon class="verified-badge-icon" />
                       </div>
                       <div class="company-type">Data Science & Analytics</div>
                     </div>
@@ -877,23 +994,23 @@ const requiredDocumentsList = ref([
                     <h3 class="post-title">Data Analytics Intern</h3>
                     <div class="post-details">
                       <div class="detail-item">
-                        <span class="detail-icon">📍</span>
+                        <MapPinIcon class="detail-icon-svg" />
                         <span>BGC, Taguig</span>
                       </div>
                       <div class="detail-item">
-                        <span class="detail-icon">📅</span>
+                        <CalendarIcon class="detail-icon-svg" />
                         <span>4 months (June - August 2024)</span>
                       </div>
                       <div class="detail-item">
-                        <span class="detail-icon">👥</span>
+                        <UsersIcon class="detail-icon-svg" />
                         <span>3 openings</span>
                       </div>
                       <div class="detail-item">
-                        <span class="detail-icon">💰</span>
+                        <CurrencyDollarIcon class="detail-icon-svg" />
                         <span>₱18,000/month</span>
                       </div>
                       <div class="detail-item">
-                        <span class="detail-icon">📋</span>
+                        <ClipboardDocumentListIcon class="detail-icon-svg" />
                         <span>From May 30, 2024</span>
                       </div>
                     </div>
@@ -924,7 +1041,7 @@ const requiredDocumentsList = ref([
                     <div class="company-info">
                       <div class="company-name">
                         Creative Design Studio
-                        <span class="verified-badge">✓</span>
+                        <CheckCircleIcon class="verified-badge-icon" />
                       </div>
                       <div class="company-type">Creative & Design</div>
                     </div>
@@ -935,23 +1052,23 @@ const requiredDocumentsList = ref([
                     <h3 class="post-title">UI/UX Design Intern</h3>
                     <div class="post-details">
                       <div class="detail-item">
-                        <span class="detail-icon">📍</span>
+                        <MapPinIcon class="detail-icon-svg" />
                         <span>Alabang, Muntinlupa</span>
                       </div>
                       <div class="detail-item">
-                        <span class="detail-icon">📅</span>
+                        <CalendarIcon class="detail-icon-svg" />
                         <span>3 months (June - August 2024)</span>
                       </div>
                       <div class="detail-item">
-                        <span class="detail-icon">👥</span>
+                        <UsersIcon class="detail-icon-svg" />
                         <span>2 openings</span>
                       </div>
                       <div class="detail-item">
-                        <span class="detail-icon">💰</span>
+                        <CurrencyDollarIcon class="detail-icon-svg" />
                         <span>₱12,000/month</span>
                       </div>
                       <div class="detail-item">
-                        <span class="detail-icon">📋</span>
+                        <ClipboardDocumentListIcon class="detail-icon-svg" />
                         <span>From June 15, 2024</span>
                       </div>
                     </div>
@@ -1016,15 +1133,15 @@ const requiredDocumentsList = ref([
                 <h3>Quick Actions</h3>
                 <div class="quick-actions">
                   <button class="quick-action-btn">
-                    <span class="action-icon">✓</span>
+                    <CheckIcon class="action-icon-svg" />
                     <span>Approve All Verified</span>
                   </button>
                   <button class="quick-action-btn">
-                    <span class="action-icon">📋</span>
+                    <ClipboardDocumentListIcon class="action-icon-svg" />
                     <span>Schedule Batch Meeting</span>
                   </button>
                   <button class="quick-action-btn">
-                    <span class="action-icon">📧</span>
+                    <EnvelopeIcon class="action-icon-svg" />
                     <span>Send Company Notification</span>
                   </button>
                 </div>
@@ -1070,7 +1187,7 @@ const requiredDocumentsList = ref([
           <div class="applications-controls">
             <div class="search-section">
               <div class="search-box">
-                <span class="search-icon">🔍</span>
+                <MagnifyingGlassIcon class="search-icon-svg" />
                 <input type="search" placeholder="Search Student..." class="search-input-table" />
               </div>
             </div>
@@ -1136,7 +1253,9 @@ const requiredDocumentsList = ref([
                     </span>
                   </td>
                   <td class="actions-cell">
-                    <button class="action-menu-btn" @click.stop>⋯</button>
+                    <button class="action-menu-btn" @click.stop>
+                      <EllipsisVerticalIcon class="action-menu-icon" />
+                    </button>
                   </td>
                 </tr>
               </tbody>
@@ -1145,112 +1264,6 @@ const requiredDocumentsList = ref([
         </main>
 
         <!-- Student Details Sidebar -->
-        <div v-if="showStudentSidebar" class="student-sidebar-overlay" @click="closeStudentSidebar">
-          <div class="student-sidebar" @click.stop>
-            <div class="sidebar-header">
-              <h2>{{ selectedStudent?.name }} - Application</h2>
-              <button class="close-btn" @click="closeStudentSidebar">✕</button>
-            </div>
-
-            <div class="sidebar-content">
-              <!-- Student Profile Summary -->
-              <section class="sidebar-section">
-                <h3 class="section-title">Student Profile Summary</h3>
-                <div class="profile-info">
-                  <div class="info-row">
-                    <span class="info-label">Student ID:</span>
-                    <span class="info-value">{{ selectedStudent?.studentId }}</span>
-                  </div>
-                  <div class="info-row">
-                    <span class="info-label">Course:</span>
-                    <span class="info-value">{{ selectedStudent?.course }}</span>
-                  </div>
-                  <div class="info-row">
-                    <span class="info-label">Eligibility:</span>
-                    <span class="eligibility-badge eligible">{{ selectedStudent?.eligibility }}</span>
-                  </div>
-                </div>
-              </section>
-
-              <!-- Application Information -->
-              <section class="sidebar-section">
-                <h3 class="section-title">Application Information</h3>
-                <div class="profile-info">
-                  <div class="info-row">
-                    <span class="info-label">Company:</span>
-                    <span class="info-value">{{ selectedStudent?.company }}</span>
-                  </div>
-                  <div class="info-row">
-                    <span class="info-label">Position:</span>
-                    <span class="info-value">{{ selectedStudent?.position }}</span>
-                  </div>
-                  <div class="info-row">
-                    <span class="info-label">Application Date:</span>
-                    <span class="info-value">{{ selectedStudent?.applicationDate }}</span>
-                  </div>
-                </div>
-              </section>
-
-              <!-- Submitted Documents -->
-              <section class="sidebar-section">
-                <h3 class="section-title">Submitted Documents</h3>
-                <div class="documents-list">
-                  <div v-for="doc in selectedStudent?.documents" :key="doc.name" class="document-item">
-                    <span class="doc-icon">📄</span>
-                    <span class="doc-name">{{ doc.name }}</span>
-                  </div>
-                </div>
-              </section>
-
-              <!-- Application History Timeline -->
-              <section class="sidebar-section">
-                <h3 class="section-title">Application History Timeline</h3>
-                <div class="timeline">
-                  <div v-for="(item, index) in selectedStudent?.timeline" :key="index" class="timeline-item">
-                    <div class="timeline-dot" :class="{ completed: item.completed }"></div>
-                    <div class="timeline-content">
-                      <div class="timeline-status">{{ item.status }}</div>
-                      <div class="timeline-date">{{ item.date }}</div>
-                    </div>
-                  </div>
-                </div>
-              </section>
-            </div>
-
-            <!-- Action Buttons -->
-            <div class="sidebar-actions">
-              <button class="btn-approve-sidebar" @click="approveStudent">
-                ✓ Approve
-              </button>
-              <button class="btn-reject-sidebar" @click="rejectStudent">
-                ✕ Reject
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Approval Modal -->
-        <div v-if="showApprovalModal" class="modal-overlay" @click="cancelApproval">
-          <div class="approval-modal" @click.stop>
-            <div class="modal-header">
-              <h3>Approve Application - Add Remarks</h3>
-            </div>
-
-            <div class="modal-content">
-              <textarea 
-                v-model="approvalRemarks"
-                placeholder="Enter remarks here..."
-                class="remarks-textarea"
-                rows="6"
-              ></textarea>
-            </div>
-
-            <div class="modal-actions">
-              <button class="btn-cancel" @click="cancelApproval">Cancel</button>
-              <button class="btn-submit" @click="submitApproval">Submit</button>
-            </div>
-          </div>
-        </div>
       </div>
 
       <div v-else-if="currentView === 'companies'">
@@ -1276,7 +1289,7 @@ const requiredDocumentsList = ref([
           <div class="companies-controls">
             <div class="search-section">
               <div class="search-box">
-                <span class="search-icon">🔍</span>
+                <MagnifyingGlassIcon class="search-icon-svg" />
                 <input type="search" placeholder="Search companies by name or industry..." class="search-input-companies" />
               </div>
             </div>
@@ -1310,13 +1323,16 @@ const requiredDocumentsList = ref([
               </div>
 
               <div class="company-location">
-                <span class="location-icon">📍</span>
+                <MapPinIcon class="location-icon-svg" />
                 <span>New York, NY</span>
               </div>
 
               <div class="match-info">
                 <span class="match-percentage">92% Match</span>
-                <div class="recommended-badge">✓ Recommended for You</div>
+                <div class="recommended-badge">
+                  <CheckCircleIcon class="recommended-icon-svg" />
+                  Recommended for You
+                </div>
               </div>
 
               <p class="company-description">
@@ -1357,13 +1373,16 @@ const requiredDocumentsList = ref([
               </div>
 
               <div class="company-location">
-                <span class="location-icon">📍</span>
+                <MapPinIcon class="location-icon-svg" />
                 <span>New York, NY</span>
               </div>
 
               <div class="match-info">
                 <span class="match-percentage">89% Match</span>
-                <div class="recommended-badge">✓ Recommended for You</div>
+                <div class="recommended-badge">
+                  <CheckCircleIcon class="recommended-icon-svg" />
+                  Recommended for You
+                </div>
               </div>
 
               <p class="company-description">
@@ -1404,13 +1423,16 @@ const requiredDocumentsList = ref([
               </div>
 
               <div class="company-location">
-                <span class="location-icon">📍</span>
+                <MapPinIcon class="location-icon-svg" />
                 <span>New York, NY</span>
               </div>
 
               <div class="match-info">
                 <span class="match-percentage">85% Match</span>
-                <div class="recommended-badge">✓ Recommended for You</div>
+                <div class="recommended-badge">
+                  <CheckCircleIcon class="recommended-icon-svg" />
+                  Recommended for You
+                </div>
               </div>
 
               <p class="company-description">
@@ -1450,13 +1472,16 @@ const requiredDocumentsList = ref([
               </div>
 
               <div class="company-location">
-                <span class="location-icon">📍</span>
+                <MapPinIcon class="location-icon-svg" />
                 <span>New York, NY</span>
               </div>
 
               <div class="match-info">
                 <span class="match-percentage">92% Match</span>
-                <div class="recommended-badge">✓ Recommended for You</div>
+                <div class="recommended-badge">
+                  <CheckCircleIcon class="recommended-icon-svg" />
+                  Recommended for You
+                </div>
               </div>
 
               <p class="company-description">
@@ -1818,9 +1843,18 @@ const requiredDocumentsList = ref([
                   <input type="text" placeholder="What's on your mind?" class="post-input-school" />
                 </div>
                 <div class="post-actions-school">
-                  <button class="post-action-btn-school">📷 Photo</button>
-                  <button class="post-action-btn-school">📹 Video</button>
-                  <button class="post-action-btn-school">📄 Document</button>
+                  <button class="post-action-btn-school">
+                    <PhotoIcon class="post-action-icon" />
+                    Photo
+                  </button>
+                  <button class="post-action-btn-school">
+                    <VideoCameraIcon class="post-action-icon" />
+                    Video
+                  </button>
+                  <button class="post-action-btn-school">
+                    <DocumentIcon class="post-action-icon" />
+                    Document
+                  </button>
                   <button class="post-btn-school">Post</button>
                 </div>
               </div>
@@ -1840,9 +1874,18 @@ const requiredDocumentsList = ref([
                     <p>Great to see our intern program growing! We're excited to welcome new students this semester. Looking forward to mentoring the next generation of professionals.</p>
                   </div>
                   <div class="post-actions-bar-school">
-                    <button class="post-action-school">👍 12</button>
-                    <button class="post-action-school">💬 3 Comment</button>
-                    <button class="post-action-school">🔄 2 Share</button>
+                    <button class="post-action-school">
+                      <HandThumbUpIcon class="post-reaction-icon" />
+                      12
+                    </button>
+                    <button class="post-action-school">
+                      <ChatBubbleLeftIcon class="post-reaction-icon" />
+                      3 Comment
+                    </button>
+                    <button class="post-action-school">
+                      <ArrowPathRoundedSquareIcon class="post-reaction-icon" />
+                      2 Share
+                    </button>
                   </div>
                 </article>
 
@@ -1856,12 +1899,21 @@ const requiredDocumentsList = ref([
                     </div>
                   </div>
                   <div class="post-content-school">
-                    <p>Just completed my first week of internship! Learning so much about UI/UX design and working with amazing mentors. Grateful for this opportunity! 🎨</p>
+                    <p>Just completed my first week of internship! Learning so much about UI/UX design and working with amazing mentors. Grateful for this opportunity!</p>
                   </div>
                   <div class="post-actions-bar-school">
-                    <button class="post-action-school">👍 24</button>
-                    <button class="post-action-school">💬 8 Comment</button>
-                    <button class="post-action-school">🔄 5 Share</button>
+                    <button class="post-action-school">
+                      <HandThumbUpIcon class="post-reaction-icon" />
+                      24
+                    </button>
+                    <button class="post-action-school">
+                      <ChatBubbleLeftIcon class="post-reaction-icon" />
+                      8 Comment
+                    </button>
+                    <button class="post-action-school">
+                      <ArrowPathRoundedSquareIcon class="post-reaction-icon" />
+                      5 Share
+                    </button>
                   </div>
                 </article>
 
@@ -1875,12 +1927,21 @@ const requiredDocumentsList = ref([
                     </div>
                   </div>
                   <div class="post-content-school">
-                    <p>Successfully deployed my first feature to production today! Big thanks to my supervisor and the development team for their guidance and support. 💻</p>
+                    <p>Successfully deployed my first feature to production today! Big thanks to my supervisor and the development team for their guidance and support.</p>
                   </div>
                   <div class="post-actions-bar-school">
-                    <button class="post-action-school">👍 18</button>
-                    <button class="post-action-school">💬 6 Comment</button>
-                    <button class="post-action-school">🔄 3 Share</button>
+                    <button class="post-action-school">
+                      <HandThumbUpIcon class="post-reaction-icon" />
+                      18
+                    </button>
+                    <button class="post-action-school">
+                      <ChatBubbleLeftIcon class="post-reaction-icon" />
+                      6 Comment
+                    </button>
+                    <button class="post-action-school">
+                      <ArrowPathRoundedSquareIcon class="post-reaction-icon" />
+                      3 Share
+                    </button>
                   </div>
                 </article>
               </div>
@@ -1954,8 +2015,11 @@ const requiredDocumentsList = ref([
       <div v-else-if="currentView === 'documents'">
         <header class="top-header">
           <div class="header-left">
-            <img src="/icons/icon-docs.png" alt="Documents" class="header-icon-img" />
-            <h1>Documents</h1>
+            <div class="breadcrumb-header">
+              <span class="breadcrumb-item">Documents</span>
+              <span class="breadcrumb-separator">›</span>
+              <span class="breadcrumb-item active">My Documents</span>
+            </div>
           </div>
           <div class="header-right">
             <BellIcon class="notification-icon-bell" />
@@ -1963,9 +2027,238 @@ const requiredDocumentsList = ref([
             <div class="avatar">AC</div>
           </div>
         </header>
+        
+        <!-- Documents Toolbar -->
+        <div class="documents-toolbar">
+          <div class="toolbar-left">
+            <label class="checkbox-label-toolbar">
+              <input type="checkbox" class="select-all-checkbox-toolbar" />
+              <span>Select All</span>
+            </label>
+            <div class="divider-vertical"></div>
+            <div class="sort-container-toolbar">
+              <span class="sort-label-toolbar">Sort by:</span>
+              <select class="sort-select-toolbar">
+                <option>Recent</option>
+                <option>Name</option>
+                <option>Size</option>
+                <option>Status</option>
+              </select>
+            </div>
+          </div>
+          <div class="toolbar-right">
+            <div class="search-container-toolbar">
+              <MagnifyingGlassIcon class="search-icon-toolbar" />
+              <input 
+                type="text" 
+                placeholder="Search documents..." 
+                class="search-input-toolbar"
+              />
+            </div>
+            <button class="filter-btn-toolbar">
+              <svg class="filter-icon-toolbar" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+              </svg>
+            </button>
+            <button class="upload-document-btn" @click="showUploadDocumentModal = true">
+              <svg class="upload-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+              </svg>
+              Upload Document
+            </button>
+          </div>
+        </div>
+        
         <main class="main-content">
-          <p>Document management features will be implemented here.</p>
+
+          <!-- Documents Grid -->
+          <div class="documents-grid-school">
+            <!-- Document Card 1 -->
+            <div class="document-card-school">
+              <input type="checkbox" class="doc-checkbox-school" />
+              <div class="doc-type-badge-school">PDF</div>
+              <div class="doc-icon-wrapper-school">
+                <div class="doc-icon-container-school">
+                  <img src="/icons/icon-pdf.png" alt="PDF" class="doc-icon-school" />
+                </div>
+              </div>
+              <div class="doc-info-school">
+                <h3 class="doc-name-school">Resume_Maria_Santos_2024.pdf</h3>
+                <div class="doc-details-school">
+                  <span class="doc-size-school">2.4 MB</span>
+                  <span class="doc-date-school">Jan 15, 2024</span>
+                </div>
+                <div class="doc-status-wrapper-school">
+                  <span class="status-badge-school approved">Approved</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Document Card 2 -->
+            <div class="document-card-school">
+              <input type="checkbox" class="doc-checkbox-school" />
+              <div class="doc-type-badge-school">XLSX</div>
+              <div class="doc-icon-wrapper-school">
+                <div class="doc-icon-container-school">
+                  <img src="/icons/icon-docs.png" alt="XLSX" class="doc-icon-school" />
+                </div>
+              </div>
+              <div class="doc-info-school">
+                <h3 class="doc-name-school">DTR_January_2024.xlsx</h3>
+                <div class="doc-details-school">
+                  <span class="doc-size-school">1.2 MB</span>
+                  <span class="doc-date-school">Feb 1, 2024</span>
+                </div>
+                <div class="doc-status-wrapper-school">
+                  <span class="status-badge-school pending">Pending Review</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Document Card 3 -->
+            <div class="document-card-school">
+              <input type="checkbox" class="doc-checkbox-school" />
+              <div class="doc-type-badge-school">PDF</div>
+              <div class="doc-icon-wrapper-school">
+                <div class="doc-icon-container-school">
+                  <img src="/icons/icon-pdf.png" alt="PDF" class="doc-icon-school" />
+                </div>
+              </div>
+              <div class="doc-info-school">
+                <h3 class="doc-name-school">Parent_Consent.pdf</h3>
+                <div class="doc-details-school">
+                  <span class="doc-size-school">856 KB</span>
+                  <span class="doc-date-school">Jan 20, 2024</span>
+                </div>
+                <div class="doc-status-wrapper-school">
+                  <span class="status-badge-school rejected">Rejected</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Document Card 4 -->
+            <div class="document-card-school">
+              <input type="checkbox" class="doc-checkbox-school" />
+              <div class="doc-type-badge-school">DOCX</div>
+              <div class="doc-icon-wrapper-school">
+                <div class="doc-icon-container-school">
+                  <img src="/icons/icon-word.png" alt="DOCX" class="doc-icon-school" />
+                </div>
+              </div>
+              <div class="doc-info-school">
+                <h3 class="doc-name-school">Endorsement_Letter.docx</h3>
+                <div class="doc-details-school">
+                  <span class="doc-size-school">1.8 MB</span>
+                  <span class="doc-date-school">Jan 10, 2024</span>
+                </div>
+                <div class="doc-status-wrapper-school">
+                  <span class="status-badge-school approved">Approved</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Document Card 5 -->
+            <div class="document-card-school">
+              <input type="checkbox" class="doc-checkbox-school" />
+              <div class="doc-type-badge-school">PDF</div>
+              <div class="doc-icon-wrapper-school">
+                <div class="doc-icon-container-school">
+                  <img src="/icons/icon-pdf.png" alt="PDF" class="doc-icon-school" />
+                </div>
+              </div>
+              <div class="doc-info-school">
+                <h3 class="doc-name-school">Application_Form_2024.pdf</h3>
+                <div class="doc-details-school">
+                  <span class="doc-size-school">3.1 MB</span>
+                  <span class="doc-date-school">Jan 5, 2024</span>
+                </div>
+                <div class="doc-status-wrapper-school">
+                  <span class="status-badge-school pending">Pending Review</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Document Card 6 -->
+            <div class="document-card-school">
+              <input type="checkbox" class="doc-checkbox-school" />
+              <div class="doc-type-badge-school">PDF</div>
+              <div class="doc-icon-wrapper-school">
+                <div class="doc-icon-container-school">
+                  <img src="/icons/icon-pdf.png" alt="PDF" class="doc-icon-school" />
+                </div>
+              </div>
+              <div class="doc-info-school">
+                <h3 class="doc-name-school">Internship_Completion.pdf</h3>
+                <div class="doc-details-school">
+                  <span class="doc-size-school">1.5 MB</span>
+                  <span class="doc-date-school">Dec 20, 2023</span>
+                </div>
+                <div class="doc-status-wrapper-school">
+                  <span class="status-badge-school approved">Approved</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </main>
+        
+        <!-- Upload Document Modal -->
+        <div v-if="showUploadDocumentModal" class="upload-modal-overlay" @click="showUploadDocumentModal = false">
+          <div class="upload-modal-content" @click.stop>
+            <h2 class="upload-modal-title">Upload Documents</h2>
+            <p class="upload-modal-subtitle">Select files to upload or drag and drop them here</p>
+            
+            <div 
+              class="upload-drop-zone"
+              @drop="handleSchoolFileDrop"
+              @dragover="handleSchoolDragOver"
+              @click="triggerSchoolFileInput"
+            >
+              <svg class="upload-cloud-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+              </svg>
+              <p class="upload-drop-text">Click to browse or drag files here</p>
+              <p class="upload-drop-subtext">Supported formats: PDF, DOCX, XLSX, JPG, PNG (Max 10MB)</p>
+              <input 
+                type="file" 
+                id="school-file-upload-input"
+                multiple
+                accept=".pdf,.docx,.doc,.xlsx,.xls,.jpg,.jpeg,.png"
+                style="display: none"
+                @change="handleSchoolFileSelect"
+              />
+            </div>
+            
+            <!-- Selected Files List -->
+            <div v-if="schoolSelectedFiles.length > 0" class="selected-files-list">
+              <div v-for="(file, index) in schoolSelectedFiles" :key="index" class="selected-file-item">
+                <svg class="file-icon-small" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <div class="file-info-small">
+                  <span class="file-name-small">{{ file.name }}</span>
+                  <span class="file-size-small">{{ formatSchoolFileSize(file.size) }}</span>
+                </div>
+                <button class="remove-file-btn" @click="removeSchoolFile(index)">
+                  <XMarkIcon class="remove-icon" />
+                </button>
+              </div>
+            </div>
+            
+            <div class="upload-modal-actions">
+              <button class="cancel-upload-btn" @click="cancelSchoolUpload">Cancel</button>
+              <button 
+                class="confirm-upload-btn" 
+                :disabled="schoolSelectedFiles.length === 0"
+                @click="confirmSchoolUpload"
+              >
+                <svg class="upload-btn-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+                Upload Files
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div v-else-if="currentView === 'reports'">
@@ -1995,21 +2288,27 @@ const requiredDocumentsList = ref([
             <div class="stat-card-report">
               <div class="stat-header-report">
                 <span class="stat-label-report">PENDING REVIEW</span>
-                <div class="stat-icon pending-icon">⏳</div>
+                <div class="stat-icon pending-icon">
+                  <ClockIcon class="stat-icon-svg" />
+                </div>
               </div>
               <div class="stat-number-report">2</div>
             </div>
             <div class="stat-card-report">
               <div class="stat-header-report">
                 <span class="stat-label-report">REVISION REQUESTED</span>
-                <div class="stat-icon revision-icon">⚠️</div>
+                <div class="stat-icon revision-icon">
+                  <ExclamationTriangleIcon class="stat-icon-svg" />
+                </div>
               </div>
               <div class="stat-number-report">1</div>
             </div>
             <div class="stat-card-report">
               <div class="stat-header-report">
                 <span class="stat-label-report">APPROVED REPORTS</span>
-                <div class="stat-icon approved-icon">✅</div>
+                <div class="stat-icon approved-icon">
+                  <CheckCircleIcon class="stat-icon-svg" />
+                </div>
               </div>
               <div class="stat-number-report">5</div>
             </div>
@@ -2035,7 +2334,9 @@ const requiredDocumentsList = ref([
                   <td>Jul 15, 2024</td>
                   <td><span class="status-badge revision-requested">Revision Requested</span></td>
                   <td>—</td>
-                  <td><button class="action-btn">⋯</button></td>
+                  <td><button class="action-btn">
+                    <EllipsisVerticalIcon class="action-menu-icon" />
+                  </button></td>
                 </tr>
                 <tr>
                   <td class="report-type">Monthly Report 2</td>
@@ -2043,7 +2344,9 @@ const requiredDocumentsList = ref([
                   <td>Jul 1, 2024</td>
                   <td><span class="status-badge under-review">Under Review</span></td>
                   <td>—</td>
-                  <td><button class="action-btn">⋯</button></td>
+                  <td><button class="action-btn">
+                    <EllipsisVerticalIcon class="action-menu-icon" />
+                  </button></td>
                 </tr>
                 <tr>
                   <td class="report-type">Weekly Report 9</td>
@@ -2051,7 +2354,9 @@ const requiredDocumentsList = ref([
                   <td>Jul 8, 2024</td>
                   <td><span class="status-badge under-review">Under Review</span></td>
                   <td>—</td>
-                  <td><button class="action-btn">⋯</button></td>
+                  <td><button class="action-btn">
+                    <EllipsisVerticalIcon class="action-menu-icon" />
+                  </button></td>
                 </tr>
                 <tr>
                   <td class="report-type">Weekly Report 8</td>
@@ -2059,7 +2364,9 @@ const requiredDocumentsList = ref([
                   <td>Jul 1, 2024</td>
                   <td><span class="status-badge approved">Approved</span></td>
                   <td><span class="status-badge approved">Approved</span></td>
-                  <td><button class="action-btn">⋯</button></td>
+                  <td><button class="action-btn">
+                    <EllipsisVerticalIcon class="action-menu-icon" />
+                  </button></td>
                 </tr>
                 <tr>
                   <td class="report-type">Weekly Report 7</td>
@@ -2067,7 +2374,9 @@ const requiredDocumentsList = ref([
                   <td>Jun 24, 2024</td>
                   <td><span class="status-badge approved">Approved</span></td>
                   <td><span class="status-badge approved">Approved</span></td>
-                  <td><button class="action-btn">⋯</button></td>
+                  <td><button class="action-btn">
+                    <EllipsisVerticalIcon class="action-menu-icon" />
+                  </button></td>
                 </tr>
                 <tr>
                   <td class="report-type">Weekly Report 6</td>
@@ -2075,7 +2384,9 @@ const requiredDocumentsList = ref([
                   <td>Jun 17, 2024</td>
                   <td><span class="status-badge approved">Approved</span></td>
                   <td><span class="status-badge approved">Approved</span></td>
-                  <td><button class="action-btn">⋯</button></td>
+                  <td><button class="action-btn">
+                    <EllipsisVerticalIcon class="action-menu-icon" />
+                  </button></td>
                 </tr>
                 <tr>
                   <td class="report-type">Monthly Report 1</td>
@@ -2083,7 +2394,9 @@ const requiredDocumentsList = ref([
                   <td>Jun 1, 2024</td>
                   <td><span class="status-badge approved">Approved</span></td>
                   <td><span class="status-badge approved">Approved</span></td>
-                  <td><button class="action-btn">⋯</button></td>
+                  <td><button class="action-btn">
+                    <EllipsisVerticalIcon class="action-menu-icon" />
+                  </button></td>
                 </tr>
                 <tr>
                   <td class="report-type">Weekly Report 5</td>
@@ -2091,7 +2404,9 @@ const requiredDocumentsList = ref([
                   <td>Jun 10, 2024</td>
                   <td><span class="status-badge approved">Approved</span></td>
                   <td><span class="status-badge under-review">Under Review</span></td>
-                  <td><button class="action-btn">⋯</button></td>
+                  <td><button class="action-btn">
+                    <EllipsisVerticalIcon class="action-menu-icon" />
+                  </button></td>
                 </tr>
                 <tr>
                   <td class="report-type">Weekly Report 4</td>
@@ -2099,7 +2414,9 @@ const requiredDocumentsList = ref([
                   <td>Jun 3, 2024</td>
                   <td><span class="status-badge submitted">Submitted</span></td>
                   <td>—</td>
-                  <td><button class="action-btn">⋯</button></td>
+                  <td><button class="action-btn">
+                    <EllipsisVerticalIcon class="action-menu-icon" />
+                  </button></td>
                 </tr>
               </tbody>
             </table>
@@ -2111,7 +2428,7 @@ const requiredDocumentsList = ref([
         <header class="top-header">
           <div class="header-left">
             <img src="/icons/icon-student.png" alt="Student Interns" class="header-icon-img" />
-            <h1>Student Interns</h1>
+            <h1>Internship Applications</h1>
           </div>
           <div class="header-right">
             <BellIcon class="notification-icon-bell" />
@@ -2119,8 +2436,87 @@ const requiredDocumentsList = ref([
             <div class="avatar">AC</div>
           </div>
         </header>
+        
+        <!-- Student Interns Toolbar -->
+        <div class="student-interns-toolbar">
+          <div class="toolbar-left-students">
+            <div class="search-container-students">
+              <MagnifyingGlassIcon class="search-icon-students" />
+              <input 
+                type="text" 
+                placeholder="Search student..." 
+                class="search-input-students"
+                v-model="studentSearchQuery"
+              />
+            </div>
+          </div>
+          <div class="toolbar-right-students">
+            <button class="filter-btn-students">All Courses</button>
+            <button class="filter-btn-students">All Year Level</button>
+            <button class="filter-btn-students active">Pending Applications</button>
+          </div>
+        </div>
+        
         <main class="main-content">
-          <p>Student intern management features will be implemented here.</p>
+          <!-- Students Table -->
+          <div class="students-table-container">
+            <table class="students-table">
+              <thead>
+                <tr>
+                  <th>Student Name</th>
+                  <th>Student ID</th>
+                  <th>Course</th>
+                  <th>Year Level</th>
+                  <th>Status</th>
+                  <th>Eligibility</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr 
+                  v-for="student in filteredStudents" 
+                  :key="student.id"
+                  @click="openStudentSidebar(student)"
+                  class="clickable-row"
+                >
+                  <td class="student-name-cell">{{ student.name }}</td>
+                  <td>{{ student.studentId }}</td>
+                  <td>{{ student.course }}</td>
+                  <td>{{ student.yearLevel }}</td>
+                  <td>
+                    <span 
+                      class="status-badge-table"
+                      :class="{
+                        'status-registered': student.status === 'Registered',
+                        'status-active': student.status === 'Active Intern',
+                        'status-pending': student.status === 'Pending Application',
+                        'status-completed': student.status === 'Completed'
+                      }"
+                    >
+                      {{ student.status }}
+                    </span>
+                  </td>
+                  <td>
+                    <span 
+                      class="eligibility-badge-table"
+                      :class="{
+                        'eligibility-eligible': student.eligibility === 'Eligible',
+                        'eligibility-pending': student.eligibility === 'Pending',
+                        'eligibility-not-eligible': student.eligibility === 'Not Eligible'
+                      }"
+                    >
+                      {{ student.eligibility }}
+                    </span>
+                  </td>
+                  <td>
+                    <button class="action-btn-table" @click.stop="openStudentSidebar(student)">
+                      <EllipsisVerticalIcon class="action-icon" />
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </main>
       </div>
 
@@ -3023,6 +3419,128 @@ const requiredDocumentsList = ref([
             </div>
           </div>
 
+        </div>
+      </div>
+    </div>
+
+    <!-- Approval Modal (Global) -->
+    <div v-if="showApprovalModal" class="modal-overlay" @click="cancelApproval">
+      <div class="approval-modal" @click.stop>
+        <div class="modal-header">
+          <h3>Approve Application - Add Remarks</h3>
+        </div>
+
+        <div class="modal-content">
+          <textarea 
+            v-model="approvalRemarks"
+            placeholder="Enter remarks here..."
+            class="remarks-textarea"
+            rows="6"
+          ></textarea>
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn-cancel" @click="cancelApproval">Cancel</button>
+          <button class="btn-submit" @click="submitApproval">Submit</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Student Details Sidebar (Global) -->
+    <div v-if="showStudentSidebar" class="student-sidebar-overlay" @click="closeStudentSidebar">
+      <div class="student-sidebar-new" @click.stop>
+        <!-- Sidebar Header -->
+        <div class="sidebar-header-new">
+          <h2 class="sidebar-title-new">{{ selectedStudent?.name }} - Application</h2>
+          <button class="close-btn-new" @click="closeStudentSidebar">
+            <XMarkIcon class="close-icon-new" />
+          </button>
+        </div>
+
+        <div class="sidebar-content-new">
+          <!-- Student Profile Summary -->
+          <section class="sidebar-section-new">
+            <h3 class="section-title-new">Student Profile Summary</h3>
+            <div class="profile-info-grid">
+              <div class="info-item-new">
+                <span class="info-label-new">Student ID:</span>
+                <span class="info-value-new">{{ selectedStudent?.studentId }}</span>
+              </div>
+              <div class="info-item-new">
+                <span class="info-label-new">Course:</span>
+                <span class="info-value-new">{{ selectedStudent?.course }}</span>
+              </div>
+              <div class="info-item-new">
+                <span class="info-label-new">Eligibility:</span>
+                <span class="eligibility-badge-new eligible">Eligible</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- Application Information -->
+          <section class="sidebar-section-new">
+            <h3 class="section-title-new">Application Information</h3>
+            <div class="profile-info-grid">
+              <div class="info-item-new">
+                <span class="info-label-new">Company:</span>
+                <span class="info-value-new">{{ selectedStudent?.company }}</span>
+              </div>
+              <div class="info-item-new">
+                <span class="info-label-new">Position:</span>
+                <span class="info-value-new">{{ selectedStudent?.position }}</span>
+              </div>
+              <div class="info-item-new">
+                <span class="info-label-new">Application Date:</span>
+                <span class="info-value-new">{{ selectedStudent?.applicationDate }}</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- Submitted Documents -->
+          <section class="sidebar-section-new">
+            <h3 class="section-title-new">Submitted Documents</h3>
+            <div class="documents-list-new">
+              <div v-for="doc in selectedStudent?.documents" :key="doc.name" class="document-item-new">
+                <div class="doc-icon-wrapper-new">
+                  <svg class="doc-icon-new" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                <span class="doc-name-new">{{ doc.name }}</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- Application History Timeline -->
+          <section class="sidebar-section-new">
+            <h3 class="section-title-new">Application History Timeline</h3>
+            <div class="timeline-new">
+              <div v-for="(item, index) in selectedStudent?.timeline" :key="index" class="timeline-item-new">
+                <div class="timeline-marker">
+                  <div class="timeline-dot-new" :class="{ completed: item.completed }">
+                    <CheckIcon v-if="item.completed" class="timeline-check-icon" />
+                  </div>
+                  <div v-if="selectedStudent?.timeline && Number(index) < selectedStudent.timeline.length - 1" class="timeline-line" :class="{ completed: item.completed }"></div>
+                </div>
+                <div class="timeline-content-new">
+                  <div class="timeline-status-new">{{ item.status }}</div>
+                  <div class="timeline-date-new">{{ item.date }}</div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="sidebar-actions-new">
+          <button class="btn-approve-new" @click="approveStudent">
+            <CheckIcon class="btn-icon-new" />
+            Approve
+          </button>
+          <button class="btn-reject-new" @click="rejectStudent">
+            <XMarkIcon class="btn-icon-new" />
+            Reject
+          </button>
         </div>
       </div>
     </div>

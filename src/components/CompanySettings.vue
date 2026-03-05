@@ -196,9 +196,6 @@ function handleImageError(event: Event) {
       <div class="header-right">
         <div class="notification-wrapper">
           <BellIcon class="notification-bell" @click="toggleNotifications" />
-          <span v-if="notifications.filter(n => n.unread).length > 0" class="notification-badge">
-            {{ notifications.filter(n => n.unread).length }}
-          </span>
           
           <!-- Notification Dropdown -->
           <div v-if="showNotifications" class="notification-dropdown">
