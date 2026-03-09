@@ -1,21 +1,13 @@
-<<<<<<< HEAD
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-=======
-﻿<script setup lang="ts">
-import { ref, computed } from 'vue'
->>>>>>> f061c0747ee29f670b514348198aef1ee62f2a3d
 import SchoolSidebar from '../../components/SchoolSidebar.vue'
 import FloatingChatWidget from '../../components/FloatingChatWidget.vue'
 import { useAuthStore } from '@/stores/auth'
 import { subscribeSchoolStudents, addSchoolStudent, removeSchoolStudent, type SchoolStudentRecord } from '@/services/schoolStudents'
-import { subscribeSchoolContracts, acceptContract, rejectContract, type ContractRecord } from '@/services/contracts'
-import { ensurePublicProfile } from '@/services/profilesPublic'
+import { subscribeSchoolContracts, createContractRequest, type ContractRecord } from '@/services/contracts'
+import { ensurePublicProfile, subscribePublicProfiles, type PublicProfile } from '@/services/profilesPublic'
 import Swal from 'sweetalert2'
-<<<<<<< HEAD
-import { BellIcon, PlusIcon, TrashIcon, EnvelopeIcon } from '@heroicons/vue/24/outline'
-=======
 import {
   BellIcon,
   HandRaisedIcon,
@@ -30,17 +22,27 @@ import {
   CheckIcon,
   XMarkIcon,
   MagnifyingGlassIcon,
+  PlusIcon,
+  TrashIcon,
   EnvelopeIcon,
   EllipsisVerticalIcon,
   PhotoIcon,
   VideoCameraIcon,
   DocumentIcon,
+  GlobeAltIcon,
+  UserCircleIcon,
+  PhoneIcon,
+  LockClosedIcon,
+  ComputerDesktopIcon,
+  DevicePhoneMobileIcon,
+  CloudArrowUpIcon,
+  PencilSquareIcon,
+  CircleStackIcon,
   HandThumbUpIcon,
   ChatBubbleLeftIcon,
   ArrowPathRoundedSquareIcon,
   ClockIcon,
 } from '@heroicons/vue/24/outline'
->>>>>>> f061c0747ee29f670b514348198aef1ee62f2a3d
 
 const authStore = useAuthStore()
 const schoolName = computed(() => {
@@ -698,6 +700,40 @@ const ojtConfigData = ref({
   }
 })
 
+const dataSettings = ref({
+  autoBackup: true,
+  backupFrequency: 'weekly',
+  retentionDays: 365,
+  allowAnalytics: true,
+})
+
+async function saveDataSettings() {
+  await Swal.fire({
+    icon: 'success',
+    title: 'Saved',
+    text: 'Data settings updated successfully.',
+    confirmButtonColor: '#2563eb',
+  })
+}
+
+async function exportSchoolData(type: 'students' | 'internships' | 'contracts') {
+  await Swal.fire({
+    icon: 'info',
+    title: 'Export Started',
+    text: `Preparing ${type} export file...`,
+    confirmButtonColor: '#2563eb',
+  })
+}
+
+async function clearSchoolCache() {
+  await Swal.fire({
+    icon: 'success',
+    title: 'Cache Cleared',
+    text: 'Temporary cached data has been cleared.',
+    confirmButtonColor: '#2563eb',
+  })
+}
+
 const requiredDocumentsList = ref([
   { id: 1, name: 'Resume/CV', required: true },
   { id: 2, name: 'Recommendation Letter', required: true },
@@ -706,85 +742,498 @@ const requiredDocumentsList = ref([
   { id: 5, name: 'Transcript of Records', required: true }
 ])
 
-// Student Emails (school-distributed Gmail) - from Firebase
+// Student Emails (school-generated) - from Firebase
 const schoolStudentEmails = ref<SchoolStudentRecord[]>([])
 let unsubSchoolStudents: (() => void) | null = null
-const newStudentEmail = ref('')
-const newStudentName = ref('')
+const newStudentFirstName = ref('')
+const newStudentLastName = ref('')
+const newStudentEmailDomain = ref('')
 const newStudentCourse = ref('')
 const newStudentYearLevel = ref('')
 const addingStudentEmail = ref(false)
+const importingStudentEmails = ref(false)
+const bulkStudentFileInput = ref<HTMLInputElement | null>(null)
+
+function sanitizeNamePart(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/[^a-z0-9]/g, '')
+}
+
+const generatedStudentEmail = computed(() => {
+  const first = sanitizeNamePart(newStudentFirstName.value)
+  const last = sanitizeNamePart(newStudentLastName.value)
+  const domainInput = newStudentEmailDomain.value.trim().toLowerCase()
+  const normalizedDomain = domainInput
+    ? domainInput.startsWith('@')
+      ? domainInput
+      : `@${domainInput}`
+    : ''
+  if (!first || !last || !normalizedDomain || normalizedDomain === '@') return ''
+  return `${last}.${first}${normalizedDomain}`
+})
+
+const generatedStudentFullName = computed(() => {
+  const first = newStudentFirstName.value.trim()
+  const last = newStudentLastName.value.trim()
+  if (!first || !last) return ''
+  return `${first} ${last}`
+})
+
+function generateDefaultStudentPassword(studentName?: string) {
+  const base = sanitizeNamePart(studentName || '').slice(0, 8) || 'student'
+  const suffix = Math.floor(1000 + Math.random() * 9000)
+  return `${base}@${suffix}`
+}
+
+async function copyToClipboard(text: string, label: string) {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    await Swal.fire({
+      icon: 'success',
+      title: 'Copied',
+      text: `${label} copied to clipboard.`,
+      timer: 1200,
+      showConfirmButton: false,
+    })
+  } catch {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Copy Failed',
+      text: `Could not copy ${label.toLowerCase()}.`,
+      confirmButtonColor: '#2563eb',
+    })
+  }
+}
+
+function normalizeHeader(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+function parseCsvLine(line: string) {
+  const cells: string[] = []
+  let current = ''
+  let inQuotes = false
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i]
+    const next = line[i + 1]
+
+    if (char === '"') {
+      if (inQuotes && next === '"') {
+        current += '"'
+        i += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+      continue
+    }
+
+    if (char === ',' && !inQuotes) {
+      cells.push(current.trim())
+      current = ''
+      continue
+    }
+
+    current += char
+  }
+
+  cells.push(current.trim())
+  return cells
+}
+
+function triggerBulkStudentFilePicker() {
+  bulkStudentFileInput.value?.click()
+}
+
+async function importStudentsFromFile(event: Event) {
+  const uid = authStore.user?.uid
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!uid || !file) return
+
+  const domainInput = newStudentEmailDomain.value.trim().toLowerCase()
+  const normalizedDomain = domainInput
+    ? domainInput.startsWith('@')
+      ? domainInput
+      : `@${domainInput}`
+    : ''
+
+  if (!normalizedDomain || normalizedDomain === '@') {
+    await Swal.fire({
+      icon: 'warning',
+      title: 'Domain Required',
+      text: 'Enter the school email domain first (e.g. @ncst.edu.ph) before importing.',
+      confirmButtonColor: '#2563eb',
+    })
+    input.value = ''
+    return
+  }
+
+  const isCsv = file.name.toLowerCase().endsWith('.csv') || file.type.includes('csv')
+  if (!isCsv) {
+    await Swal.fire({
+      icon: 'info',
+      title: 'Use CSV Export',
+      text: 'Please upload a CSV file exported from Excel (.xlsx/.xls -> Save As CSV).',
+      confirmButtonColor: '#2563eb',
+    })
+    input.value = ''
+    return
+  }
+
+  importingStudentEmails.value = true
+  try {
+    const text = await file.text()
+    const lines = text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+
+    if (lines.length < 2) {
+      throw new Error('CSV is empty or missing data rows.')
+    }
+
+    const headers = parseCsvLine(lines[0]!).map(normalizeHeader)
+    const firstNameIdx = headers.findIndex((h) => ['firstname', 'first', 'givenname'].includes(h))
+    const lastNameIdx = headers.findIndex((h) => ['lastname', 'last', 'surname', 'familyname'].includes(h))
+    const fullNameIdx = headers.findIndex((h) => ['name', 'studentname', 'fullname'].includes(h))
+    const courseIdx = headers.findIndex((h) => ['course', 'program'].includes(h))
+    const yearLevelIdx = headers.findIndex((h) => ['yearlevel', 'year', 'level'].includes(h))
+
+    if ((firstNameIdx < 0 || lastNameIdx < 0) && fullNameIdx < 0) {
+      throw new Error('CSV must include First Name + Last Name columns, or a Name column.')
+    }
+
+    const existingEmails = new Set(schoolStudentEmails.value.map((item) => item.email.trim().toLowerCase()))
+    const batchEmails = new Set<string>()
+    let imported = 0
+    let skipped = 0
+
+    for (let i = 1; i < lines.length; i += 1) {
+      const row = parseCsvLine(lines[i]!)
+      if (row.length === 0) {
+        skipped += 1
+        continue
+      }
+
+      let firstName = ''
+      let lastName = ''
+
+      if (firstNameIdx >= 0 && lastNameIdx >= 0) {
+        firstName = (row[firstNameIdx] || '').trim()
+        lastName = (row[lastNameIdx] || '').trim()
+      } else if (fullNameIdx >= 0) {
+        const fullName = (row[fullNameIdx] || '').trim()
+        const parts = fullName.split(/\s+/).filter(Boolean)
+        if (parts.length >= 2) {
+          lastName = parts.pop() || ''
+          firstName = parts.join(' ')
+        }
+      }
+
+      const first = sanitizeNamePart(firstName)
+      const last = sanitizeNamePart(lastName)
+      if (!first || !last) {
+        skipped += 1
+        continue
+      }
+
+      const email = `${last}.${first}${normalizedDomain}`
+      if (existingEmails.has(email) || batchEmails.has(email)) {
+        skipped += 1
+        continue
+      }
+
+      const studentName = `${firstName} ${lastName}`.trim()
+      const defaultPassword = generateDefaultStudentPassword(studentName)
+
+      await addSchoolStudent(uid, email, {
+        studentName,
+        defaultPassword,
+        course: courseIdx >= 0 ? (row[courseIdx] || '').trim() || undefined : undefined,
+        yearLevel: yearLevelIdx >= 0 ? (row[yearLevelIdx] || '').trim() || undefined : undefined,
+      })
+      batchEmails.add(email)
+      imported += 1
+    }
+
+    await Swal.fire({
+      icon: 'success',
+      title: 'Import Complete',
+      text: `Imported ${imported} student email(s). Skipped ${skipped}.`,
+      confirmButtonColor: '#2563eb',
+    })
+  } catch (err) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Import Failed',
+      text: err instanceof Error ? err.message : 'Could not import student file.',
+      confirmButtonColor: '#2563eb',
+    })
+  } finally {
+    importingStudentEmails.value = false
+    input.value = ''
+  }
+}
 
 const schoolContracts = ref<ContractRecord[]>([])
+const companiesForContract = ref<PublicProfile[]>([])
+const contractFiles = ref<File[]>([])
+const creatingContract = ref(false)
+const newContractCourse = ref('')
+const selectedContractCourses = ref<string[]>([])
+const contractCourseSlots = ref<Record<string, string>>({})
+const schoolContractForm = ref({
+  companyId: '',
+  companyName: '',
+  contractType: 'Memorandum of Agreement (MOA) for OJT Internship',
+  moaReferenceNo: '',
+  purpose: '',
+  startDate: '',
+  endDate: '',
+  internshipSlots: '',
+  studentPrograms: '',
+  schoolContactName: '',
+  schoolContactEmail: '',
+  companyContactName: '',
+  companyContactEmail: '',
+  schoolResponsibilities: '',
+  companyResponsibilities: '',
+  terms: '',
+  notes: '',
+})
 let unsubSchoolContracts: (() => void) | null = null
+let unsubCompaniesPublic: (() => void) | null = null
 
-onMounted(() => {
-  const uid = authStore.user?.uid
-  if (uid && authStore.user?.role === 'school') {
+function addContractCourse() {
+  const course = newContractCourse.value.trim().toUpperCase()
+  if (!course) return
+  if (!selectedContractCourses.value.includes(course)) {
+    selectedContractCourses.value.push(course)
+  }
+  newContractCourse.value = ''
+}
+
+function removeContractCourse(course: string) {
+  selectedContractCourses.value = selectedContractCourses.value.filter((c) => c !== course)
+  delete contractCourseSlots.value[course]
+}
+
+function onSchoolContractCompanySelect(e: Event) {
+  const target = e.target as HTMLSelectElement
+  const id = target.value
+  const company = companiesForContract.value.find((c) => c.uid === id)
+  if (!company) return
+  schoolContractForm.value.companyId = company.uid
+  schoolContractForm.value.companyName = company.orgName || company.displayName
+}
+
+function triggerContractFileInput() {
+  const fileInput = document.getElementById('school-contract-file-input') as HTMLInputElement
+  fileInput?.click()
+}
+
+function onSchoolContractFileSelect(event: Event) {
+  const target = event.target as HTMLInputElement
+  if (target.files) {
+    contractFiles.value = [...contractFiles.value, ...Array.from(target.files)]
+  }
+  target.value = ''
+}
+
+function removeContractFile(index: number) {
+  contractFiles.value.splice(index, 1)
+}
+
+function resetSchoolContractForm() {
+  schoolContractForm.value = {
+    companyId: '',
+    companyName: '',
+    contractType: 'Memorandum of Agreement (MOA) for OJT Internship',
+    moaReferenceNo: '',
+    purpose: '',
+    startDate: '',
+    endDate: '',
+    internshipSlots: '',
+    studentPrograms: '',
+    schoolContactName: '',
+    schoolContactEmail: '',
+    companyContactName: '',
+    companyContactEmail: '',
+    schoolResponsibilities: '',
+    companyResponsibilities: '',
+    terms: '',
+    notes: '',
+  }
+  contractFiles.value = []
+  selectedContractCourses.value = []
+  contractCourseSlots.value = {}
+}
+
+async function submitSchoolContractRequest() {
+  const schoolId = authStore.user?.uid
+  if (!schoolId) return
+  if (!schoolContractForm.value.companyId || !schoolContractForm.value.companyName) {
+    await Swal.fire({
+      icon: 'warning',
+      title: 'Select Company',
+      text: 'Please select a company to send this contract request.',
+      confirmButtonColor: '#2563eb',
+    })
+    return
+  }
+
+  creatingContract.value = true
+  try {
+    const courseAllocations = selectedContractCourses.value
+      .map((course) => ({
+        course,
+        slots: Number(contractCourseSlots.value[course] || 0),
+      }))
+      .filter((item) => Number.isFinite(item.slots) && item.slots > 0)
+
+    const programsFromAllocations = courseAllocations.map((item) => item.course).join(', ')
+
+    await createContractRequest({
+      companyId: schoolContractForm.value.companyId,
+      companyName: schoolContractForm.value.companyName,
+      schoolId,
+      schoolName: schoolName.value,
+      requestedByRole: 'school',
+      contractType: schoolContractForm.value.contractType || undefined,
+      moaReferenceNo: schoolContractForm.value.moaReferenceNo.trim() || undefined,
+      purpose: schoolContractForm.value.purpose.trim() || undefined,
+      startDate: schoolContractForm.value.startDate || undefined,
+      endDate: schoolContractForm.value.endDate || undefined,
+      internshipSlots: schoolContractForm.value.internshipSlots
+        ? Number(schoolContractForm.value.internshipSlots)
+        : undefined,
+      studentPrograms: programsFromAllocations || schoolContractForm.value.studentPrograms.trim() || undefined,
+      courseAllocations: courseAllocations.length ? courseAllocations : undefined,
+      schoolContactName: schoolContractForm.value.schoolContactName.trim() || undefined,
+      schoolContactEmail: schoolContractForm.value.schoolContactEmail.trim() || undefined,
+      companyContactName: schoolContractForm.value.companyContactName.trim() || undefined,
+      companyContactEmail: schoolContractForm.value.companyContactEmail.trim() || undefined,
+      schoolResponsibilities: schoolContractForm.value.schoolResponsibilities.trim() || undefined,
+      companyResponsibilities: schoolContractForm.value.companyResponsibilities.trim() || undefined,
+      terms: schoolContractForm.value.terms.trim() || undefined,
+      notes: schoolContractForm.value.notes.trim() || undefined,
+      attachments: contractFiles.value.map((file) => ({
+        name: file.name,
+        size: file.size,
+        type: file.type || 'application/octet-stream',
+      })),
+    })
+
+    await Swal.fire({
+      icon: 'success',
+      title: 'Contract Request Sent',
+      text: 'The company can now review your contract request.',
+      confirmButtonColor: '#2563eb',
+    })
+    resetSchoolContractForm()
+  } catch (e) {
+    const firestoreCode = (e as { code?: string })?.code || ''
+    const details = [
+      firestoreCode ? `Code: ${firestoreCode}` : null,
+      `UID: ${authStore.user?.uid || 'none'}`,
+      `Role: ${authStore.user?.role || 'none'}`,
+      `schoolId payload: ${schoolId}`,
+      `companyId payload: ${schoolContractForm.value.companyId || 'none'}`,
+    ].filter(Boolean).join(' | ')
+
+    await Swal.fire({
+      icon: 'error',
+      title: 'Failed',
+      text: e instanceof Error ? `${e.message} (${details})` : `Could not send contract request. (${details})`,
+      confirmButtonColor: '#2563eb',
+    })
+  } finally {
+    creatingContract.value = false
+  }
+}
+
+watch(
+  () => [authStore.user?.uid, authStore.user?.role] as const,
+  ([uid, role]) => {
+    if (unsubSchoolStudents) {
+      unsubSchoolStudents()
+      unsubSchoolStudents = null
+    }
+    if (unsubSchoolContracts) {
+      unsubSchoolContracts()
+      unsubSchoolContracts = null
+    }
+    if (unsubCompaniesPublic) {
+      unsubCompaniesPublic()
+      unsubCompaniesPublic = null
+    }
+
+    if (!uid || role !== 'school') {
+      schoolStudentEmails.value = []
+      schoolContracts.value = []
+      companiesForContract.value = []
+      return
+    }
+
     ensurePublicProfile(uid, {
       displayName: schoolName.value,
       role: 'school',
       orgName: schoolName.value,
       email: authStore.user?.email,
     }).catch(() => {})
+
     unsubSchoolStudents = subscribeSchoolStudents(uid, (items) => {
       schoolStudentEmails.value = items
     })
     unsubSchoolContracts = subscribeSchoolContracts(uid, (items) => {
       schoolContracts.value = items
     })
-  }
-})
+    unsubCompaniesPublic = subscribePublicProfiles('company', (items) => {
+      const byUid = new Map<string, PublicProfile>()
+      for (const item of items) byUid.set(item.uid, item)
+      companiesForContract.value = Array.from(byUid.values())
+    })
+  },
+  { immediate: true }
+)
 
 onUnmounted(() => {
   if (unsubSchoolStudents) unsubSchoolStudents()
   if (unsubSchoolContracts) unsubSchoolContracts()
+  if (unsubCompaniesPublic) unsubCompaniesPublic()
 })
-
-async function handleAcceptContract(c: ContractRecord) {
-  try {
-    await acceptContract(c.id)
-    Swal.fire({ icon: 'success', title: 'Contract Accepted', text: 'The contract is now active.' })
-  } catch (e) {
-    Swal.fire({ icon: 'error', title: 'Error', text: e instanceof Error ? e.message : 'Failed to accept.' })
-  }
-}
-
-async function handleRejectContract(c: ContractRecord) {
-  const { value: reason } = await Swal.fire({
-    title: 'Reject Contract',
-    input: 'textarea',
-    inputLabel: 'Reason (optional)',
-    inputPlaceholder: 'Enter reason for rejection...',
-    showCancelButton: true,
-  })
-  try {
-    await rejectContract(c.id, reason || undefined)
-    Swal.fire({ icon: 'success', title: 'Contract Rejected', text: 'The company has been notified.' })
-  } catch (e) {
-    Swal.fire({ icon: 'error', title: 'Error', text: e instanceof Error ? e.message : 'Failed to reject.' })
-  }
-}
 
 async function addStudentEmail() {
   const uid = authStore.user?.uid
-  const email = newStudentEmail.value.trim()
+  const email = generatedStudentEmail.value.trim()
   if (!uid || !email) return
   addingStudentEmail.value = true
   try {
+    const defaultPassword = generateDefaultStudentPassword(generatedStudentFullName.value || email)
     await addSchoolStudent(uid, email, {
-      studentName: newStudentName.value.trim() || undefined,
+      studentName: generatedStudentFullName.value || undefined,
+      defaultPassword,
       course: newStudentCourse.value.trim() || undefined,
       yearLevel: newStudentYearLevel.value.trim() || undefined,
     })
     await Swal.fire({
       icon: 'success',
       title: 'Student Email Added',
-      text: `${email} can now register and log in as a student. Share this email with the student.`,
+      html: `<div style="text-align:left">` +
+        `<p><strong>Email:</strong> ${email}</p>` +
+        `<p><strong>Default Password:</strong> ${defaultPassword}</p>` +
+        `<p style="margin-top:8px">Share these credentials with the student.</p>` +
+      `</div>`,
       confirmButtonColor: '#2563eb',
     })
-    newStudentEmail.value = ''
-    newStudentName.value = ''
+    newStudentFirstName.value = ''
+    newStudentLastName.value = ''
+    newStudentEmailDomain.value = ''
     newStudentCourse.value = ''
     newStudentYearLevel.value = ''
   } catch (err) {
@@ -1796,7 +2245,10 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
             <!-- Action Buttons -->
             <div class="company-sidebar-actions">
               <button class="btn-edit-company">📝 Edit Company Details</button>
-              <button class="btn-view-moas">📄 View All MOAs</button>
+              <button class="btn-view-moas">
+                <DocumentIcon class="btn-inline-icon" />
+                View All MOAs
+              </button>
           </div>
           </div>
           </div>
@@ -1806,7 +2258,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
         <header class="top-header">
           <div class="header-left">
             <img src="/icons/icon-docs.png" alt="Contracts" class="header-icon-img" />
-            <h1>Company Contract Requests</h1>
+            <h1>School Contract Requests</h1>
           </div>
           <div class="header-right">
             <BellIcon class="notification-icon-bell" />
@@ -1816,16 +2268,148 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
         </header>
         <main class="main-content">
           <div class="student-emails-section">
-            <h2 class="section-title">Incoming Contract Requests</h2>
-            <p class="section-subtitle">Review and accept or reject contract requests from companies.</p>
+            <h2 class="section-title">Create Contract Requests</h2>
+            <p class="section-subtitle">Schools initiate partnership contracts with companies. Add complete details and files, then send the request.</p>
+
+            <div class="section-card">
+              <div class="add-student-form">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Select Company <span class="required">*</span></label>
+                    <select v-model="schoolContractForm.companyId" class="form-input" @change="onSchoolContractCompanySelect">
+                      <option value="">-- Select Company --</option>
+                      <option v-for="c in companiesForContract" :key="c.uid" :value="c.uid">{{ c.orgName || c.displayName }}</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label>Contract Type</label>
+                    <input v-model="schoolContractForm.contractType" type="text" class="form-input" />
+                  </div>
+                  <div class="form-group">
+                    <label>MOA Reference No.</label>
+                    <input v-model="schoolContractForm.moaReferenceNo" type="text" placeholder="MOA-2026-001" class="form-input" />
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Purpose</label>
+                    <textarea v-model="schoolContractForm.purpose" rows="2" class="form-input" placeholder="Purpose of the partnership..."></textarea>
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Start Date</label>
+                    <input v-model="schoolContractForm.startDate" type="date" class="form-input" />
+                  </div>
+                  <div class="form-group">
+                    <label>End Date</label>
+                    <input v-model="schoolContractForm.endDate" type="date" class="form-input" />
+                  </div>
+                  <div class="form-group">
+                    <label>Internship Slots</label>
+                    <input v-model="schoolContractForm.internshipSlots" type="number" min="1" class="form-input" />
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group full-width">
+                    <label>Course Allocation (add course and set slots)</label>
+                    <div class="course-add-row">
+                      <input
+                        v-model="newContractCourse"
+                        type="text"
+                        class="form-input"
+                        placeholder="Add course (e.g. BSIT, BSHM)"
+                        @keydown.enter.prevent="addContractCourse"
+                      />
+                      <button type="button" class="btn-import-file" @click="addContractCourse">Add Course</button>
+                    </div>
+                    <div class="course-allocation-grid">
+                      <div v-for="course in selectedContractCourses" :key="course" class="course-allocation-item">
+                        <div class="course-allocation-label">
+                          <span>{{ course }}</span>
+                          <button type="button" class="file-chip-remove" @click="removeContractCourse(course)">x</button>
+                        </div>
+                        <input
+                          v-model="contractCourseSlots[course]"
+                          type="number"
+                          min="1"
+                          class="form-input course-slot-input"
+                          :placeholder="`How many ${course} students`"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>School Contact Name</label>
+                    <input v-model="schoolContractForm.schoolContactName" type="text" class="form-input" />
+                  </div>
+                  <div class="form-group">
+                    <label>School Contact Email</label>
+                    <input v-model="schoolContractForm.schoolContactEmail" type="email" class="form-input" />
+                  </div>
+                  <div class="form-group">
+                    <label>Company Contact Name</label>
+                    <input v-model="schoolContractForm.companyContactName" type="text" class="form-input" />
+                  </div>
+                  <div class="form-group">
+                    <label>Company Contact Email</label>
+                    <input v-model="schoolContractForm.companyContactEmail" type="email" class="form-input" />
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>School Responsibilities</label>
+                    <textarea v-model="schoolContractForm.schoolResponsibilities" rows="3" class="form-input" placeholder="Responsibilities of school..."></textarea>
+                  </div>
+                  <div class="form-group">
+                    <label>Company Responsibilities</label>
+                    <textarea v-model="schoolContractForm.companyResponsibilities" rows="3" class="form-input" placeholder="Responsibilities of company..."></textarea>
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Terms and Conditions</label>
+                    <textarea v-model="schoolContractForm.terms" rows="3" class="form-input" placeholder="Contract terms..."></textarea>
+                  </div>
+                  <div class="form-group">
+                    <label>Additional Notes</label>
+                    <textarea v-model="schoolContractForm.notes" rows="3" class="form-input" placeholder="Notes for company review..."></textarea>
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Supporting Files</label>
+                    <input id="school-contract-file-input" type="file" multiple class="hidden-file-input" @change="onSchoolContractFileSelect" />
+                    <button type="button" class="btn-import-file" @click="triggerContractFileInput">
+                      <DocumentIcon class="icon-sm" /> Add Files
+                    </button>
+                    <p class="bulk-import-hint">Attach draft MOA, guidelines, or supporting files (metadata only).</p>
+                    <div v-if="contractFiles.length > 0" class="file-chip-list">
+                      <div v-for="(f, idx) in contractFiles" :key="`${f.name}-${idx}`" class="file-chip">
+                        <span>{{ f.name }}</span>
+                        <button type="button" class="file-chip-remove" @click="removeContractFile(idx)">x</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <button type="button" class="btn-add-email" :disabled="creatingContract || !schoolContractForm.companyId" @click="submitSchoolContractRequest">
+                  <PlusIcon class="icon-sm" />
+                  {{ creatingContract ? 'Sending...' : 'Send Contract Request' }}
+                </button>
+              </div>
+            </div>
+
+            <h2 class="section-title" style="margin-top: 28px;">Sent Contract Requests</h2>
             <div v-if="schoolContracts.length === 0" class="empty-state">
-              No contract requests yet.
+              No contract requests sent yet.
             </div>
             <div v-else class="contracts-list">
               <div v-for="c in schoolContracts" :key="c.id" class="contract-card">
                 <div class="contract-doc-header">
                   <span class="contract-doc-title">MEMORANDUM OF AGREEMENT</span>
-                  <span class="contract-doc-parties">{{ c.companyName }} ↔ {{ c.schoolName }}</span>
+                  <span class="contract-doc-parties">{{ c.companyName }} <-> {{ c.schoolName }}</span>
                 </div>
                 <div class="contract-info">
                   <div class="contract-header-row">
@@ -1833,9 +2417,22 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                     <span class="status-badge" :class="(c.status || 'pending').toLowerCase()">{{ c.status }}</span>
                   </div>
                   <p class="contract-type">{{ c.contractType || 'Memorandum of Agreement (MOA)' }}</p>
+                  <p v-if="c.moaReferenceNo" class="contract-purpose"><strong>Ref:</strong> {{ c.moaReferenceNo }}</p>
                   <p v-if="c.purpose" class="contract-purpose">{{ c.purpose }}</p>
                   <div v-if="c.startDate || c.endDate" class="contract-dates">
-                    <strong>Duration:</strong> {{ c.startDate && c.endDate ? `${c.startDate} – ${c.endDate}` : (c.startDate || c.endDate || '—') }}
+                    <strong>Duration:</strong> {{ c.startDate && c.endDate ? `${c.startDate} - ${c.endDate}` : (c.startDate || c.endDate || '-') }}
+                  </div>
+                  <div v-if="c.internshipSlots || c.studentPrograms" class="contract-dates">
+                    <strong>Slots/Programs:</strong> {{ c.internshipSlots || '-' }} slots<span v-if="c.studentPrograms"> | {{ c.studentPrograms }}</span>
+                  </div>
+                  <div v-if="c.courseAllocations && c.courseAllocations.length" class="contract-section">
+                    <strong>Course Slots:</strong>
+                    <p v-for="item in c.courseAllocations" :key="`${c.id}-${item.course}`">{{ item.course }}: {{ item.slots }}</p>
+                  </div>
+                  <div v-if="c.schoolContactName || c.schoolContactEmail || c.companyContactName || c.companyContactEmail" class="contract-section">
+                    <strong>Contacts:</strong>
+                    <p>School: {{ c.schoolContactName || '-' }} <span v-if="c.schoolContactEmail">({{ c.schoolContactEmail }})</span></p>
+                    <p>Company: {{ c.companyContactName || '-' }} <span v-if="c.companyContactEmail">({{ c.companyContactEmail }})</span></p>
                   </div>
                   <div v-if="c.companyResponsibilities" class="contract-section">
                     <strong>Company Responsibilities:</strong>
@@ -1849,10 +2446,14 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                     <strong>Terms & Conditions:</strong>
                     <p>{{ c.terms }}</p>
                   </div>
-                </div>
-                <div v-if="c.status === 'pending'" class="contract-actions">
-                  <button class="btn-approve" @click="handleAcceptContract(c)">Accept Contract</button>
-                  <button class="btn-reject" @click="handleRejectContract(c)">Reject</button>
+                  <div v-if="c.notes" class="contract-section">
+                    <strong>Notes:</strong>
+                    <p>{{ c.notes }}</p>
+                  </div>
+                  <div v-if="c.attachments && c.attachments.length" class="contract-section">
+                    <strong>Files:</strong>
+                    <p v-for="a in c.attachments" :key="`${c.id}-${a.name}`">{{ a.name }}</p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2615,7 +3216,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
         </main>
       </div>
 
-      <!-- Student Emails: School-distributed Gmail for student login -->
+      <!-- Student Emails: School-generated email accounts for student login -->
       <div v-else-if="currentView === 'student-emails'">
         <header class="top-header">
           <div class="header-left">
@@ -2631,20 +3232,28 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
         <main class="main-content">
           <div class="student-emails-section">
             <div class="section-card">
-              <h2 class="section-title">Distribute Student Gmail</h2>
-              <p class="section-subtitle">Add the email addresses (Gmail) you assign to students. Students will use these to register and log in to the system.</p>
+              <h2 class="section-title">Generate Student School Email</h2>
+              <p class="section-subtitle">Enter first name, last name, and school domain. The system will auto-generate the student email using the format lastname.firstname@domain.</p>
               <div class="add-student-form">
                 <div class="form-row">
                   <div class="form-group">
-                    <label>Email (Gmail)</label>
-                    <input v-model="newStudentEmail" type="email" placeholder="student@school.edu.ph" class="form-input" />
+                    <label>First Name</label>
+                    <input v-model="newStudentFirstName" type="text" placeholder="Airhon King" class="form-input" />
                   </div>
                   <div class="form-group">
-                    <label>Student Name (optional)</label>
-                    <input v-model="newStudentName" type="text" placeholder="Juan Dela Cruz" class="form-input" />
+                    <label>Last Name</label>
+                    <input v-model="newStudentLastName" type="text" placeholder="Beron" class="form-input" />
+                  </div>
+                  <div class="form-group">
+                    <label>School Email Domain</label>
+                    <input v-model="newStudentEmailDomain" type="text" placeholder="@ncst.edu.ph" class="form-input" />
                   </div>
                 </div>
                 <div class="form-row">
+                  <div class="form-group">
+                    <label>Generated School Email</label>
+                    <input :value="generatedStudentEmail || 'Fill first name, last name, and domain to generate'" type="text" class="form-input" readonly />
+                  </div>
                   <div class="form-group">
                     <label>Course (optional)</label>
                     <input v-model="newStudentCourse" type="text" placeholder="BS Computer Science" class="form-input" />
@@ -2654,9 +3263,30 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                     <input v-model="newStudentYearLevel" type="text" placeholder="4th Year" class="form-input" />
                   </div>
                 </div>
-                <button @click="addStudentEmail" class="btn-add-email" :disabled="!newStudentEmail.trim() || addingStudentEmail">
+                <button @click="addStudentEmail" class="btn-add-email" :disabled="!generatedStudentEmail || addingStudentEmail">
                   <PlusIcon class="icon-sm" /> {{ addingStudentEmail ? 'Adding...' : 'Add Student Email' }}
                 </button>
+                <div class="bulk-import-block">
+                  <input
+                    ref="bulkStudentFileInput"
+                    type="file"
+                    accept=".csv,.xlsx,.xls"
+                    class="hidden-file-input"
+                    @change="importStudentsFromFile"
+                  />
+                  <button
+                    type="button"
+                    class="btn-import-file"
+                    :disabled="importingStudentEmails"
+                    @click="triggerBulkStudentFilePicker"
+                  >
+                    <DocumentIcon class="icon-sm" />
+                    {{ importingStudentEmails ? 'Importing...' : 'Import From Excel/CSV' }}
+                  </button>
+                  <p class="bulk-import-hint">
+                    Upload CSV exported from Excel with headers: First Name, Last Name, Course (optional), Year Level (optional).
+                  </p>
+                </div>
               </div>
             </div>
             <div class="section-card">
@@ -2674,6 +3304,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                       <th>NAME</th>
                       <th>COURSE</th>
                       <th>YEAR LEVEL</th>
+                      <th>DEFAULT PASSWORD</th>
                       <th>STATUS</th>
                       <th>ACTIONS</th>
                     </tr>
@@ -2684,6 +3315,17 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                       <td>{{ s.studentName || '—' }}</td>
                       <td>{{ s.course || '—' }}</td>
                       <td>{{ s.yearLevel || '—' }}</td>
+                      <td class="password-cell">
+                        <span class="password-text">{{ s.defaultPassword || '-' }}</span>
+                        <button
+                          v-if="s.defaultPassword"
+                          type="button"
+                          class="btn-copy-password"
+                          @click="copyToClipboard(s.defaultPassword, 'Default password')"
+                        >
+                          Copy
+                        </button>
+                      </td>
                       <td><span class="status-badge" :class="s.status">{{ s.status }}</span></td>
                       <td>
                         <button @click="removeStudentEmail(s)" class="btn-remove" title="Remove">
@@ -2809,7 +3451,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
               <p class="settings-subtitle">Manage account information and preferences</p>
             </div>
             <div class="language-selector">
-              <span class="globe-icon">🌐</span>
+              <GlobeAltIcon class="settings-icon-sm" />
               <span>EN (Language name)</span>
             </div>
           </div>
@@ -2850,14 +3492,17 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <div v-if="activeSettingsTab === 'account'">
           <div class="settings-section">
             <div class="section-header">
-              <span class="section-icon">👤</span>
+              <UserCircleIcon class="section-icon-svg" />
               <h2 class="section-title">Account Information</h2>
             </div>
 
             <div class="account-info-grid">
               <div class="account-avatar-section">
                 <div class="avatar-large">CD</div>
-                <button class="change-photo-btn">📷 Change Photo</button>
+                <button class="change-photo-btn">
+                  <PhotoIcon class="settings-icon-sm" />
+                  Change Photo
+                </button>
                 <p class="photo-hint">JPG, PNG or GIF (Max 800k)</p>
               </div>
 
@@ -2875,7 +3520,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                   <div class="input-with-action">
                     <input type="email" value="Cebu@school.edu.ph" readonly class="form-input" />
                     <div class="verified-badge">
-                      <span class="check-icon">✓</span> Verified
+                      <CheckCircleIcon class="settings-icon-sm" /> Verified
                     </div>
                     <button class="link-btn">Send an Email</button>
                   </div>
@@ -2896,7 +3541,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <!-- Contact Details Section -->
           <div class="settings-section">
             <div class="section-header">
-              <span class="section-icon">📞</span>
+              <PhoneIcon class="section-icon-svg" />
               <h2 class="section-title">Contact Details</h2>
             </div>
 
@@ -2923,7 +3568,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <!-- Login & Security Section -->
           <div class="settings-section">
             <div class="section-header">
-              <span class="section-icon">🔒</span>
+              <LockClosedIcon class="section-icon-svg" />
               <h2 class="section-title">Login & Security</h2>
             </div>
 
@@ -2970,26 +3615,26 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
 
               <div class="active-sessions">
                 <div class="session-item">
-                  <span class="device-icon">💻</span>
+                  <ComputerDesktopIcon class="device-icon-svg" />
                   <div class="session-info">
                     <h4>Windows Desktop - Chrome <span class="current-badge">Current</span></h4>
-                    <p>Manila, Philippines • Last active: now</p>
+                    <p>Manila, Philippines - Last active: now</p>
                   </div>
                 </div>
 
                 <div class="session-item">
-                  <span class="device-icon">📱</span>
+                  <ComputerDesktopIcon class="device-icon-svg" />
                   <div class="session-info">
                     <h4>MacBook Pro - Safari</h4>
-                    <p>Quezon City, Philippines • Last active: 2 hours ago</p>
+                    <p>Quezon City, Philippines - Last active: 2 hours ago</p>
                   </div>
                 </div>
 
                 <div class="session-item">
-                  <span class="device-icon">📱</span>
+                  <DevicePhoneMobileIcon class="device-icon-svg" />
                   <div class="session-info">
                     <h4>iPhone 15 - Mobile Safari</h4>
-                    <p>Manila, Philippines • Last active: yesterday</p>
+                    <p>Manila, Philippines - Last active: yesterday</p>
                   </div>
                 </div>
               </div>
@@ -2999,7 +3644,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <!-- Notification Preferences Section -->
           <div class="settings-section">
             <div class="section-header">
-              <span class="section-icon">🔔</span>
+              <BellIcon class="section-icon-svg" />
               <h2 class="section-title">Notification Preferences</h2>
             </div>
 
@@ -3090,7 +3735,10 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                 <div class="form-group logo-upload">
                   <label>School Logo</label>
                   <div class="upload-area">
-                    <button class="upload-btn">📷 Upload New Logo</button>
+                    <button class="upload-btn">
+                      <CloudArrowUpIcon class="settings-icon-sm" />
+                      Upload New Logo
+                    </button>
                     <p class="upload-hint">Recommended size: 200x200px (Max 2MB)</p>
                   </div>
                 </div>
@@ -3137,7 +3785,10 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                 </div>
               </div>
 
-              <button class="btn-save-changes">💾 Save Changes</button>
+              <button class="btn-save-changes">
+                <CheckIcon class="settings-icon-sm" />
+                Save Changes
+              </button>
             </div>
 
             <!-- OJT Coordinator Information -->
@@ -3236,7 +3887,10 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                       <option value="Summer Term">Summer Term</option>
                     </select>
                   </div>
-                  <button class="btn-add-term">+ Add New Term</button>
+                  <button class="btn-add-term">
+                    <PlusIcon class="settings-icon-sm" />
+                    Add New Term
+                  </button>
                 </div>
 
                 <div class="terms-table">
@@ -3256,8 +3910,12 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                       <span class="status-badge status-active">{{ term.status }}</span>
                     </div>
                     <div class="table-col table-actions">
-                      <button class="icon-btn">✏️</button>
-                      <button class="icon-btn">🗑️</button>
+                      <button class="icon-btn" title="Edit">
+                        <PencilSquareIcon class="settings-icon-sm" />
+                      </button>
+                      <button class="icon-btn" title="Delete">
+                        <TrashIcon class="settings-icon-sm" />
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -3676,7 +4334,10 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                 </div>
               </div>
 
-              <button class="btn-save-changes">💾 Save All Configuration</button>
+              <button class="btn-save-changes">
+                <CheckIcon class="settings-icon-sm" />
+                Save All Configuration
+              </button>
             </div>
           </div>
 
@@ -3684,12 +4345,82 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <div v-else-if="activeSettingsTab === 'data'">
             <div class="settings-section">
               <div class="section-header">
+                <CircleStackIcon class="section-icon-svg" />
                 <h2 class="section-title">Data Settings</h2>
                 <p class="section-subtitle">Manage your school data and preferences</p>
               </div>
 
-              <div class="simple-message">
-                <p>Data management features coming soon...</p>
+              <div class="data-settings-grid">
+                <div class="settings-card">
+                  <h3>Backup & Retention</h3>
+                  <div class="config-item full-width">
+                    <div class="toggle-setting">
+                      <div>
+                        <label class="toggle-label-main">Enable Automatic Backup</label>
+                        <p class="toggle-description">Creates backup copies of school settings and records.</p>
+                      </div>
+                      <label class="toggle-switch">
+                        <input type="checkbox" v-model="dataSettings.autoBackup" />
+                        <span class="toggle-slider"></span>
+                      </label>
+                    </div>
+                  </div>
+                  <div class="config-item">
+                    <label>Backup Frequency</label>
+                    <select v-model="dataSettings.backupFrequency" class="form-select">
+                      <option value="daily">Daily</option>
+                      <option value="weekly">Weekly</option>
+                      <option value="monthly">Monthly</option>
+                    </select>
+                  </div>
+                  <div class="config-item">
+                    <label>Retention Period (days)</label>
+                    <input v-model="dataSettings.retentionDays" type="number" min="30" class="form-input" />
+                  </div>
+                  <button class="btn-save-changes" @click="saveDataSettings">
+                    <CheckIcon class="settings-icon-sm" />
+                    Save Data Settings
+                  </button>
+                </div>
+
+                <div class="settings-card">
+                  <h3>Data Export</h3>
+                  <p class="section-subtitle">Download institutional records and reports for compliance.</p>
+                  <div class="data-actions">
+                    <button class="btn-secondary-action settings-action-btn" @click="exportSchoolData('students')">
+                      <DocumentIcon class="settings-icon-sm" />
+                      Export Student Records
+                    </button>
+                    <button class="btn-secondary-action settings-action-btn" @click="exportSchoolData('internships')">
+                      <ClipboardDocumentListIcon class="settings-icon-sm" />
+                      Export Internship Data
+                    </button>
+                    <button class="btn-secondary-action settings-action-btn" @click="exportSchoolData('contracts')">
+                      <DocumentIcon class="settings-icon-sm" />
+                      Export Contracts
+                    </button>
+                  </div>
+                </div>
+
+                <div class="settings-card">
+                  <h3>Privacy & Analytics</h3>
+                  <div class="config-item full-width">
+                    <div class="toggle-setting">
+                      <div>
+                        <label class="toggle-label-main">Allow Usage Analytics</label>
+                        <p class="toggle-description">Help improve dashboard performance and reliability.</p>
+                      </div>
+                      <label class="toggle-switch">
+                        <input type="checkbox" v-model="dataSettings.allowAnalytics" />
+                        <span class="toggle-slider"></span>
+                      </label>
+                    </div>
+                  </div>
+                  <button class="btn-secondary-action settings-action-btn" @click="clearSchoolCache">
+                    <ArrowPathRoundedSquareIcon class="settings-icon-sm" />
+                    Clear Cached Data
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -3873,11 +4604,61 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
 .student-emails-section .section-subtitle { color: #6b7280; margin: 0 0 20px 0; font-size: 0.9rem; }
 .add-student-form .form-row { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
 .add-student-form .form-group { flex: 1; min-width: 200px; }
+.add-student-form .form-group.full-width { flex: 1 1 100%; min-width: 100%; }
 .add-student-form .form-group label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 6px; color: #374151; }
 .add-student-form .form-input { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.9rem; }
+.course-add-row { display: flex; gap: 10px; margin-bottom: 10px; }
+.course-add-row .form-input { flex: 1; }
+.course-allocation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+.course-allocation-item {
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.course-allocation-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.86rem;
+  color: #1f2937;
+  margin-bottom: 8px;
+}
+.course-slot-input { background: #fff; }
 .btn-add-email { display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer; }
 .btn-add-email:hover:not(:disabled) { background: #1d4ed8; }
 .btn-add-email:disabled { opacity: 0.6; cursor: not-allowed; }
+.hidden-file-input { display: none; }
+.bulk-import-block { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.btn-import-file { display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; background: #0f766e; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer; width: fit-content; }
+.btn-import-file:hover:not(:disabled) { background: #0d5f58; }
+.btn-import-file:disabled { opacity: 0.6; cursor: not-allowed; }
+.bulk-import-hint { margin: 0; color: #6b7280; font-size: 0.82rem; }
+.required { color: #dc2626; }
+.file-chip-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  font-size: 0.8rem;
+  color: #334155;
+}
+.file-chip-remove {
+  border: none;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
 .icon-sm { width: 18px; height: 18px; }
 .empty-state { text-align: center; padding: 48px 24px; color: #6b7280; }
 .empty-state .empty-icon { width: 48px; height: 48px; margin-bottom: 16px; opacity: 0.5; }
@@ -3888,7 +4669,24 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
 .emails-table .status-badge { padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 500; }
 .emails-table .status-badge.pending { background: #dbeafe; color: #1e40af; }
 .emails-table .status-badge.registered { background: #d1fae5; color: #065f46; }
+.password-cell { display: flex; align-items: center; gap: 8px; }
+.password-text { font-family: 'Courier New', Courier, monospace; font-size: 0.82rem; }
+.btn-copy-password {
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  color: #111827;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.btn-copy-password:hover { background: #f9fafb; }
 .btn-remove { background: none; border: none; padding: 8px; cursor: pointer; color: #ef4444; border-radius: 6px; }
 .btn-remove:hover { background: #fef2f2; }
 </style>
+
+
+
+
+
 

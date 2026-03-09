@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import {
+  createMissingUserProfile,
   fetchUserProfile,
   loginUser,
   logoutUser,
@@ -111,11 +112,16 @@ export const useAuthStore = defineStore('auth', () => {
     blockedReason.value = null
     try {
       const firebaseUser = await loginUser(email, password)
-      const profile = await fetchUserProfile(firebaseUser.uid)
+      let profile = await fetchUserProfile(firebaseUser.uid)
       
       if (!profile) {
+        await createMissingUserProfile(firebaseUser)
+        profile = await fetchUserProfile(firebaseUser.uid)
+      }
+
+      if (!profile) {
         await logoutUser()
-        throw new Error('User profile not found in database. Firestore rules may not be deployed.')
+        throw new Error('Could not load user profile.')
       }
       
       if (profile?.isActive === false) {

@@ -21,6 +21,7 @@ export interface InternshipRecord {
   type: string
   duration: string
   slotsAvailable: number
+  eligibleCourses?: string[]
   requirements?: string[]
   allowance?: string
   status: 'active' | 'draft' | 'closed'

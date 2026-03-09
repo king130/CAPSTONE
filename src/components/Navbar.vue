@@ -8,8 +8,9 @@
       ☰
     </button>
     <nav :class="['links', { open: isMenuOpen }]">
-      <a href="#why">Why Us</a>
-      <a href="#pricing">Subscriptions</a>
+      <RouterLink to="/">Home</RouterLink>
+      <RouterLink :to="{ path: '/', hash: '#why' }">Why Us</RouterLink>
+      <RouterLink :to="{ path: '/', hash: '#pricing' }">Subscriptions</RouterLink>
       <RouterLink to="/find-internships">Find Internships</RouterLink>
     </nav>
     <div class="nav-actions">

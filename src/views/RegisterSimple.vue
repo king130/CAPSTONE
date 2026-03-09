@@ -4,7 +4,6 @@ import { ref, onMounted } from 'vue'
 import Swal from 'sweetalert2'
 import { RouterLink, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { findSchoolByStudentEmail } from '@/services/schoolStudents'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -23,6 +22,10 @@ const formData = ref({
 // Check if already logged in - redirect to dashboard or find-internships
 onMounted(() => {
   if (authStore.user) {
+    if (authStore.user.mustChangePassword) {
+      router.replace('/change-password')
+      return
+    }
     const role = authStore.user?.role
     if (role && role !== 'guest' && role !== null) {
       const dash = role === 'admin' ? '/admin/overview' : role === 'company' ? '/dashboard' : role === 'school' ? '/school' : role === 'student' ? '/intern' : '/find-internships'
@@ -59,44 +62,38 @@ async function onRegister() {
   }
 
   try {
-    const email = formData.value.email.trim().toLowerCase()
-    const schoolInfo = await findSchoolByStudentEmail(email)
-
-    let registerPayload: Parameters<typeof authStore.register>[0] = {
+    // Register as guest by default. Role is chosen after account creation.
+    const registerPayload: Parameters<typeof authStore.register>[0] = {
       fullName: formData.value.fullName,
       email: formData.value.email,
       password: formData.value.password,
     }
 
-    if (schoolInfo) {
-      registerPayload = {
-        ...registerPayload,
-        role: 'student',
-        profile: {
-          schoolId: schoolInfo.schoolId,
-          schoolSubscriptionCode: schoolInfo.subscriptionCode,
-        },
-      }
-    }
+    const profile = await authStore.register(registerPayload)
 
-    await authStore.register(registerPayload)
+    if (profile.role === 'student' && profile.mustChangePassword) {
+      await Swal.fire({
+        icon: 'success',
+        iconColor: '#16a34a',
+        title: 'Student Account Ready!',
+        text: 'Your student account is now active. Please change your default password to continue.',
+        confirmButtonText: 'Continue',
+        confirmButtonColor: '#2563eb'
+      })
+      router.push('/change-password')
+      return
+    }
 
     await Swal.fire({
       icon: 'success',
       iconColor: '#16a34a',
       title: 'Account Created!',
-      text: schoolInfo
-        ? "You're registered as a student. Use this email and password to log in."
-        : 'Welcome to OJT Path!',
+      text: 'Your guest account is ready. Next, choose your role and complete your profile.',
       confirmButtonText: 'Continue',
       confirmButtonColor: '#2563eb'
     })
 
-    if (schoolInfo) {
-      router.push('/intern')
-    } else {
-      router.push('/find-internships')
-    }
+    router.push('/role-selection')
     
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Registration failed.'
@@ -124,7 +121,7 @@ async function onRegister() {
       </div>
 
       <h1>Create Your Account</h1>
-      <p class="subtitle">Get started with OJT Path in seconds</p>
+      <p class="subtitle">Sign up as a guest first, then choose your role</p>
 
       <form class="form" @submit.prevent="onRegister">
         <label class="field">
@@ -142,10 +139,9 @@ async function onRegister() {
           <input 
             v-model="formData.email" 
             type="email" 
-            placeholder="Students: Use the Gmail your school assigned to you" 
+            placeholder="Enter your email address" 
             required
           />
-          <small class="field-hint">Students must use the email address provided by their school.</small>
         </label>
 
         <label class="field">

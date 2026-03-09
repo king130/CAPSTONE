@@ -1,6 +1,6 @@
 import { fileURLToPath, URL } from 'node:url'
 
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 import vueDevTools from 'vite-plugin-vue-devtools'
 
@@ -10,6 +10,17 @@ export default defineConfig({
     vue(),
     vueDevTools(),
   ],
+  server: {
+    watch: {
+      // Avoid transient EBUSY on Windows when files are momentarily locked during save.
+      usePolling: true,
+      interval: 120,
+      awaitWriteFinish: {
+        stabilityThreshold: 300,
+        pollInterval: 80,
+      },
+    },
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url))

@@ -18,6 +18,7 @@ export interface SchoolStudentRecord {
   schoolId: string
   email: string
   studentName?: string
+  defaultPassword?: string
   course?: string
   yearLevel?: string
   status: 'pending' | 'registered'
@@ -48,7 +49,12 @@ export function subscribeSchoolStudents(
 export async function addSchoolStudent(
   schoolId: string,
   email: string,
-  options?: { studentName?: string; course?: string; yearLevel?: string }
+  options?: {
+    studentName?: string
+    defaultPassword?: string
+    course?: string
+    yearLevel?: string
+  }
 ) {
   const normalizedEmail = email.trim().toLowerCase()
   if (!normalizedEmail) throw new Error('Email is required')
@@ -58,6 +64,7 @@ export async function addSchoolStudent(
     schoolId,
     email: normalizedEmail,
     studentName: options?.studentName || null,
+    defaultPassword: options?.defaultPassword || null,
     course: options?.course || null,
     yearLevel: options?.yearLevel || null,
     status: 'pending',
@@ -84,7 +91,9 @@ export async function findSchoolByStudentEmail(email: string): Promise<{
   const snapshot = await getDocs(q)
   if (snapshot.empty) return null
 
-  const record = snapshot.docs[0].data() as SchoolStudentRecord
+  const firstDoc = snapshot.docs[0]
+  if (!firstDoc) return null
+  const record = firstDoc.data() as SchoolStudentRecord
   const schoolDoc = await getDoc(doc(db, 'users', record.schoolId))
   const schoolData = schoolDoc.data()
   const subscriptionCode = schoolData?.subscription?.subscriptionCode as string | undefined

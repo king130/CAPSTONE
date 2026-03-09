@@ -81,14 +81,7 @@
         <span>Student Interns</span>
       </div>
 
-      <div
-        class="nav-item"
-        :class="{ active: activeItem === 'profile' }"
-        @click="setActiveItem('profile')"
-      >
-        <img src="/icons/icon-profile.png" alt="Profile" class="nav-icon-img" />
-        <span>Profile</span>
-      </div>
+
     </nav>
 
     <!-- Bottom Section -->

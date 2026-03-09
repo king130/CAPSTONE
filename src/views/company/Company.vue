@@ -1,9 +1,27 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import Sidebar from '../../components/Sidebar.vue'
 import CompanySettings from '../../components/CompanySettings.vue'
 import FloatingChatWidget from '../../components/FloatingChatWidget.vue'
 import { useAuthStore } from '@/stores/auth'
+import Swal from 'sweetalert2'
+import TomSelect from 'tom-select'
+import 'tom-select/dist/css/tom-select.css'
+import { ensurePublicProfile } from '@/services/profilesPublic'
+import {
+  subscribeCompanyContracts,
+  acceptContract,
+  rejectContract,
+  type ContractRecord,
+} from '@/services/contracts'
+import { createInternship, subscribeCompanyInternships, type InternshipRecord } from '@/services/internships'
+import {
+  subscribeCompanyApplications,
+  subscribeCompanyApplicationsByInternships,
+  updateApplicationStatus,
+  type ApplicationRecord,
+} from '@/services/applications'
 import { 
   DocumentIcon, 
   ClockIcon, 
@@ -211,20 +229,6 @@ const applicationsByInternships = ref<ApplicationRecord[]>([])
 
 // Contracts (company-school)
 const companyContracts = ref<ContractRecord[]>([])
-const schoolsForContract = ref<PublicProfile[]>([])
-const showCreateContractModal = ref(false)
-const contractForm = ref({
-  schoolId: '',
-  schoolName: '',
-  contractType: 'Memorandum of Agreement (MOA) for OJT Internship',
-  purpose: 'To establish a partnership for the placement of students in on-the-job training (OJT) internships.',
-  startDate: '',
-  endDate: '',
-  companyResponsibilities: 'Provide internship slots; assign mentors; ensure safe work environment; evaluate intern performance.',
-  schoolResponsibilities: 'Endorse qualified students; monitor intern progress; ensure compliance with academic requirements.',
-  terms: 'This agreement shall be effective upon acceptance by both parties. Either party may terminate with 30 days written notice.',
-})
-const creatingContract = ref(false)
 let unsubCompanyContracts: (() => void) | null = null
 
 watch(
@@ -291,68 +295,14 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  destroyCourseTomSelect()
+  destroySkillsTomSelect()
   if (stopAuthWatch) stopAuthWatch()
   if (unsubCompanyInternships) unsubCompanyInternships()
   if (unsubCompanyApplications) unsubCompanyApplications()
   if (unsubByInternships) unsubByInternships()
   if (unsubCompanyContracts) unsubCompanyContracts()
 })
-
-async function openCreateContractModal() {
-  schoolsForContract.value = await listPublicProfiles('school')
-  contractForm.value = {
-    schoolId: '',
-    schoolName: '',
-    contractType: 'Memorandum of Agreement (MOA) for OJT Internship',
-    purpose: 'To establish a partnership for the placement of students in on-the-job training (OJT) internships.',
-    startDate: new Date().toISOString().slice(0, 10),
-    endDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-    companyResponsibilities: 'Provide internship slots; assign mentors; ensure safe work environment; evaluate intern performance.',
-    schoolResponsibilities: 'Endorse qualified students; monitor intern progress; ensure compliance with academic requirements.',
-    terms: 'This agreement shall be effective upon acceptance by both parties. Either party may terminate with 30 days written notice.',
-  }
-  showCreateContractModal.value = true
-}
-
-async function submitContractRequest() {
-  const uid = authStore.user?.uid
-  if (!uid || !contractForm.value.schoolId || !contractForm.value.schoolName) {
-    Swal.fire({ icon: 'warning', title: 'Select a school', text: 'Please select a school to send the contract request.' })
-    return
-  }
-  creatingContract.value = true
-  try {
-    await createContractRequest({
-      companyId: uid,
-      companyName: companyName.value,
-      schoolId: contractForm.value.schoolId,
-      schoolName: contractForm.value.schoolName,
-      contractType: contractForm.value.contractType || undefined,
-      purpose: contractForm.value.purpose || undefined,
-      startDate: contractForm.value.startDate || undefined,
-      endDate: contractForm.value.endDate || undefined,
-      companyResponsibilities: contractForm.value.companyResponsibilities || undefined,
-      schoolResponsibilities: contractForm.value.schoolResponsibilities || undefined,
-      terms: contractForm.value.terms || undefined,
-    })
-    Swal.fire({ icon: 'success', title: 'Contract Sent', text: 'Your contract request has been sent to the school.' })
-    showCreateContractModal.value = false
-  } catch (e) {
-    Swal.fire({ icon: 'error', title: 'Error', text: e instanceof Error ? e.message : 'Failed to send contract.' })
-  } finally {
-    creatingContract.value = false
-  }
-}
-
-function onContractSchoolSelect(e: Event) {
-  const target = e.target as HTMLSelectElement
-  const id = target.value
-  const school = schoolsForContract.value.find((s) => s.uid === id)
-  if (school) {
-    contractForm.value.schoolId = id
-    contractForm.value.schoolName = school.orgName || school.displayName
-  }
-}
 
 function removeSkill(skill: string) {
   selectedSkills.value = selectedSkills.value.filter(s => s !== skill)
@@ -373,7 +323,6 @@ const currentFormStep = ref(1)
 const formTitle = ref('')
 const formDescription = ref('')
 const formSkills = ref<string[]>([])
-const newSkillInput = ref('')
 const slotsAvailable = ref(1)
 const startDateForm = ref('')
 const endDateForm = ref('')
@@ -384,11 +333,177 @@ const formDepartment = ref('')
 const formHoursPerWeek = ref(20)
 const formAllowance = ref('')
 
-const preferredCourse = ref('')
+const selectedCourses = ref<string[]>([])
+const courseSelectRef = ref<HTMLSelectElement | null>(null)
+const skillsSelectRef = ref<HTMLSelectElement | null>(null)
+const defaultCourseSkillMap: Record<string, string[]> = {
+  BSIT: ['HTML/CSS', 'JavaScript', 'TypeScript', 'Vue.js', 'React', 'Node.js', 'PHP', 'SQL', 'Git', 'REST APIs'],
+  BSCS: ['Python', 'Java', 'C++', 'Data Structures', 'Algorithms', 'SQL', 'Git', 'Testing', 'REST APIs'],
+  BSECE: ['Embedded Systems', 'C', 'Microcontrollers', 'Circuit Design', 'PCB', 'IoT', 'Signal Processing', 'MATLAB'],
+  BSED: ['Lesson Planning', 'Classroom Management', 'Content Writing', 'Presentation Skills', 'Documentation'],
+  ANY: ['Communication', 'Teamwork', 'Problem Solving', 'Time Management'],
+}
+const defaultCourseOptions = Object.keys(defaultCourseSkillMap)
+
+function uniqueValues(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)))
+}
+
+const availableCourseOptions = computed(() => uniqueValues([
+  ...defaultCourseOptions,
+  ...selectedCourses.value,
+]))
+
+const availableSkillOptions = computed(() => uniqueValues([
+  ...selectedCourses.value.flatMap((course) => defaultCourseSkillMap[course] || []),
+  ...formSkills.value,
+]))
+
+let courseTomSelectInstance: TomSelect | null = null
+let skillsTomSelectInstance: TomSelect | null = null
 const minimumGPA = ref('')
-const formSelectedSkills = ref([])
 const yearLevel = ref('')
 const additionalRequirements = ref('')
+const requiredSkills = ref('')
+const primaryResponsibilities = ref('')
+const learningObjectives = ref('')
+const projectsDeliverables = ref('')
+const applicationInstructions = ref('')
+const contactInfo = ref('')
+const submittingInternship = ref(false)
+
+function normalizeTomSelectValues(raw: string | string[] | null | undefined) {
+  return uniqueValues(
+    Array.isArray(raw)
+      ? raw.map((value) => String(value))
+      : typeof raw === 'string'
+        ? raw.split(',')
+        : []
+  )
+}
+
+function destroyCourseTomSelect() {
+  if (!courseTomSelectInstance) return
+  try {
+    courseTomSelectInstance.destroy()
+  } catch {
+    // ignore cleanup errors from torn-down nodes
+  }
+  courseTomSelectInstance = null
+}
+
+function destroySkillsTomSelect() {
+  if (!skillsTomSelectInstance) return
+  try {
+    skillsTomSelectInstance.destroy()
+  } catch {
+    // ignore cleanup errors from torn-down nodes
+  }
+  skillsTomSelectInstance = null
+}
+
+watch(
+  () => selectedCourses.value.join('|'),
+  () => {
+    selectedCourses.value = uniqueValues(selectedCourses.value)
+  }
+)
+
+watch(
+  () => [currentFormStep.value, availableCourseOptions.value.join('|')] as const,
+  async ([step]) => {
+    if (step !== 2) {
+      destroyCourseTomSelect()
+      return
+    }
+
+    await nextTick()
+
+    const el = courseSelectRef.value
+    if (!el) return
+
+    destroyCourseTomSelect()
+
+    courseTomSelectInstance = new TomSelect(el, {
+      plugins: ['remove_button'],
+      persist: false,
+      create(input: string) {
+        const value = input.trim().toUpperCase()
+        return value ? { value, text: value } : false
+      },
+      closeAfterSelect: true,
+    })
+
+    if (selectedCourses.value.length) {
+      courseTomSelectInstance.setValue(selectedCourses.value, true)
+    }
+
+    courseTomSelectInstance.on('change', () => {
+      selectedCourses.value = normalizeTomSelectValues(courseTomSelectInstance?.getValue())
+    })
+  },
+  { immediate: true }
+)
+
+watch(
+  () => [currentFormStep.value, selectedCourses.value.join('|'), availableSkillOptions.value.join('|')] as const,
+  async ([step]) => {
+    if (step !== 2) {
+      destroySkillsTomSelect()
+      return
+    }
+
+    await nextTick()
+
+    const el = skillsSelectRef.value
+    if (!el) return
+
+    destroySkillsTomSelect()
+
+    skillsTomSelectInstance = new TomSelect(el, {
+      plugins: ['remove_button'],
+      persist: false,
+      create(input: string) {
+        const value = input.trim()
+        return value ? { value, text: value } : false
+      },
+      closeAfterSelect: true,
+    })
+
+    if (formSkills.value.length) {
+      skillsTomSelectInstance.setValue(formSkills.value, true)
+    }
+
+    skillsTomSelectInstance.on('change', () => {
+      formSkills.value = normalizeTomSelectValues(skillsTomSelectInstance?.getValue())
+    })
+  },
+  { immediate: true }
+)
+
+watch(
+  () => selectedCourses.value.join('|'),
+  (courses) => {
+    if (!courseTomSelectInstance) return
+    const selectedValues = normalizeTomSelectValues(courseTomSelectInstance.getValue())
+    if (selectedValues.join('|') !== courses) {
+      courseTomSelectInstance.setValue(selectedCourses.value, true)
+    }
+  }
+)
+
+watch(
+  () => formSkills.value.join('|'),
+  (skills) => {
+    requiredSkills.value = formSkills.value.join(', ')
+
+    if (!skillsTomSelectInstance) return
+    const selectedValues = normalizeTomSelectValues(skillsTomSelectInstance.getValue())
+    if (selectedValues.join('|') !== skills) {
+      skillsTomSelectInstance.setValue(formSkills.value, true)
+    }
+  }
+)
 
 function openCreateForm() {
   showCreateForm.value = true
@@ -411,25 +526,6 @@ function nextFormStep() {
 function prevFormStep() {
   if (currentFormStep.value > 1) {
     currentFormStep.value--
-  }
-}
-
-function addSkill() {
-  const skill = newSkillInput.value.trim()
-  if (skill && !formSkills.value.includes(skill)) {
-    formSkills.value.push(skill)
-    newSkillInput.value = ''
-  }
-}
-
-function removeFormSkill(skill: string) {
-  formSkills.value = formSkills.value.filter(s => s !== skill)
-}
-
-function handleKeyPress(event: KeyboardEvent) {
-  if (event.key === 'Enter') {
-    event.preventDefault()
-    addSkill()
   }
 }
 
@@ -460,12 +556,20 @@ async function submitInternship(status: 'active' | 'draft') {
     await Swal.fire({ icon: 'warning', title: 'Missing location', text: 'Please enter a location.' })
     return
   }
+  if (selectedCourses.value.length === 0) {
+    await Swal.fire({ icon: 'warning', title: 'Missing courses', text: 'Please add at least one preferred course or program.' })
+    return
+  }
+  if (formSkills.value.length === 0) {
+    await Swal.fire({ icon: 'warning', title: 'Missing skills', text: 'Please add at least one required skill or technology.' })
+    return
+  }
 
   submittingInternship.value = true
   try {
-    const requirements = requiredSkills.value
-      ? requiredSkills.value.split(/[,\n]/).map((s) => s.trim()).filter(Boolean)
-      : formSkills.value.length ? formSkills.value : []
+    const requirements = formSkills.value.length
+      ? uniqueValues(formSkills.value)
+      : requiredSkills.value.split(/[,\n]/).map((s) => s.trim()).filter(Boolean)
 
     await createInternship({
       title: formTitle.value.trim(),
@@ -476,6 +580,7 @@ async function submitInternship(status: 'active' | 'draft') {
       type: formType.value,
       duration: formDuration.value ? `${formDuration.value} weeks` : '12 weeks',
       slotsAvailable: typeof slotsAvailable.value === 'number' ? slotsAvailable.value : parseInt(String(slotsAvailable.value), 10) || 1,
+      eligibleCourses: uniqueValues(selectedCourses.value),
       requirements,
       allowance: formAllowance.value || undefined,
       status,
@@ -513,7 +618,7 @@ function resetCreateForm() {
   slotsAvailable.value = 1
   formHoursPerWeek.value = 20
   formAllowance.value = ''
-  preferredCourse.value = ''
+  selectedCourses.value = []
   minimumGPA.value = ''
   requiredSkills.value = ''
   yearLevel.value = ''
@@ -599,6 +704,69 @@ async function handleDeclineApplication(app: ApplicationRecord) {
     await Swal.fire({ icon: 'success', title: 'Declined', text: 'Application declined.', confirmButtonColor: '#2563eb' })
   } catch (err) {
     await Swal.fire({ icon: 'error', title: 'Failed', text: err instanceof Error ? err.message : 'Could not update.' })
+  }
+}
+
+async function handleAcceptContractRequest(contract: ContractRecord) {
+  const result = await Swal.fire({
+    icon: 'question',
+    title: 'Accept contract request?',
+    text: `Accept MOA request from ${contract.schoolName}?`,
+    showCancelButton: true,
+    confirmButtonText: 'Accept',
+    confirmButtonColor: '#059669',
+    cancelButtonText: 'Cancel',
+  })
+  if (!result.isConfirmed) return
+
+  try {
+    await acceptContract(contract.id)
+    await Swal.fire({
+      icon: 'success',
+      title: 'Contract accepted',
+      text: 'The contract is now active.',
+      confirmButtonColor: '#2563eb',
+    })
+  } catch (err) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Could not accept contract',
+      text: err instanceof Error ? err.message : 'Please try again.',
+      confirmButtonColor: '#2563eb',
+    })
+  }
+}
+
+async function handleRejectContractRequest(contract: ContractRecord) {
+  const result = await Swal.fire({
+    title: 'Reject contract request?',
+    text: `Reject MOA request from ${contract.schoolName}?`,
+    icon: 'warning',
+    input: 'text',
+    inputLabel: 'Reason (optional)',
+    inputPlaceholder: 'Enter rejection reason',
+    showCancelButton: true,
+    confirmButtonText: 'Reject',
+    confirmButtonColor: '#dc2626',
+    cancelButtonText: 'Cancel',
+  })
+  if (!result.isConfirmed) return
+
+  try {
+    await rejectContract(contract.id, (result.value as string | undefined)?.trim())
+    await Swal.fire({
+      icon: 'success',
+      title: 'Contract rejected',
+      text: 'The contract request was rejected.',
+      confirmButtonColor: '#2563eb',
+    })
+  } catch (err) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Could not reject contract',
+      text: err instanceof Error ? err.message : 'Please try again.',
+      confirmButtonColor: '#2563eb',
+    })
   }
 }
 
@@ -1063,14 +1231,8 @@ function saveSettings() {
 
 // Cleanup Tom Select on component unmount
 onUnmounted(() => {
-  if (tomSelectInstance) {
-    try {
-      tomSelectInstance.destroy()
-    } catch (e) {
-      // Ignore errors
-    }
-    tomSelectInstance = null
-  }
+  destroyCourseTomSelect()
+  destroySkillsTomSelect()
 })
 </script>
 
@@ -1552,99 +1714,85 @@ onUnmounted(() => {
             <h1>School Contracts</h1>
           </div>
           <div class="header-right">
-            <button class="btn-add-journal" @click="openCreateContractModal">Request Contract with School</button>
             <div class="avatar" @click="handleNavChange('profile')" title="View Profile">{{ userInitials }}</div>
           </div>
         </header>
         <main class="main-content">
           <div class="applications-container">
-            <h2 class="applications-title">Your Contract Requests</h2>
+            <h2 class="applications-title">Contract Requests From Schools</h2>
             <div v-if="companyContracts.length === 0" class="empty-applications">
-              No contracts yet. Request a contract with a school to establish a partnership.
+              No contract requests yet from schools.
             </div>
-            <table v-else class="applications-table">
-              <thead>
-                <tr>
-                  <th>School</th>
-                  <th>Type</th>
-                  <th>Duration</th>
-                  <th>Status</th>
-                  <th>Date</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="c in companyContracts" :key="c.id">
-                  <td>{{ c.schoolName }}</td>
-                  <td>{{ c.contractType || 'MOA' }}</td>
-                  <td>{{ c.startDate && c.endDate ? `${c.startDate} – ${c.endDate}` : '—' }}</td>
-                  <td>
+            <div v-else class="contracts-list">
+              <div v-for="c in companyContracts" :key="c.id" class="contract-card">
+                <div class="contract-doc-header">
+                  <span class="contract-doc-title">MEMORANDUM OF AGREEMENT</span>
+                  <span class="contract-doc-parties">{{ c.schoolName }} <-> {{ c.companyName }}</span>
+                </div>
+                <div class="contract-info">
+                  <div class="contract-header-row">
+                    <h3>{{ c.schoolName }}</h3>
                     <span class="status-badge-app" :class="(c.status || 'pending').toLowerCase()">
                       {{ (c.status || 'pending').charAt(0).toUpperCase() + (c.status || 'pending').slice(1) }}
                     </span>
-                  </td>
-                  <td>{{ formatApplicationDate(c.createdAt) }}</td>
-                </tr>
-              </tbody>
-            </table>
+                  </div>
+                  <div v-if="(c.status || 'pending') === 'pending'" class="contract-actions">
+                    <button class="contract-btn contract-btn-accept" @click="handleAcceptContractRequest(c)">
+                      Accept
+                    </button>
+                    <button class="contract-btn contract-btn-reject" @click="handleRejectContractRequest(c)">
+                      Reject
+                    </button>
+                  </div>
+                  <p class="contract-type">{{ c.contractType || 'MOA' }}</p>
+                  <p v-if="c.moaReferenceNo" class="contract-purpose"><strong>Ref:</strong> {{ c.moaReferenceNo }}</p>
+                  <p v-if="c.purpose" class="contract-purpose">{{ c.purpose }}</p>
+                  <div v-if="c.startDate || c.endDate" class="contract-dates">
+                    <strong>Duration:</strong> {{ c.startDate && c.endDate ? `${c.startDate} - ${c.endDate}` : (c.startDate || c.endDate || '-') }}
+                  </div>
+                  <div v-if="c.internshipSlots || c.studentPrograms" class="contract-dates">
+                    <strong>Slots/Programs:</strong> {{ c.internshipSlots || '-' }} slots<span v-if="c.studentPrograms"> | {{ c.studentPrograms }}</span>
+                  </div>
+                  <div v-if="c.courseAllocations && c.courseAllocations.length" class="contract-section">
+                    <strong>Course Slots:</strong>
+                    <p v-for="item in c.courseAllocations" :key="`${c.id}-${item.course}`">{{ item.course }}: {{ item.slots }}</p>
+                  </div>
+                  <div v-if="c.schoolContactName || c.schoolContactEmail || c.companyContactName || c.companyContactEmail" class="contract-section">
+                    <strong>Contacts:</strong>
+                    <p>School: {{ c.schoolContactName || '-' }} <span v-if="c.schoolContactEmail">({{ c.schoolContactEmail }})</span></p>
+                    <p>Company: {{ c.companyContactName || '-' }} <span v-if="c.companyContactEmail">({{ c.companyContactEmail }})</span></p>
+                  </div>
+                  <div v-if="c.schoolResponsibilities" class="contract-section">
+                    <strong>School Responsibilities:</strong>
+                    <p>{{ c.schoolResponsibilities }}</p>
+                  </div>
+                  <div v-if="c.companyResponsibilities" class="contract-section">
+                    <strong>Company Responsibilities:</strong>
+                    <p>{{ c.companyResponsibilities }}</p>
+                  </div>
+                  <div v-if="c.terms" class="contract-section">
+                    <strong>Terms & Conditions:</strong>
+                    <p>{{ c.terms }}</p>
+                  </div>
+                  <div v-if="c.notes" class="contract-section">
+                    <strong>Notes:</strong>
+                    <p>{{ c.notes }}</p>
+                  </div>
+                  <div v-if="c.rejectedReason && (c.status || 'pending') === 'rejected'" class="contract-section">
+                    <strong>Rejected Reason:</strong>
+                    <p>{{ c.rejectedReason }}</p>
+                  </div>
+                  <div v-if="c.attachments && c.attachments.length" class="contract-section">
+                    <strong>Attached Files:</strong>
+                    <p v-for="a in c.attachments" :key="`${c.id}-${a.name}`">{{ a.name }}</p>
+                  </div>
+                  <p class="contract-purpose">Requested on {{ formatApplicationDate(c.createdAt) }}</p>
+                </div>
+              </div>
+            </div>
           </div>
         </main>
       </div>
-
-      <!-- Create Contract Modal -->
-      <div v-if="showCreateContractModal" class="modal-overlay contract-modal-overlay" @click.self="showCreateContractModal = false">
-        <div class="modal-content contract-modal-content">
-          <div class="contract-modal-header">
-            <h2>Memorandum of Agreement (MOA)</h2>
-            <p class="contract-modal-subtitle">Request internship partnership with a school</p>
-          </div>
-          <div class="contract-modal-body">
-            <div class="form-group">
-              <label>Select School <span class="required">*</span></label>
-              <select v-model="contractForm.schoolId" @change="onContractSchoolSelect" required class="form-select">
-                <option value="">-- Select School --</option>
-                <option v-for="s in schoolsForContract" :key="s.uid" :value="s.uid">{{ s.orgName || s.displayName }}</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label>Contract Type</label>
-              <input type="text" v-model="contractForm.contractType" class="form-input" readonly />
-            </div>
-            <div class="form-group">
-              <label>Purpose</label>
-              <textarea v-model="contractForm.purpose" rows="2" class="form-textarea" placeholder="Partnership purpose..."></textarea>
-            </div>
-            <div class="form-row">
-              <div class="form-group">
-                <label>Effective Date</label>
-                <input type="date" v-model="contractForm.startDate" class="form-input" />
-              </div>
-              <div class="form-group">
-                <label>Expiration Date</label>
-                <input type="date" v-model="contractForm.endDate" class="form-input" />
-              </div>
-            </div>
-            <div class="form-group">
-              <label>Company Responsibilities</label>
-              <textarea v-model="contractForm.companyResponsibilities" rows="3" class="form-textarea" placeholder="e.g. Provide internship slots, assign mentors..."></textarea>
-            </div>
-            <div class="form-group">
-              <label>School Responsibilities</label>
-              <textarea v-model="contractForm.schoolResponsibilities" rows="3" class="form-textarea" placeholder="e.g. Endorse qualified students, monitor progress..."></textarea>
-            </div>
-            <div class="form-group">
-              <label>General Terms & Conditions</label>
-              <textarea v-model="contractForm.terms" rows="3" class="form-textarea" placeholder="Termination, amendments, etc."></textarea>
-            </div>
-          </div>
-          <div class="contract-modal-actions">
-            <button class="btn-secondary" @click="showCreateContractModal = false">Cancel</button>
-            <button class="btn-primary" :disabled="creatingContract || !contractForm.schoolId" @click="submitContractRequest">
-              {{ creatingContract ? 'Sending...' : 'Send Contract Request' }}
-            </button>
-          </div>
-        </div>
-      </div>
-
       <!-- Journals View (Journal Overview) -->
       <div v-if="currentView === 'journals'">
         <header class="top-header">
@@ -2202,35 +2350,39 @@ onUnmounted(() => {
                 <p class="section-description">Define the requirements and responsibilities for this internship position.</p>
                 
                 <div class="form-group">
-                  <label class="form-label">Preferred Course/Program <span class="required">*</span></label>
-                  <select v-model="preferredCourse" class="form-select">
-                    <option value="">Select Course/Program</option>
-                    <option v-for="course in courseOptions" :key="course.value" :value="course.value">
-                      {{ course.label }}
+                  <label class="form-label">Preferred Courses/Programs <span class="required">*</span></label>
+                  <select
+                    ref="courseSelectRef"
+                    multiple
+                    class="form-select-multiple"
+                    placeholder="Select or type courses/programs..."
+                  >
+                    <option v-for="course in availableCourseOptions" :key="course" :value="course">
+                      {{ course }}
                     </option>
                   </select>
+                  <p class="form-hint">Select multiple courses or type a custom one like BSED, BSBA, or other programs.</p>
                 </div>
 
-                <div class="form-group" v-if="preferredCourse">
+                <div class="form-group">
                   <label class="form-label">Required Skills & Technologies <span class="required">*</span></label>
-                  <select 
-                    :key="preferredCourse"
-                    id="skills-select" 
-                    multiple 
-                    placeholder="Select required skills..."
+                  <select
+                    ref="skillsSelectRef"
+                    multiple
                     class="form-select-multiple"
+                    placeholder="Select or type required skills..."
                   >
-                    <option v-for="skill in availableSkills" :key="skill" :value="skill">
+                    <option v-for="skill in availableSkillOptions" :key="skill" :value="skill">
                       {{ skill }}
                     </option>
                   </select>
-                  <p class="form-hint">Select multiple skills that are required for this position</p>
+                  <p class="form-hint">Select suggested skills from the chosen courses or type custom skills like PHP, Laravel, SAP, or anything else.</p>
                 </div>
 
-                <div class="form-group" v-if="!preferredCourse">
+                <div class="form-group" v-if="selectedCourses.length === 0">
                   <p class="info-message">
                     <InformationCircleIcon class="info-icon" />
-                    Please select a course/program first to see available skills
+                    Add at least one course first. You can also type a custom course if it is not in the list.
                   </p>
                 </div>
 
@@ -2241,7 +2393,6 @@ onUnmounted(() => {
                       <option value="">Select Year Level</option>
                       <option value="3rd-year">3rd Year</option>
                       <option value="4th-year">4th Year</option>
-                      <option value="graduate">Graduate</option>
                       <option value="any">Any Year Level</option>
                     </select>
                   </div>
@@ -5271,7 +5422,17 @@ onUnmounted(() => {
   color: #065f46;
 }
 
+.status-badge-app.active {
+  background: #d1fae5;
+  color: #065f46;
+}
+
 .status-badge-app.declined {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-badge-app.rejected {
   background: #fee2e2;
   color: #991b1b;
 }
@@ -6740,6 +6901,129 @@ onUnmounted(() => {
   border-left: 1px solid rgba(255, 255, 255, 0.3);
   padding-left: 6px;
   margin-left: 6px;
+}
+
+.contracts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.contract-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.contract-doc-header {
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 2px solid #e5e7eb;
+  text-align: center;
+}
+
+.contract-doc-title {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  color: #374151;
+}
+
+.contract-doc-parties {
+  display: block;
+  font-size: 0.85rem;
+  color: #6b7280;
+  margin-top: 4px;
+}
+
+.contract-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.contract-info h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #111827;
+}
+
+.contract-type {
+  margin: 4px 0 8px 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #4b5563;
+  text-transform: uppercase;
+}
+
+.contract-purpose {
+  margin: 0 0 10px 0;
+  font-size: 0.92rem;
+  color: #374151;
+}
+
+.contract-dates {
+  margin: 0 0 10px 0;
+  font-size: 0.875rem;
+  color: #6b7280;
+}
+
+.contract-section {
+  margin: 0 0 10px 0;
+}
+
+.contract-section strong {
+  display: block;
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.contract-section p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #374151;
+  line-height: 1.5;
+}
+
+.contract-actions {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+
+.contract-btn {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.contract-btn-accept {
+  background: #059669;
+  color: #fff;
+}
+
+.contract-btn-accept:hover {
+  background: #047857;
+}
+
+.contract-btn-reject {
+  background: #dc2626;
+  color: #fff;
+}
+
+.contract-btn-reject:hover {
+  background: #b91c1c;
 }
 </style>
 

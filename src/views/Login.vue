@@ -60,7 +60,11 @@ async function onLogin() {
     router.push(getRoleDashboard(profile.role))
     
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Invalid credentials.'
+    const errorCode = (error as { code?: string } | null)?.code || ''
+    const defaultMessage = error instanceof Error ? error.message : 'Invalid credentials.'
+    const message = (errorCode === 'auth/invalid-credential' || errorCode === 'auth/user-not-found')
+      ? 'Invalid email or password. For school-issued student accounts, use the exact default password given by your school on first login.'
+      : defaultMessage
     await Swal.fire({
       icon: 'error',
       iconColor: '#dc2626',
@@ -136,4 +140,3 @@ async function onLogin() {
 
 <style scoped src="../styles/Login.css">
 </style>
-

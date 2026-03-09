@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { doc, updateDoc } from 'firebase/firestore'
 import { db } from '@/services/firebase'
-import { findSchoolByStudentEmail } from '@/services/schoolStudents'
+import { ensurePublicProfile } from '@/services/profilesPublic'
 import Swal from 'sweetalert2'
 
 const router = useRouter()
@@ -15,20 +15,6 @@ const loading = ref(false)
 async function selectRole() {
   if (!selectedRole.value || !authStore.user) return
 
-  let schoolInfo: { schoolId: string; subscriptionCode?: string } | null = null
-  if (selectedRole.value === 'student') {
-    schoolInfo = await findSchoolByStudentEmail(authStore.user.email || '')
-    if (!schoolInfo) {
-      await Swal.fire({
-        icon: 'warning',
-        title: 'School Email Required',
-        text: 'Your email is not registered with any school. Please use the Gmail address your school assigned to you. Contact your school coordinator if you need help.',
-        confirmButtonColor: '#2563eb'
-      })
-      return
-    }
-  }
-
   loading.value = true
 
   try {
@@ -38,16 +24,21 @@ async function selectRole() {
       updatedAt: new Date()
     }
 
-    if (selectedRole.value === 'student' && schoolInfo) {
-      const currentProfile = (authStore.user?.profile as Record<string, unknown>) || {}
-      updates.profile = {
-        ...currentProfile,
-        schoolId: schoolInfo.schoolId,
-        schoolSubscriptionCode: schoolInfo.subscriptionCode
-      }
-    }
-
     await updateDoc(doc(db, 'users', authStore.user!.uid), updates)
+
+    if (selectedRole.value === 'school' || selectedRole.value === 'company') {
+      const profile = (authStore.user?.profile as Record<string, unknown>) || {}
+      const orgName = selectedRole.value === 'school'
+        ? (profile.institutionName as string | undefined)
+        : (profile.companyName as string | undefined)
+
+      await ensurePublicProfile(authStore.user.uid, {
+        displayName: authStore.user.displayName || authStore.user.email || 'User',
+        role: selectedRole.value,
+        orgName: orgName || authStore.user.displayName || undefined,
+        email: authStore.user.email || undefined,
+      })
+    }
 
     await Swal.fire({
       icon: 'success',

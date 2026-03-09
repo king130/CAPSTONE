@@ -48,13 +48,48 @@ export async function getPublicProfile(uid: string): Promise<PublicProfile | nul
 export async function listPublicProfiles(
   role: 'school' | 'company'
 ): Promise<PublicProfile[]> {
-  const ref = collection(db, 'profiles_public')
-  const q = query(ref, where('role', '==', role))
-  const snapshot = await getDocs(q)
-  const profiles = snapshot.docs.map((d) => {
+  const publicRef = collection(db, 'profiles_public')
+  const publicQ = query(publicRef, where('role', '==', role))
+  const publicSnapshot = await getDocs(publicQ)
+  const publicProfiles = publicSnapshot.docs.map((d) => {
     const data = d.data() as PublicProfile
     return { ...data, uid: data.uid || d.id }
   })
+
+  // Fallback: include accounts from users collection in case profiles_public is not yet backfilled.
+  let userProfiles: PublicProfile[] = []
+  try {
+    const usersRef = collection(db, 'users')
+    const usersQ = query(usersRef, where('role', '==', role))
+    const usersSnapshot = await getDocs(usersQ)
+    userProfiles = usersSnapshot.docs.map((d) => {
+      const data = d.data() as {
+        uid?: string
+        email?: string
+        displayName?: string
+        profile?: Record<string, unknown>
+      }
+      const profile = data.profile || {}
+      const orgName = (
+        role === 'school'
+          ? (profile.institutionName as string | undefined)
+          : (profile.companyName as string | undefined)
+      ) || data.displayName
+
+      return {
+        uid: data.uid || d.id,
+        role,
+        displayName: data.displayName || orgName || data.email?.split('@')[0] || 'User',
+        orgName: orgName || undefined,
+        email: data.email || undefined,
+      } as PublicProfile
+    })
+  } catch {
+    // Most non-admin users cannot read other user docs due rules; ignore fallback if denied.
+    userProfiles = []
+  }
+
+  const profiles = [...publicProfiles, ...userProfiles]
   const seenUids = new Set<string>()
   const seenOrgNames = new Set<string>()
   return profiles.filter((p) => {

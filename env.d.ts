@@ -12,3 +12,13 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv
 }
+
+declare module 'tom-select' {
+  export default class TomSelect {
+    constructor(element: HTMLSelectElement | string, settings?: unknown)
+    destroy(): void
+    on(event: string, handler: (...args: unknown[]) => void): void
+    getValue(): string | string[]
+    setValue(value: string[] | string, silent?: boolean): void
+  }
+}

@@ -3,6 +3,7 @@ import { AUTH_DISABLED } from '@/config/auth'
 import Landing from '@/views/Landing.vue'
 import Login from '@/views/Login.vue'
 import RegisterSimple from '@/views/RegisterSimple.vue'
+import ChangePassword from '@/views/ChangePassword.vue'
 import RoleSelection from '@/views/RoleSelection.vue'
 import Profile from '@/views/Profile.vue'
 import FindInternships from '@/views/FindInternships.vue'
@@ -40,11 +41,26 @@ function getRoleDashboard(role: UserRole): string {
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
+  scrollBehavior(to, _from, savedPosition) {
+    if (savedPosition) {
+      return savedPosition
+    }
+
+    if (to.hash) {
+      return {
+        el: to.hash,
+        behavior: 'smooth',
+      }
+    }
+
+    return { top: 0 }
+  },
   routes: [
     // Public routes
     { path: '/', name: 'landing', component: Landing },
     { path: '/login', name: 'login', component: Login },
     { path: '/register', name: 'register', component: RegisterSimple },
+    { path: '/change-password', name: 'change-password', component: ChangePassword, meta: { requiresAuth: true, allowGuest: true } },
     { path: '/find-internships', name: 'find-internships', component: FindInternships },
     { path: '/account-disabled', name: 'account-disabled', component: AccountDisabled },
     
@@ -89,6 +105,7 @@ router.beforeEach((to) => {
   
   const isAuthenticated = !!authStore.user
   const userRole = authStore.user?.role
+  const mustChangePassword = authStore.user?.mustChangePassword === true
   console.log('🛡️ Router guard:', to.path, '| User:', authStore.user?.email || 'null', '| Role:', userRole || 'null')
 
   // Check for blocked/disabled accounts
@@ -98,6 +115,17 @@ router.beforeEach((to) => {
 
   // AUTHENTICATED USERS
   if (isAuthenticated) {
+    if (mustChangePassword && to.name !== 'change-password') {
+      return { name: 'change-password' }
+    }
+
+    if (!mustChangePassword && to.name === 'change-password') {
+      if (!userRole || userRole === 'guest' || userRole === null) {
+        return { path: '/find-internships' }
+      }
+      return { path: getRoleDashboard(userRole) }
+    }
+
     // Redirect authenticated users away from login/register
     if (to.name === 'login' || to.name === 'register') {
       if (!userRole || userRole === 'guest' || userRole === null) {

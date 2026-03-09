@@ -1,7 +1,9 @@
 import {
   createUserWithEmailAndPassword,
+  deleteUser,
   signInWithEmailAndPassword,
   signOut,
+  updatePassword,
   updateProfile,
   onAuthStateChanged,
 } from 'firebase/auth'
@@ -42,6 +44,7 @@ export interface UserProfile {
   isActive?: boolean
   profileSetupComplete?: boolean
   profile?: Record<string, unknown>
+  mustChangePassword?: boolean
   subscription?: {
     plan: string
     billingCycle: string
@@ -78,8 +81,9 @@ export async function validateSchoolSubscription(code: string) {
 
 export async function registerUser(payload: RegisterPayload) {
   const { email, password, fullName, role = null, profile = {}, subscriptionPlan, billingCycle, schoolSubscriptionCode } = payload
+  const normalizedEmail = email.trim().toLowerCase()
 
-  // Validate school subscription code if provided (for role selection later)
+  // Validate school subscription code if explicitly provided for student registration.
   if (role === 'student' && schoolSubscriptionCode) {
     const schoolId = await validateSchoolSubscription(schoolSubscriptionCode)
     if (!schoolId) {
@@ -88,44 +92,69 @@ export async function registerUser(payload: RegisterPayload) {
   }
 
   // Create Firebase Auth user
-  const credential = await createUserWithEmailAndPassword(auth, email, password)
-  await updateProfile(credential.user, { displayName: fullName })
+  const credential = await createUserWithEmailAndPassword(auth, normalizedEmail, password)
+  const preApprovedStudent = await findPreApprovedStudent(normalizedEmail)
+  const defaultPassword = preApprovedStudent?.defaultPassword?.trim()
+  const hasPreApprovedEntry = !!preApprovedStudent
+  const isPreApprovedStudent = !!defaultPassword && defaultPassword === password
+
+  if (hasPreApprovedEntry && !isPreApprovedStudent) {
+    await deleteUser(credential.user)
+    throw new Error('Use the school-provided default password for your first registration.')
+  }
+
+  const resolvedRole: UserRole = isPreApprovedStudent ? 'student' : role
+  const resolvedProfile: Record<string, unknown> = { ...profile }
+  if (isPreApprovedStudent) {
+    resolvedProfile.schoolId = preApprovedStudent?.schoolId || ''
+    resolvedProfile.schoolName = preApprovedStudent?.schoolName || ''
+    resolvedProfile.course = preApprovedStudent?.course || ''
+    resolvedProfile.yearLevel = preApprovedStudent?.yearLevel || ''
+  }
+
+  const resolvedDisplayName = (preApprovedStudent?.studentName || fullName).trim() || fullName
+  await updateProfile(credential.user, { displayName: resolvedDisplayName })
 
   // Create Firestore profile - NO ROLE by default (guest)
   const userDoc: UserProfile = {
     uid: credential.user.uid,
-    email,
-    displayName: fullName,
-    role: role || null, // Guest if no role provided
+    email: normalizedEmail,
+    displayName: resolvedDisplayName,
+    role: resolvedRole || null, // Guest if no role provided
     isTemporary: false,
     isActive: true,
-    profileSetupComplete: role === 'student' || role === 'school' || role === 'company', // Complete when role is set
-    profile: profile || {},
+    profileSetupComplete: resolvedRole === 'student' || resolvedRole === 'school' || resolvedRole === 'company', // Complete when role is set
+    profile: resolvedProfile,
+    mustChangePassword: isPreApprovedStudent,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   }
 
   // Only add subscription for school/company accounts
-  if (role === 'school' || role === 'company') {
+  if (resolvedRole === 'school' || resolvedRole === 'company') {
     userDoc.subscription = {
       plan: subscriptionPlan || 'free',
       billingCycle: billingCycle || 'monthly',
-      status: role === 'school' ? 'pending' : 'pending',
-      subscriptionCode: role === 'school' ? generateSubscriptionCode(fullName) : undefined,
+      status: resolvedRole === 'school' ? 'pending' : 'pending',
+      subscriptionCode: resolvedRole === 'school' ? generateSubscriptionCode(fullName) : undefined,
     }
     userDoc.profileSetupComplete = true // Has role, so setup is complete
   }
 
   await setDoc(doc(db, 'users', credential.user.uid), userDoc)
 
-  if (role === 'school' || role === 'company') {
-    const p = profile as Record<string, unknown>
-    const orgName = (role === 'school' ? p?.institutionName : p?.companyName) as string | undefined
+  if (resolvedRole === 'school' || resolvedRole === 'company' || resolvedRole === 'student') {
+    const p = resolvedProfile as Record<string, unknown>
+    const orgName = (resolvedRole === 'school'
+      ? p?.institutionName
+      : resolvedRole === 'company'
+        ? p?.companyName
+        : p?.schoolName) as string | undefined
     await ensurePublicProfile(credential.user.uid, {
-      displayName: fullName,
-      role,
-      orgName: orgName || fullName,
-      email,
+      displayName: resolvedDisplayName,
+      role: resolvedRole,
+      orgName: orgName || resolvedDisplayName,
+      email: normalizedEmail,
     }).catch(() => {})
   }
 
@@ -133,8 +162,18 @@ export async function registerUser(payload: RegisterPayload) {
 }
 
 export async function loginUser(email: string, password: string) {
-  const credential = await signInWithEmailAndPassword(auth, email, password)
-  return credential.user
+  const normalizedEmail = email.trim().toLowerCase()
+  try {
+    const credential = await signInWithEmailAndPassword(auth, normalizedEmail, password)
+    return credential.user
+  } catch (error) {
+    const code = (error as { code?: string })?.code || ''
+    if (code === 'auth/invalid-credential' || code === 'auth/user-not-found') {
+      const provisionedUser = await tryProvisionStudentFromSchoolList(normalizedEmail, password)
+      if (provisionedUser) return provisionedUser
+    }
+    throw error
+  }
 }
 
 export async function logoutUser() {
@@ -144,6 +183,130 @@ export async function logoutUser() {
 export async function fetchUserProfile(uid: string) {
   const snapshot = await getDoc(doc(db, 'users', uid))
   return snapshot.exists() ? (snapshot.data() as UserProfile) : null
+}
+
+export async function createMissingUserProfile(firebaseUser: User) {
+  const fallbackProfile: UserProfile = {
+    uid: firebaseUser.uid,
+    email: firebaseUser.email || '',
+    displayName: firebaseUser.displayName || (firebaseUser.email?.split('@')[0] || 'User'),
+    role: null,
+    isTemporary: false,
+    isActive: true,
+    profileSetupComplete: false,
+    profile: {},
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }
+  await setDoc(doc(db, 'users', firebaseUser.uid), fallbackProfile, { merge: true })
+  return fallbackProfile
+}
+
+export async function updateCurrentUserPassword(newPassword: string) {
+  if (!auth.currentUser) {
+    throw new Error('No authenticated user.')
+  }
+  await updatePassword(auth.currentUser, newPassword)
+  await setDoc(
+    doc(db, 'users', auth.currentUser.uid),
+    {
+      mustChangePassword: false,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  )
+}
+
+async function findPreApprovedStudent(email: string) {
+  const q = query(collection(db, 'school_students'), where('email', '==', email))
+  const snapshot = await getDocs(q)
+  if (snapshot.empty) return null
+  const data = snapshot.docs[0]?.data() as {
+    schoolId?: string
+    studentName?: string
+    course?: string
+    yearLevel?: string
+    defaultPassword?: string
+  } | undefined
+  if (!data) return null
+
+  let schoolName = ''
+  if (data.schoolId) {
+    try {
+      const schoolSnap = await getDoc(doc(db, 'users', data.schoolId))
+      const schoolData = schoolSnap.data() as UserProfile | undefined
+      const schoolProfile = schoolData?.profile as Record<string, unknown> | undefined
+      schoolName = (schoolProfile?.institutionName as string) || schoolData?.displayName || ''
+    } catch {
+      schoolName = ''
+    }
+  }
+
+  return {
+    schoolId: data.schoolId || '',
+    schoolName,
+    studentName: data.studentName || '',
+    course: data.course || '',
+    yearLevel: data.yearLevel || '',
+    defaultPassword: data.defaultPassword || '',
+  }
+}
+
+async function tryProvisionStudentFromSchoolList(email: string, password: string): Promise<User | null> {
+  let credential: { user: User } | null = null
+
+  try {
+    credential = await createUserWithEmailAndPassword(auth, email, password)
+  } catch (error) {
+    const code = (error as { code?: string })?.code || ''
+    if (code === 'auth/email-already-in-use') return null
+    throw error
+  }
+
+  const preApprovedStudent = await findPreApprovedStudent(email)
+  const defaultPassword = preApprovedStudent?.defaultPassword?.trim()
+  const isValidDefault = !!defaultPassword && defaultPassword === password
+  if (!preApprovedStudent || !isValidDefault) {
+    await deleteUser(credential.user)
+    return null
+  }
+
+  const displayName =
+    preApprovedStudent.studentName?.trim() ||
+    email.split('@')[0]?.replace(/[._-]+/g, ' ') ||
+    'Student'
+
+  await updateProfile(credential.user, { displayName })
+
+  const userDoc: UserProfile = {
+    uid: credential.user.uid,
+    email,
+    displayName,
+    role: 'student',
+    isTemporary: false,
+    isActive: true,
+    profileSetupComplete: true,
+    mustChangePassword: true,
+    profile: {
+      schoolId: preApprovedStudent.schoolId || '',
+      schoolName: preApprovedStudent.schoolName || '',
+      course: preApprovedStudent.course || '',
+      yearLevel: preApprovedStudent.yearLevel || '',
+    },
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }
+
+  await setDoc(doc(db, 'users', credential.user.uid), userDoc)
+
+  await ensurePublicProfile(credential.user.uid, {
+    displayName,
+    role: 'student',
+    orgName: preApprovedStudent.schoolName || undefined,
+    email,
+  }).catch(() => {})
+
+  return credential.user
 }
 
 export function subscribeToUserProfile(uid: string, callback: (profile: UserProfile | null) => void) {

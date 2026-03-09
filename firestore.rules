@@ -59,7 +59,10 @@ service cloud.firestore {
       allow read: if isSignedIn()
         && (resource.data.companyId == request.auth.uid || resource.data.schoolId == request.auth.uid);
       allow create: if isSignedIn()
-        && request.resource.data.companyId == request.auth.uid;
+        && (
+          request.resource.data.companyId == request.auth.uid
+          || request.resource.data.schoolId == request.auth.uid
+        );
       allow update: if isSignedIn()
         && (resource.data.companyId == request.auth.uid || resource.data.schoolId == request.auth.uid);
       allow delete: if false;

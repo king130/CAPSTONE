@@ -84,14 +84,7 @@ async function handleMenuClick(itemId: string) {
     </nav>
 
     <div class="sidebar-bottom">
-      <div
-        class="nav-item"
-        :class="{ active: activeItem === 'profile' }"
-        @click="handleMenuClick('profile')"
-      >
-        <img src="/icons/icon-profile.png" alt="Profile" class="nav-icon-img" />
-        <span>Profile</span>
-      </div>
+
       <div
         class="nav-item"
         @click="handleMenuClick('logout')"
