@@ -3,7 +3,6 @@ import { computed, onMounted, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { doc, updateDoc } from 'firebase/firestore'
 import { db } from '@/services/firebase'
-import { ensurePublicProfile } from '@/services/profilesPublic'
 import Swal from 'sweetalert2'
 import { BellIcon } from '@heroicons/vue/24/outline'
 
@@ -20,66 +19,31 @@ const userInitials = computed(() => {
     .slice(0, 2)
 })
 
-// TEMPORARY DATA: Notification dropdown state - this is a UI state variable
-const showNotifications = ref(false)
-
-// TEMPORARY DATA: Static notifications for dropdown - replace with real data from backend
-const notifications = ref([
-  {
-    id: 1,
-    title: 'Application Update',
-    message: 'Your application to TechCorp has been reviewed',
-    time: '2 hours ago',
-    unread: true
-  },
-  {
-    id: 2,
-    title: 'Interview Scheduled',
-    message: 'Interview scheduled for May 20 at 2:00 PM',
-    time: '5 hours ago',
-    unread: true
-  },
-  {
-    id: 3,
-    title: 'Document Reminder',
-    message: 'Please upload your resume',
-    time: '1 day ago',
-    unread: false
-  },
-  {
-    id: 4,
-    title: 'New Internship Match',
-    message: 'You have 3 new internship matches',
-    time: '2 days ago',
-    unread: false
-  }
-])
-
-function toggleNotifications() {
-  showNotifications.value = !showNotifications.value
-}
+const organizationName = computed(() => {
+  const profile = authStore.user?.profile as Record<string, unknown> | undefined
+  return (profile?.institutionName as string) || authStore.user?.displayName || 'Account'
+})
 
 const loading = ref(true)
 const saving = ref(false)
 
-// Form data
-const companyInfo = ref({
+// Form data - Initialize with empty values
+const personalInfo = ref({
   name: '',
   email: '',
   phoneNumber: '',
-  companyType: '',
-  industryType: '',
-  contactPersonName: '',
-  contactPersonTitle: '',
-  contactPersonEmail: ''
+  institutionName: '',
+  department: '',
+  position: '',
+  officeLocation: ''
 })
 
-const addressInfo = ref({
+const institutionInfo = ref({
+  institutionType: '',
   address: '',
   region: '',
   province: '',
   city: '',
-  barangay: '',
   zipCode: ''
 })
 
@@ -90,32 +54,32 @@ const security = ref({
   loginAlerts: true
 })
 
-const profilePicture = ref('/icons/profiles/john-smith.jpg')
+const profilePicture = ref('/icons/profiles/alex-doe.jpg')
 
 // Load user data on mount
 onMounted(() => {
   if (authStore.user) {
     const profile = authStore.user.profile as Record<string, unknown> | undefined
-    companyInfo.value = {
-      name: authStore.user.displayName || (profile?.companyName as string) || '',
-      email: authStore.user.email || (profile?.companyEmail as string) || '',
-      phoneNumber: (profile?.companyContactNumber as string) || '',
-      companyType: (profile?.companyType as string) || '',
-      industryType: (profile?.industryType as string) || '',
-      contactPersonName: (profile?.contactPersonName as string) || '',
-      contactPersonTitle: (profile?.contactPersonTitle as string) || '',
-      contactPersonEmail: (profile?.contactPersonEmail as string) || ''
+    personalInfo.value = {
+      name: authStore.user.displayName || '',
+      email: authStore.user.email || '',
+      phoneNumber: (profile?.schoolContactNumber as string) || (profile?.contactNumber as string) || '',
+      institutionName: (profile?.institutionName as string) || '',
+      department: (profile?.department as string) || '',
+      position: (profile?.position as string) || '',
+      officeLocation: (profile?.officeLocation as string) || ''
     }
     
-    addressInfo.value = {
-      address: (profile?.companyAddress as string) || '',
+    institutionInfo.value = {
+      institutionType: (profile?.institutionType as string) || '',
+      address: (profile?.schoolAddress as string) || '',
       region: (profile?.region as string) || '',
       province: (profile?.province as string) || '',
       city: (profile?.cityMunicipality as string) || '',
-      barangay: (profile?.barangay as string) || '',
       zipCode: (profile?.zipCode as string) || ''
     }
     
+    // Load security settings from profile if available
     if (profile?.twoFactorAuth !== undefined) {
       security.value.twoFactorAuth = profile.twoFactorAuth as boolean
     }
@@ -126,6 +90,7 @@ onMounted(() => {
   loading.value = false
 })
 
+// Functions
 function updateProfilePicture() {
   Swal.fire({
     icon: 'info',
@@ -147,11 +112,22 @@ async function saveChanges() {
     return
   }
 
-  if (!companyInfo.value.name.trim()) {
+  // Validate inputs
+  if (!personalInfo.value.name.trim()) {
     await Swal.fire({
       icon: 'error',
       title: 'Validation Error',
-      text: 'Company name is required.',
+      text: 'Name is required.',
+      confirmButtonColor: '#3b82f6'
+    })
+    return
+  }
+
+  if (!personalInfo.value.email.trim()) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Validation Error',
+      text: 'Email is required.',
       confirmButtonColor: '#3b82f6'
     })
     return
@@ -162,33 +138,25 @@ async function saveChanges() {
   try {
     const userRef = doc(db, 'users', authStore.user.uid)
     
+    // Update Firestore with new profile data
     await updateDoc(userRef, {
-      displayName: companyInfo.value.name,
-      'profile.companyName': companyInfo.value.name,
-      'profile.companyContactNumber': companyInfo.value.phoneNumber,
-      'profile.companyEmail': companyInfo.value.email,
-      'profile.companyType': companyInfo.value.companyType,
-      'profile.industryType': companyInfo.value.industryType,
-      'profile.contactPersonName': companyInfo.value.contactPersonName,
-      'profile.contactPersonTitle': companyInfo.value.contactPersonTitle,
-      'profile.contactPersonEmail': companyInfo.value.contactPersonEmail,
-      'profile.companyAddress': addressInfo.value.address,
-      'profile.region': addressInfo.value.region,
-      'profile.province': addressInfo.value.province,
-      'profile.cityMunicipality': addressInfo.value.city,
-      'profile.barangay': addressInfo.value.barangay,
-      'profile.zipCode': addressInfo.value.zipCode,
+      displayName: personalInfo.value.name,
+      email: personalInfo.value.email,
+      'profile.schoolContactNumber': personalInfo.value.phoneNumber,
+      'profile.institutionName': personalInfo.value.institutionName,
+      'profile.department': personalInfo.value.department,
+      'profile.position': personalInfo.value.position,
+      'profile.officeLocation': personalInfo.value.officeLocation,
+      'profile.institutionType': institutionInfo.value.institutionType,
+      'profile.schoolAddress': institutionInfo.value.address,
+      'profile.region': institutionInfo.value.region,
+      'profile.province': institutionInfo.value.province,
+      'profile.cityMunicipality': institutionInfo.value.city,
+      'profile.zipCode': institutionInfo.value.zipCode,
       'profile.twoFactorAuth': security.value.twoFactorAuth,
       'profile.loginAlerts': security.value.loginAlerts,
       updatedAt: new Date()
     })
-
-    await ensurePublicProfile(authStore.user.uid, {
-      displayName: companyInfo.value.name,
-      role: 'company',
-      orgName: companyInfo.value.name,
-      email: authStore.user?.email,
-    }).catch(() => {})
 
     await Swal.fire({
       icon: 'success',
@@ -213,7 +181,7 @@ async function saveChanges() {
 
 function handleImageError(event: Event) {
   const img = event.target as HTMLImageElement
-  const name = companyInfo.value.name || 'Company'
+  const name = personalInfo.value.name || 'User'
   const initials = name.split(' ').map(n => n[0]).join('').toUpperCase()
   
   const colors = ['#2563eb', '#7c3aed', '#dc2626', '#059669', '#d97706', '#0891b2']
@@ -243,33 +211,7 @@ function handleImageError(event: Event) {
       </div>
       <div class="header-right">
         <div class="notification-wrapper">
-          <BellIcon class="notification-bell" @click="toggleNotifications" />
-          
-          <!-- Notification Dropdown -->
-          <div v-if="showNotifications" class="notification-dropdown">
-            <div class="notification-header">
-              <h3>Notifications</h3>
-              <span class="notification-count">{{ notifications.filter(n => n.unread).length }} new</span>
-            </div>
-            <div class="notification-list">
-              <div 
-                v-for="notification in notifications" 
-                :key="notification.id" 
-                class="notification-item"
-                :class="{ 'unread': notification.unread }"
-              >
-                <div class="notification-content">
-                  <h4>{{ notification.title }}</h4>
-                  <p>{{ notification.message }}</p>
-                  <span class="notification-time">{{ notification.time }}</span>
-                </div>
-                <div v-if="notification.unread" class="unread-dot"></div>
-              </div>
-            </div>
-            <div class="notification-footer">
-              <button class="view-all-btn">View All Notifications</button>
-            </div>
-          </div>
+          <BellIcon class="notification-bell" />
         </div>
         <button class="user-avatar" type="button" @click="() => {}" :title="`View Profile`">
           {{ userInitials }}
@@ -289,15 +231,15 @@ function handleImageError(event: Event) {
           <div class="profile-picture-section">
             <img 
               :src="profilePicture" 
-              :alt="companyInfo.name" 
+              :alt="personalInfo.name" 
               class="profile-picture"
               @error="handleImageError"
             />
             <button @click="updateProfilePicture" class="update-picture-btn">Change Photo</button>
           </div>
           <div class="profile-info">
-            <h2 class="profile-name">{{ companyInfo.name || 'Company' }}</h2>
-            <p class="profile-email">{{ companyInfo.email }}</p>
+            <h2 class="profile-name">{{ personalInfo.name || 'User' }}</h2>
+            <p class="profile-email">{{ personalInfo.email }}</p>
           </div>
           <button class="save-changes-btn" @click="saveChanges" :disabled="saving || loading">
             {{ saving ? 'Saving...' : 'Save Changes' }}
@@ -306,104 +248,131 @@ function handleImageError(event: Event) {
 
         <!-- Settings Grid -->
         <div class="settings-grid">
-          <!-- Company Information Card -->
+          <!-- Personal Information Card -->
           <div class="settings-card">
             <div class="card-header">
-              <h3 class="card-title">Company Information</h3>
-              <p class="card-subtitle">Update your company details</p>
+              <h3 class="card-title">Personal Information</h3>
+              <p class="card-subtitle">Update your personal details</p>
             </div>
             <div class="card-body">
               <div class="form-group">
-                <label class="form-label">Company Name</label>
+                <label class="form-label">Full Name</label>
                 <input 
-                  v-model="companyInfo.name"
+                  v-model="personalInfo.name"
                   type="text" 
                   class="form-input"
-                  placeholder="Enter company name"
-                />
-              </div>
-
-              <div class="form-group">
-                <label class="form-label">Company Type</label>
-                <select 
-                  v-model="companyInfo.companyType"
-                  class="form-input"
-                >
-                  <option value="">Select type</option>
-                  <option value="Corporation">Corporation</option>
-                  <option value="Partnership">Partnership</option>
-                  <option value="Sole Proprietorship">Sole Proprietorship</option>
-                  <option value="LLC">Limited Liability Company (LLC)</option>
-                  <option value="Cooperative">Cooperative</option>
-                </select>
-              </div>
-
-              <div class="form-group">
-                <label class="form-label">Industry Type</label>
-                <input 
-                  v-model="companyInfo.industryType"
-                  type="text" 
-                  class="form-input"
-                  placeholder="e.g., Technology, Healthcare, Finance"
+                  placeholder="Enter your full name"
                 />
               </div>
 
               <div class="form-group">
                 <label class="form-label">Email Address</label>
                 <input 
-                  v-model="companyInfo.email"
+                  v-model="personalInfo.email"
                   type="email" 
                   class="form-input"
-                  placeholder="Enter company email"
+                  placeholder="Enter your email"
                 />
               </div>
 
               <div class="form-group">
                 <label class="form-label">Phone Number</label>
                 <input 
-                  v-model="companyInfo.phoneNumber"
+                  v-model="personalInfo.phoneNumber"
                   type="tel" 
                   class="form-input"
-                  placeholder="Enter phone number"
+                  placeholder="Enter your phone number"
+                />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Position/Title</label>
+                <input 
+                  v-model="personalInfo.position"
+                  type="text" 
+                  class="form-input"
+                  placeholder="e.g., OJT Coordinator, Department Head"
+                />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Office Location</label>
+                <input 
+                  v-model="personalInfo.officeLocation"
+                  type="text" 
+                  class="form-input"
+                  placeholder="e.g., Building A, Room 201"
                 />
               </div>
             </div>
           </div>
 
-          <!-- Contact Person Card -->
+          <!-- Institution Information Card -->
           <div class="settings-card">
             <div class="card-header">
-              <h3 class="card-title">Contact Person</h3>
-              <p class="card-subtitle">Primary contact information</p>
+              <h3 class="card-title">Institution Information</h3>
+              <p class="card-subtitle">School/University details</p>
             </div>
             <div class="card-body">
               <div class="form-group">
-                <label class="form-label">Contact Person Name</label>
+                <label class="form-label">Institution Name</label>
                 <input 
-                  v-model="companyInfo.contactPersonName"
+                  v-model="personalInfo.institutionName"
                   type="text" 
                   class="form-input"
-                  placeholder="Enter contact person name"
+                  placeholder="Enter institution name"
                 />
               </div>
 
               <div class="form-group">
-                <label class="form-label">Title/Position</label>
+                <label class="form-label">Department</label>
                 <input 
-                  v-model="companyInfo.contactPersonTitle"
+                  v-model="personalInfo.department"
                   type="text" 
                   class="form-input"
-                  placeholder="e.g., HR Manager, CEO"
+                  placeholder="e.g., Computer Science, Engineering"
                 />
               </div>
 
               <div class="form-group">
-                <label class="form-label">Contact Email</label>
-                <input 
-                  v-model="companyInfo.contactPersonEmail"
-                  type="email" 
+                <label class="form-label">Institution Type</label>
+                <select 
+                  v-model="institutionInfo.institutionType"
                   class="form-input"
-                  placeholder="Enter contact person email"
+                >
+                  <option value="">Select type</option>
+                  <option value="State University">State University</option>
+                  <option value="Private University">Private University</option>
+                  <option value="State College">State College</option>
+                  <option value="Private College">Private College</option>
+                  <option value="Technical School">Technical School</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Region</label>
+                <select 
+                  v-model="institutionInfo.region"
+                  class="form-input"
+                >
+                  <option value="">Select region</option>
+                  <option value="NCR">NCR</option>
+                  <option value="Region I">Region I - Ilocos Region</option>
+                  <option value="Region II">Region II - Cagayan Valley</option>
+                  <option value="Region III">Region III - Central Luzon</option>
+                  <option value="Region IV-A">Region IV-A - CALABARZON</option>
+                  <option value="Region IV-B">Region IV-B - MIMAROPA</option>
+                  <option value="Region V">Region V - Bicol Region</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Province</label>
+                <input 
+                  v-model="institutionInfo.province"
+                  type="text" 
+                  class="form-input"
+                  placeholder="Enter province"
                 />
               </div>
             </div>
@@ -413,14 +382,14 @@ function handleImageError(event: Event) {
           <div class="settings-card full-width">
             <div class="card-header">
               <h3 class="card-title">Address Information</h3>
-              <p class="card-subtitle">Complete company address</p>
+              <p class="card-subtitle">Complete institution address</p>
             </div>
             <div class="card-body">
               <div class="form-row">
                 <div class="form-group">
                   <label class="form-label">Complete Address</label>
                   <textarea 
-                    v-model="addressInfo.address"
+                    v-model="institutionInfo.address"
                     class="form-textarea"
                     rows="2"
                     placeholder="Enter complete address"
@@ -429,56 +398,18 @@ function handleImageError(event: Event) {
               </div>
               <div class="form-row">
                 <div class="form-group">
-                  <label class="form-label">Region</label>
-                  <select 
-                    v-model="addressInfo.region"
-                    class="form-input"
-                  >
-                    <option value="">Select region</option>
-                    <option value="NCR">NCR</option>
-                    <option value="Region I">Region I - Ilocos Region</option>
-                    <option value="Region II">Region II - Cagayan Valley</option>
-                    <option value="Region III">Region III - Central Luzon</option>
-                    <option value="Region IV-A">Region IV-A - CALABARZON</option>
-                    <option value="Region IV-B">Region IV-B - MIMAROPA</option>
-                    <option value="Region V">Region V - Bicol Region</option>
-                  </select>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Province</label>
-                  <input 
-                    v-model="addressInfo.province"
-                    type="text" 
-                    class="form-input"
-                    placeholder="Enter province"
-                  />
-                </div>
-              </div>
-              <div class="form-row">
-                <div class="form-group">
                   <label class="form-label">City/Municipality</label>
                   <input 
-                    v-model="addressInfo.city"
+                    v-model="institutionInfo.city"
                     type="text" 
                     class="form-input"
                     placeholder="Enter city/municipality"
                   />
                 </div>
                 <div class="form-group">
-                  <label class="form-label">Barangay</label>
-                  <input 
-                    v-model="addressInfo.barangay"
-                    type="text" 
-                    class="form-input"
-                    placeholder="Enter barangay"
-                  />
-                </div>
-              </div>
-              <div class="form-row">
-                <div class="form-group">
                   <label class="form-label">Zip Code</label>
                   <input 
-                    v-model="addressInfo.zipCode"
+                    v-model="institutionInfo.zipCode"
                     type="text" 
                     class="form-input"
                     placeholder="Enter zip code"

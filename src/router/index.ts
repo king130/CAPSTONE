@@ -11,10 +11,13 @@ import Dashboard from '@/views/company/Company.vue'
 import School from '@/views/school/School.vue'
 import Intern from '@/views/intern/Intern.vue'
 import AccountDisabled from '@/views/AccountDisabled.vue'
+import Guest from '@/views/Guest.vue'
+import Subscription from '@/views/Subscription.vue'
 import AdminDashboard from '@/views/admin/AdminDashboard.vue'
 import UserManagement from '@/views/admin/UserManagement.vue'
 import TemporaryAccounts from '@/views/admin/TemporaryAccounts.vue'
 import SystemOverview from '@/views/admin/SystemOverview.vue'
+import SubscriptionPricing from '@/views/admin/SubscriptionPricing.vue'
 import { useAuthStore } from '@/stores/auth'
 import type { UserRole } from '@/services/auth'
 
@@ -33,9 +36,9 @@ function getRoleDashboard(role: UserRole): string {
       return '/intern'
     case 'guest':
     case null:
-      return '/find-internships'
+      return '/guest'
     default:
-      return '/find-internships'
+      return '/guest'
   }
 }
 
@@ -65,6 +68,8 @@ const router = createRouter({
     { path: '/account-disabled', name: 'account-disabled', component: AccountDisabled },
     
     // Guest routes (logged in but no role)
+    { path: '/guest', name: 'guest', component: Guest, meta: { requiresAuth: true, allowGuest: true } },
+    { path: '/subscription/:role?', name: 'subscription', component: Subscription, meta: { requiresAuth: true, allowGuest: true } },
     { path: '/role-selection', name: 'role-selection', component: RoleSelection, meta: { requiresAuth: true, allowGuest: true } },
     { path: '/profile', name: 'profile', component: Profile, meta: { requiresAuth: true, allowGuest: true } },
     
@@ -84,6 +89,7 @@ const router = createRouter({
         { path: 'overview', name: 'admin-overview', component: SystemOverview, meta: { requiresAuth: true, requiresRole: 'admin' } },
         { path: 'users', name: 'admin-users', component: UserManagement, meta: { requiresAuth: true, requiresRole: 'admin' } },
         { path: 'temporary', name: 'admin-temporary', component: TemporaryAccounts, meta: { requiresAuth: true, requiresRole: 'admin' } },
+        { path: 'pricing', name: 'admin-pricing', component: SubscriptionPricing, meta: { requiresAuth: true, requiresRole: 'admin' } },
       ],
     },
   ],
@@ -129,7 +135,7 @@ router.beforeEach((to) => {
     // Redirect authenticated users away from login/register
     if (to.name === 'login' || to.name === 'register') {
       if (!userRole || userRole === 'guest' || userRole === null) {
-        return { path: '/find-internships' }
+        return { path: '/guest' }
       }
       return { path: getRoleDashboard(userRole) }
     }
@@ -137,7 +143,7 @@ router.beforeEach((to) => {
     // Redirect from landing page
     if (to.name === 'landing') {
       if (!userRole || userRole === 'guest' || userRole === null) {
-        return { path: '/find-internships' }
+        return { path: '/guest' }
       }
       return { path: getRoleDashboard(userRole) }
     }
@@ -146,9 +152,9 @@ router.beforeEach((to) => {
     if (to.meta.requiresRole) {
       const requiredRole = to.meta.requiresRole as string
       
-      // If user has no role, redirect to role selection
+      // If user has no role, redirect to guest page
       if (!userRole || userRole === 'guest' || userRole === null) {
-        return { path: '/find-internships' }
+        return { path: '/guest' }
       }
       
       // If user has wrong role, redirect to their dashboard

@@ -88,12 +88,12 @@ async function onRegister() {
       icon: 'success',
       iconColor: '#16a34a',
       title: 'Account Created!',
-      text: 'Your guest account is ready. Next, choose your role and complete your profile.',
+      text: 'Welcome to OJT Intern Path! Your account has been created successfully.',
       confirmButtonText: 'Continue',
       confirmButtonColor: '#2563eb'
     })
 
-    router.push('/role-selection')
+    router.push('/guest')
     
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Registration failed.'

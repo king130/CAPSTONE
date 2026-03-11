@@ -23,9 +23,9 @@ function getRoleDashboard(role: string | null): string {
       return '/intern'
     case 'guest':
     case null:
-      return '/find-internships'
+      return '/guest'
     default:
-      return '/find-internships'
+      return '/guest'
   }
 }
 
@@ -35,7 +35,7 @@ async function onLogin() {
     
     // Check if user has a role
     if (!profile?.role || profile.role === 'guest' || profile.role === null) {
-      router.push('/find-internships')
+      router.push('/guest')
       return
     }
 

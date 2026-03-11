@@ -70,14 +70,6 @@
         <img src="/icons/icon-reports.png" alt="Reports" class="nav-icon-img" />
         <span>Reports</span>
       </div>
-      <div
-        class="nav-item"
-        :class="{ active: activeNav === 'profile' }"
-        @click="setActiveNav('profile')"
-      >
-        <img src="/icons/icon-profile.png" alt="Profile" class="nav-icon-img" />
-        <span>Profile</span>
-      </div>
     </nav>
 
     <div class="sidebar-bottom">

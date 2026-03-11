@@ -327,11 +327,44 @@ const slotsAvailable = ref(1)
 const startDateForm = ref('')
 const endDateForm = ref('')
 const formLocation = ref('')
+const formMunicipality = ref('')
+const formBarangay = ref('')
 const formDuration = ref('')
 const formType = ref('on-site')
 const formDepartment = ref('')
 const formHoursPerWeek = ref(20)
 const formAllowance = ref('')
+
+// Cavite Municipalities and their Barangays
+const caviteBarangays: Record<string, string[]> = {
+  'Bacoor': ['Alima', 'Aniban I', 'Aniban II', 'Aniban III', 'Aniban IV', 'Aniban V', 'Banalo', 'Bayanan', 'Campo Santo', 'Daang Bukid', 'Digman', 'Dulong Bayan', 'Habay I', 'Habay II', 'Kaingin', 'Ligas I', 'Ligas II', 'Ligas III', 'Mabolo I', 'Mabolo II', 'Mabolo III', 'Maliksi I', 'Maliksi II', 'Maliksi III', 'Mambog I', 'Mambog II', 'Mambog III', 'Mambog IV', 'Mambog V', 'Molino I', 'Molino II', 'Molino III', 'Molino IV', 'Molino V', 'Molino VI', 'Molino VII', 'Niog I', 'Niog II', 'Niog III', 'Panapaan I', 'Panapaan II', 'Panapaan III', 'Panapaan IV', 'Panapaan V', 'Panapaan VI', 'Panapaan VII', 'Panapaan VIII', 'Queens Row Central', 'Queens Row East', 'Queens Row West', 'Real I', 'Real II', 'Salinas I', 'Salinas II', 'Salinas III', 'Salinas IV', 'San Nicolas I', 'San Nicolas II', 'San Nicolas III', 'Sineguelasan', 'Tabing Dagat', 'Talaba I', 'Talaba II', 'Talaba III', 'Talaba IV', 'Talaba V', 'Talaba VI', 'Talaba VII', 'Zapote I', 'Zapote II', 'Zapote III', 'Zapote IV', 'Zapote V'],
+  'Cavite City': ['Barangay 1', 'Barangay 2', 'Barangay 3', 'Barangay 4', 'Barangay 5', 'Barangay 6', 'Barangay 7', 'Barangay 8', 'Barangay 9', 'Barangay 10', 'Barangay 11', 'Barangay 12', 'Barangay 13', 'Barangay 14', 'Barangay 15', 'Barangay 16', 'Barangay 17', 'Barangay 18', 'Barangay 19', 'Barangay 20', 'Barangay 21', 'Barangay 22', 'Barangay 23', 'Barangay 24', 'Barangay 25', 'Barangay 26', 'Barangay 27', 'Barangay 28', 'Barangay 29', 'Barangay 30', 'Barangay 31', 'Barangay 32', 'Barangay 33', 'Barangay 34', 'Barangay 35', 'Barangay 36', 'Barangay 37', 'Barangay 38', 'Barangay 39', 'Barangay 40', 'Barangay 41', 'Barangay 42', 'Barangay 43', 'Barangay 44', 'Barangay 45', 'Barangay 46', 'Barangay 47', 'Barangay 48', 'Barangay 49', 'Barangay 50', 'Barangay 51', 'Barangay 52', 'Barangay 53', 'Barangay 54', 'Barangay 55', 'Barangay 56', 'Barangay 57', 'Barangay 58', 'Barangay 59', 'Barangay 60', 'Barangay 61', 'Barangay 62', 'Barangay 63', 'Barangay 64', 'Barangay 65', 'Barangay 66', 'Barangay 67', 'Barangay 68', 'Barangay 69', 'Barangay 70', 'Barangay 71', 'Barangay 72', 'Barangay 73', 'Barangay 74', 'Barangay 75', 'Barangay 76', 'Barangay 77', 'Barangay 78', 'Barangay 79', 'Barangay 80', 'Barangay 81', 'Barangay 82', 'Barangay 83', 'Barangay 84'],
+  'Dasmariñas': ['Salawag', 'Paliparan I', 'Paliparan II', 'Paliparan III', 'Burol I', 'Burol II', 'Burol III', 'Langkaan I', 'Langkaan II', 'Salitran I', 'Salitran II', 'Salitran III', 'Salitran IV', 'San Agustin I', 'San Agustin II', 'San Agustin III', 'Sampaloc I', 'Sampaloc II', 'Sampaloc III', 'Sampaloc IV', 'Sampaloc V', 'Victoria Reyes', 'Zone I', 'Zone II', 'Zone III', 'Zone IV'],
+  'General Trias': ['Alingaro', 'Arnaldo', 'Bacao I', 'Bacao II', 'Bagumbayan', 'Biclatan', 'Buenavista I', 'Buenavista II', 'Buenavista III', 'Corregidor', 'Dulong Bayan', 'Gov. Ferrer', 'Javalera', 'Manggahan', 'Navarro', 'Ninety Sixth', 'Panungyanan', 'Pasong Camachile I', 'Pasong Camachile II', 'Pasong Kawayan I', 'Pasong Kawayan II', 'Pinagtipunan', 'Prinza', 'San Francisco', 'San Gabriel', 'San Juan I', 'San Juan II', 'Santa Clara', 'Santiago', 'Tapia', 'Tejero', 'Vibora'],
+  'Imus': ['Alapan I-A', 'Alapan I-B', 'Alapan I-C', 'Alapan II-A', 'Alapan II-B', 'Anabu I-A', 'Anabu I-B', 'Anabu I-C', 'Anabu I-D', 'Anabu I-E', 'Anabu I-F', 'Anabu I-G', 'Anabu II-A', 'Anabu II-B', 'Anabu II-C', 'Anabu II-D', 'Anabu II-E', 'Anabu II-F', 'Bayan Luma I', 'Bayan Luma II', 'Bayan Luma III', 'Bayan Luma IV', 'Bayan Luma V', 'Bayan Luma VI', 'Bayan Luma VII', 'Bayan Luma VIII', 'Bucandala I', 'Bucandala II', 'Bucandala III', 'Bucandala IV', 'Bucandala V', 'Buhay na Tubig', 'Carsadang Bago I', 'Carsadang Bago II', 'Magdalo', 'Maharlika', 'Malagasang I-A', 'Malagasang I-B', 'Malagasang I-C', 'Malagasang I-D', 'Malagasang I-E', 'Malagasang I-F', 'Malagasang I-G', 'Malagasang II-A', 'Malagasang II-B', 'Malagasang II-C', 'Malagasang II-D', 'Malagasang II-E', 'Malagasang II-F', 'Mariano Espeleta I', 'Mariano Espeleta II', 'Mariano Espeleta III', 'Medicion I-A', 'Medicion I-B', 'Medicion I-C', 'Medicion I-D', 'Medicion II-A', 'Medicion II-B', 'Medicion II-C', 'Medicion II-D', 'Medicion II-E', 'Medicion II-F', 'Pag-Asa I', 'Pag-Asa II', 'Pag-Asa III', 'Palico I', 'Palico II', 'Palico III', 'Palico IV', 'Pasong Buaya I', 'Pasong Buaya II', 'Pinagbuklod', 'Poblacion I-A', 'Poblacion I-B', 'Poblacion I-C', 'Poblacion II-A', 'Poblacion II-B', 'Poblacion III-A', 'Poblacion III-B', 'Poblacion IV-A', 'Poblacion IV-B', 'Poblacion IV-C', 'Poblacion IV-D', 'Tanzang Luma I', 'Tanzang Luma II', 'Tanzang Luma III', 'Tanzang Luma IV', 'Tanzang Luma V', 'Tanzang Luma VI', 'Toclong I-A', 'Toclong I-B', 'Toclong I-C', 'Toclong II-A', 'Toclong II-B'],
+  'Tagaytay': ['Asisan', 'Bagong Tubig', 'Calabuso', 'Dapdap East', 'Dapdap West', 'Francisco', 'Guinhawa North', 'Guinhawa South', 'Iruhin Central', 'Iruhin East', 'Iruhin South', 'Iruhin West', 'Kaybagal Central', 'Kaybagal North', 'Kaybagal South', 'Mag-Asawang Ilat', 'Maharlika East', 'Maharlika West', 'Maitim 2nd Central', 'Maitim 2nd East', 'Maitim 2nd West', 'Mendez Crossing East', 'Mendez Crossing West', 'Neogan', 'Patutong Malaki North', 'Patutong Malaki South', 'Sambong', 'San Jose', 'Silang Crossing East', 'Silang Crossing West', 'Sungay East', 'Sungay West', 'Tolentino East', 'Tolentino West', 'Zambal'],
+  'Trece Martires': ['Aguado', 'Cabezas', 'Cabuco', 'Conchu', 'De Ocampo', 'Gregorio', 'Inocencio', 'Lapidario', 'Llavac', 'Luciano', 'Osorio', 'Perez', 'San Agustin'],
+  'Alfonso': ['Amuyong', 'Barangay I', 'Barangay II', 'Barangay III', 'Barangay IV', 'Bilog', 'Buck Estate', 'Esperanza Ibaba', 'Esperanza Ilaya', 'Kaytitinga I', 'Kaytitinga II', 'Kaytitinga III', 'Luksuhin Ilaya', 'Luksuhin Ibaba', 'Mangas I', 'Mangas II', 'Marahan I', 'Marahan II', 'Pajo', 'Palumlum', 'Sikat', 'Sulsugin', 'Taywanak'],
+  'Amadeo': ['Barangay I', 'Barangay II', 'Barangay III', 'Barangay IV', 'Barangay V', 'Barangay VI', 'Barangay VII', 'Barangay VIII', 'Barangay IX', 'Banaybanay', 'Bucal', 'Buho', 'Dagatan', 'Halang', 'Loma', 'Maymangga', 'Minantok Kanluran', 'Minantok Silangan', 'Pangil', 'Salaban', 'Talon', 'Tamacan'],
+  'Carmona': ['Bancal', 'Barangay 1', 'Barangay 2', 'Barangay 3', 'Barangay 4', 'Barangay 5', 'Barangay 6', 'Barangay 7', 'Cabilang Baybay', 'Lantic', 'Mabuhay', 'Maduya', 'Milagrosa', 'Barangay Zone I', 'Barangay Zone II', 'Barangay Zone III', 'Barangay Zone IV'],
+  'General Emilio Aguinaldo': ['A. Dalusag', 'Batas Dao', 'Castaños Cerca', 'Castaños Lejos', 'Kabulusan', 'Kaymisas', 'Kaypaaba', 'Lumipa', 'Narvaez', 'Poblacion I', 'Poblacion II', 'Poblacion III', 'Poblacion IV', 'Tabora'],
+  'General Mariano Alvarez': ['Aldiano Olaes', 'Barangay 1', 'Barangay 2', 'Barangay 3', 'Barangay 4', 'Barangay 5', 'Barangay 6', 'Barangay 7', 'Benjamin Tirona', 'Bernardo Pulido', 'Epifanio Malia', 'Fiorello Calimag', 'Francisco De Castro', 'Francisco Reyes', 'Gavino Maderan', 'Gregoria De Jesus', 'Inocencio Salud', 'Jacinto Lumbreras', 'Kapitan Kua', 'Koronel Jose P. Elises', 'Macario Dacon', 'Marcelino Memije', 'Nicolasa Virata', 'Pantaleon Granados', 'Ramon Cruz', 'San Gabriel', 'San Jose', 'Severino De Las Alas', 'Tiniente Tiago'],
+  'Indang': ['Agus-us', 'Alulod', 'Banaba Cerca', 'Banaba Lejos', 'Bancod', 'Barangay 1', 'Barangay 2', 'Barangay 3', 'Barangay 4', 'Buna Cerca', 'Buna Lejos I', 'Buna Lejos II', 'Calumpang Cerca', 'Calumpang Lejos I', 'Calumpang Lejos II', 'Carasuchi', 'Daine I', 'Daine II', 'Guyam Malaki', 'Guyam Munti', 'Harasan', 'Kayquit I', 'Kayquit II', 'Kayquit III', 'Kaytambog', 'Kaytapos', 'Limbon', 'Lumampong Balagbag', 'Lumampong Halayhay', 'Mahabangkahoy Cerca', 'Mahabangkahoy Lejos', 'Mataas na Lupa', 'Pulo', 'Tambo Balagbag', 'Tambo Ilaya', 'Tambo Kulit'],
+  'Kawit': ['Balsahan-Bisita', 'Batong Dalig', 'Binakayan-Aplaya', 'Binakayan-Kanluran', 'Congbalay-Legaspi', 'Gahak', 'Kaingen', 'Magdalo', 'Manggahan-Lawin', 'Marulas', 'Panamitan', 'Poblacion', 'Pulvorista', 'Putol', 'San Sebastian', 'Santa Isabel', 'Tabon I', 'Tabon II', 'Tabon III', 'Toclong', 'Tramo-Bantayan', 'Wakas I', 'Wakas II'],
+  'Magallanes': ['Barangay I', 'Barangay II', 'Barangay III', 'Barangay IV', 'Bend', 'Medina', 'Pacheco', 'Ramirez', 'Tua', 'Urdaneta'],
+  'Maragondon': ['Balite I', 'Balite II', 'Bancaan', 'Bucal I', 'Bucal II', 'Caingin', 'Garita I', 'Garita II', 'Layong Mabilog', 'Mabato', 'Pantihan I', 'Pantihan II', 'Pantihan III', 'Patungan', 'Poblacion I-A', 'Poblacion I-B', 'Poblacion II-A', 'Poblacion II-B', 'Poblacion III-A', 'Poblacion III-B', 'San Miguel I', 'San Miguel II', 'Talipusngo', 'Tulay Kanluran', 'Tulay Silangan'],
+  'Mendez': ['Anuling Cerca I', 'Anuling Cerca II', 'Anuling Lejos I', 'Anuling Lejos II', 'Asis I', 'Asis II', 'Asis III', 'Banaybanay I', 'Banaybanay II', 'Bukal', 'Galicia I', 'Galicia II', 'Galicia III', 'Miguel Mojica', 'Palocpoc I', 'Palocpoc II', 'Poblacion I', 'Poblacion II', 'Poblacion III', 'Poblacion IV'],
+  'Naic': ['Bagong Kalsada', 'Balsahan', 'Bancaan', 'Bucana Malaki', 'Bucana Sasahan', 'Calubcob', 'Capt. C. Nazareno', 'Gomez-Zamora', 'Halang', 'Humbac', 'Ibayo Estacion', 'Ibayo Silangan', 'Kanluran', 'Labac', 'Latoria', 'Mabolo', 'Makina', 'Malainen Bago', 'Malainen Luma', 'Molino', 'Munting Mapino', 'Muzon', 'Palangue Central', 'Palangue Proper', 'Poblacion', 'Sabang', 'San Roque', 'Santulan', 'Sapa', 'Timalan Balsahan', 'Timalan Concepcion'],
+  'Noveleta': ['Magdiwang', 'Poblacion', 'Salcedo I', 'Salcedo II', 'San Antonio I', 'San Antonio II', 'San Jose I', 'San Jose II', 'San Juan I', 'San Juan II', 'San Rafael I', 'San Rafael II', 'San Rafael III', 'San Rafael IV', 'Santa Rosa I', 'Santa Rosa II'],
+  'Rosario': ['Bagbag I', 'Bagbag II', 'Kanluran', 'Ligtong I', 'Ligtong II', 'Ligtong III', 'Ligtong IV', 'Muzon I', 'Muzon II', 'Poblacion', 'Sapa I', 'Sapa II', 'Sapa III', 'Sapa IV', 'Silangan I', 'Silangan II', 'Tejeros Convention', 'Wawa I', 'Wawa II', 'Wawa III'],
+  'Silang': ['Acacia', 'Adlas', 'Anahaw I', 'Anahaw II', 'Balite I', 'Balite II', 'Balite III', 'Batas', 'Biga I', 'Biga II', 'Biluso', 'Bucal', 'Buho', 'Bulihan', 'Cabangaan', 'Carmen', 'Hukay', 'Iba', 'Inchican', 'Ipil I', 'Ipil II', 'Kaong', 'Lalaan I', 'Lalaan II', 'Litlit', 'Lucsuhin', 'Lumil', 'Maguyam', 'Malabag', 'Mataas na Burol', 'Narra I', 'Narra II', 'Narra III', 'Paligawan', 'Pasong Langka', 'Pooc I', 'Pooc II', 'Pulong Bunga', 'Pulong Saging', 'Puting Kahoy', 'Sabutan', 'San Miguel I', 'San Miguel II', 'San Vicente I', 'San Vicente II', 'Santa Rosa I', 'Santa Rosa II', 'Santol', 'Tartaria', 'Tibig', 'Toledo', 'Tubuan I', 'Tubuan II', 'Tubuan III', 'Ulat', 'Yakal'],
+  'Tanza': ['Amaya I', 'Amaya II', 'Amaya III', 'Amaya IV', 'Amaya V', 'Amaya VI', 'Amaya VII', 'Bagtas', 'Biga', 'Biwas', 'Bucal', 'Bunga', 'Calibuyo', 'Capipisa', 'Daang Amaya I', 'Daang Amaya II', 'Daang Amaya III', 'Halayhay', 'Julugan I', 'Julugan II', 'Julugan III', 'Julugan IV', 'Julugan V', 'Julugan VI', 'Julugan VII', 'Julugan VIII', 'Lambingan', 'Mulawin', 'Paradahan I', 'Paradahan II', 'Punta I', 'Punta II', 'Sahud Ulan', 'Sanja Mayor', 'Santol', 'Tanauan', 'Tres Cruses'],
+  'Ternate': ['Bucana', 'Poblacion I-A', 'Poblacion I-B', 'Poblacion II', 'Poblacion III', 'San Jose', 'San Juan I', 'San Juan II', 'Sapang I', 'Sapang II']
+}
+
+const availableBarangays = computed(() => {
+  return caviteBarangays[formMunicipality.value] || []
+})
 
 const selectedCourses = ref<string[]>([])
 const courseSelectRef = ref<HTMLSelectElement | null>(null)
@@ -2273,8 +2306,8 @@ onUnmounted(() => {
                 </div>
 
                 <div class="form-group">
-                  <label class="form-label">Location <span class="required">*</span></label>
-                  <select class="form-select">
+                  <label class="form-label"> CV/municipality <span class="required">*</span></label>
+                  <select v-model="formMunicipality" class="form-select" @change="formBarangay = ''">
                     <option value="">Select City/Municipality in Cavite</option>
                     <option value="Bacoor">Bacoor City</option>
                     <option value="Cavite City">Cavite City</option>
@@ -2304,32 +2337,12 @@ onUnmounted(() => {
 
                 <div class="form-group">
                   <label class="form-label">Barangay <span class="required">*</span></label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Bacoor, Cavite, PH (for on-site/hybrid)"
-                    class="form-input"
-                  />
-                </div>
-
-                <div class="form-group">
-                  <label class="form-label">Duration <span class="required">*</span></label>
-                  <input
-                    type="number"
-                    v-model="formDuration"
-                    placeholder="12"
-                    class="form-input duration-input"
-                  />
-                  <span class="input-suffix">weeks</span>
-                </div>
-
-                <div class="form-group">
-                  <label class="form-label">Required Internship Hours / Week <span class="required">*</span></label>
-                  <input
-                    type="number"
-                    v-model="formHoursPerWeek"
-                    placeholder="20"
-                    class="form-input"
-                  />
+                  <select v-model="formBarangay" class="form-select" :disabled="!formMunicipality">
+                    <option value="">{{ formMunicipality ? 'Select Barangay' : 'Select municipality first' }}</option>
+                    <option v-for="barangay in availableBarangays" :key="barangay" :value="barangay">
+                      {{ barangay }}
+                    </option>
+                  </select>
                 </div>
 
                 <div class="form-actions">
@@ -2417,6 +2430,27 @@ onUnmounted(() => {
                     class="form-textarea"
                     rows="3"
                   ></textarea>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">Duration <span class="required">*</span></label>
+                  <input
+                    type="number"
+                    v-model="formDuration"
+                    placeholder="12"
+                    class="form-input duration-input"
+                  />
+                  <span class="input-suffix">weeks</span>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">Required Internship Hours / Week <span class="required">*</span></label>
+                  <input
+                    type="number"
+                    v-model="formHoursPerWeek"
+                    placeholder="20"
+                    class="form-input"
+                  />
                 </div>
 
                 <div class="form-actions">
@@ -4422,6 +4456,26 @@ onUnmounted(() => {
 }
 
 .form-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.form-textarea {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 14px;
+  background: #fff;
+  transition: all 0.2s;
+  box-sizing: border-box;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 120px;
+}
+
+.form-textarea:focus {
   outline: none;
   border-color: #2563eb;
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);

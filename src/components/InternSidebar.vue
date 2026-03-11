@@ -25,10 +25,6 @@ async function handleMenuClick(itemId: string) {
     router.push('/')
     return
   }
-  if (itemId === 'profile') {
-    router.push('/profile')
-    return
-  }
   emit('menuClick', itemId)
 }
 </script>

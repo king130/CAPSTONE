@@ -43,6 +43,15 @@ const schoolFields = ref({
   schoolContactNumber: '',
   schoolAddress: '',
 })
+const guestFields = ref({
+  location: '',
+  dateOfBirth: '',
+  bio: '',
+  skills: '',
+  education: '',
+  careerInterests: '',
+  experience: '',
+})
 
 const user = computed(() => authStore.user)
 
@@ -79,6 +88,15 @@ function loadProfile() {
     schoolContactNumber: (p.schoolContactNumber as string) || '',
     schoolAddress: (p.schoolAddress as string) || '',
   }
+  guestFields.value = {
+    location: (p.location as string) || '',
+    dateOfBirth: (p.dateOfBirth as string) || '',
+    bio: (p.bio as string) || '',
+    skills: (p.skills as string) || '',
+    education: (p.education as string) || '',
+    careerInterests: (p.careerInterests as string) || '',
+    experience: (p.experience as string) || '',
+  }
 }
 
 onMounted(loadProfile)
@@ -96,7 +114,8 @@ function buildUpdatedProfile(): Record<string, unknown> {
   if (role === 'school') {
     return { contactNumber: contactNumber.value, schoolContactNumber: schoolFields.value.schoolContactNumber || contactNumber.value, ...schoolFields.value }
   }
-  return { contactNumber: contactNumber.value }
+  // Guest or no role
+  return { contactNumber: contactNumber.value, ...guestFields.value }
 }
 
 async function saveProfile() {
@@ -142,13 +161,11 @@ async function saveProfile() {
 <template>
   <div class="profile-page">
     <div class="profile-container">
-      <a v-if="user?.role && user.role !== 'guest'" href="#" class="back-link" @click.prevent="router.push(user?.role === 'company' ? '/dashboard' : user?.role === 'school' ? '/school' : user?.role === 'student' ? '/intern' : '/')">
-        ← Back to Dashboard
-      </a>
-      <h1>Profile</h1>
-      <p class="subtitle">Complete your profile information</p>
+      <h1>Settings</h1>
+      <p class="subtitle">Manage your account and profile information</p>
 
       <div v-if="user" class="profile-form">
+       
         <div class="field">
           <label>Full Name</label>
           <input v-model="displayName" type="text" placeholder="Your full name" />
@@ -258,9 +275,42 @@ async function saveProfile() {
           </div>
         </template>
 
+        <!-- Guest fields -->
+        <template v-if="!user.role || user.role === 'guest'">
+          <div class="field">
+            <label>Location</label>
+            <input v-model="guestFields.location" type="text" placeholder="City, Country" />
+          </div>
+          <div class="field">
+            <label>Date of Birth</label>
+            <input v-model="guestFields.dateOfBirth" type="date" />
+          </div>
+          <div class="field">
+            <label>About Me</label>
+            <textarea v-model="guestFields.bio" placeholder="Tell us about yourself, your interests, and goals..." rows="4"></textarea>
+          </div>
+          <div class="field">
+            <label>Skills</label>
+            <input v-model="guestFields.skills" type="text" placeholder="e.g., Programming, Design, Marketing, Communication" />
+          </div>
+          <div class="field">
+            <label>Education Background</label>
+            <input v-model="guestFields.education" type="text" placeholder="e.g., Bachelor's in Computer Science, High School Graduate" />
+          </div>
+          <div class="field">
+            <label>Career Interests</label>
+            <input v-model="guestFields.careerInterests" type="text" placeholder="e.g., Software Development, Digital Marketing, Finance" />
+          </div>
+          <div class="field">
+            <label>Experience</label>
+            <textarea v-model="guestFields.experience" placeholder="Any work experience, projects, or relevant activities..." rows="3"></textarea>
+          </div>
+        </template>
+
+        <!-- Role Display -->
         <div class="field">
-          <label>Role</label>
-          <input :value="user.role || 'guest'" type="text" disabled class="disabled" />
+          <label>Account Type</label>
+          <input :value="user.role || 'Guest'" type="text" disabled class="disabled" />
         </div>
         <button class="save-btn" @click="saveProfile" :disabled="saving">
           {{ saving ? 'Saving...' : 'Save Profile' }}
@@ -276,16 +326,26 @@ async function saveProfile() {
 .profile-page {
   min-height: 100vh;
   background: #f8fafc;
-  padding: 2rem;
+  padding: 2rem 1rem;
   font-family: Inter, system-ui, sans-serif;
 }
 .profile-container {
-  max-width: 500px;
+  max-width: 600px;
   margin: 0 auto;
   background: white;
   border-radius: 12px;
-  padding: 2rem;
+  padding: 2.5rem;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+}
+
+@media (max-width: 640px) {
+  .profile-page {
+    padding: 1rem 0.5rem;
+  }
+  .profile-container {
+    padding: 1.5rem;
+    border-radius: 8px;
+  }
 }
 .profile-container h1 {
   font-size: 1.75rem;
@@ -313,6 +373,33 @@ async function saveProfile() {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   font-size: 1rem;
+  box-sizing: border-box;
+  transition: all 0.2s ease;
+}
+
+.field textarea {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 1rem;
+  box-sizing: border-box;
+  transition: all 0.2s ease;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 80px;
+}
+
+.field input:focus,
+.field textarea:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.field input:hover:not(:disabled),
+.field textarea:hover {
+  border-color: #2563eb;
 }
 .field input.disabled {
   background: #f3f4f6;

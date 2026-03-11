@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import InternSidebar from '@/components/InternSidebar.vue'
 import InternDashboard from '@/components/InternDashboard.vue'
@@ -19,6 +20,7 @@ import {
   BellIcon
 } from '@heroicons/vue/24/outline'
 
+const router = useRouter()
 const authStore = useAuthStore()
 
 const userInitials = computed(() => {
