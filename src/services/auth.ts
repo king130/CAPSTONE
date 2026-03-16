@@ -108,6 +108,8 @@ export async function registerUser(payload: RegisterPayload) {
   if (isPreApprovedStudent) {
     resolvedProfile.schoolId = preApprovedStudent?.schoolId || ''
     resolvedProfile.schoolName = preApprovedStudent?.schoolName || ''
+    resolvedProfile.studentNumber = preApprovedStudent?.studentNumber || ''
+    resolvedProfile.studentId = preApprovedStudent?.studentNumber || ''
     resolvedProfile.course = preApprovedStudent?.course || ''
     resolvedProfile.yearLevel = preApprovedStudent?.yearLevel || ''
   }
@@ -150,11 +152,13 @@ export async function registerUser(payload: RegisterPayload) {
       : resolvedRole === 'company'
         ? p?.companyName
         : p?.schoolName) as string | undefined
+    const courses = (p?.courses as string[] | undefined) || []
     await ensurePublicProfile(credential.user.uid, {
       displayName: resolvedDisplayName,
       role: resolvedRole,
       orgName: orgName || resolvedDisplayName,
       email: normalizedEmail,
+      courses,
     }).catch(() => {})
   }
 
@@ -224,6 +228,7 @@ async function findPreApprovedStudent(email: string) {
   const data = snapshot.docs[0]?.data() as {
     schoolId?: string
     studentName?: string
+    studentNumber?: string
     course?: string
     yearLevel?: string
     defaultPassword?: string
@@ -246,6 +251,7 @@ async function findPreApprovedStudent(email: string) {
     schoolId: data.schoolId || '',
     schoolName,
     studentName: data.studentName || '',
+    studentNumber: data.studentNumber || '',
     course: data.course || '',
     yearLevel: data.yearLevel || '',
     defaultPassword: data.defaultPassword || '',
@@ -290,6 +296,8 @@ async function tryProvisionStudentFromSchoolList(email: string, password: string
     profile: {
       schoolId: preApprovedStudent.schoolId || '',
       schoolName: preApprovedStudent.schoolName || '',
+      studentNumber: preApprovedStudent.studentNumber || '',
+      studentId: preApprovedStudent.studentNumber || '',
       course: preApprovedStudent.course || '',
       yearLevel: preApprovedStudent.yearLevel || '',
     },
@@ -310,9 +318,16 @@ async function tryProvisionStudentFromSchoolList(email: string, password: string
 }
 
 export function subscribeToUserProfile(uid: string, callback: (profile: UserProfile | null) => void) {
-  return onSnapshot(doc(db, 'users', uid), (snapshot) => {
-    callback(snapshot.exists() ? (snapshot.data() as UserProfile) : null)
-  })
+  return onSnapshot(
+    doc(db, 'users', uid),
+    (snapshot) => {
+      callback(snapshot.exists() ? (snapshot.data() as UserProfile) : null)
+    },
+    (err) => {
+      console.warn('User profile subscription error:', err?.message || err)
+      callback(null)
+    }
+  )
 }
 
 export function subscribeToAuthState(callback: (user: User | null) => void) {

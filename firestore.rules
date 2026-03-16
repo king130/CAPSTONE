@@ -12,7 +12,13 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read: if isAdmin() || request.auth.uid == userId;
+      // Allow organizations (schools/companies) to discover each other for contracts/chat/directory fallback.
+      // Note: Firestore rules are document-level, so keep sensitive data out of /users if it shouldn't be shared.
+      allow read: if isAdmin()
+        || request.auth.uid == userId
+        || (isSignedIn()
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['school', 'company']
+          && resource.data.role in ['school', 'company']);
 
       allow create: if request.auth.uid == userId
         && (request.resource.data.role == null || request.resource.data.role in ['student', 'school', 'company'])
@@ -71,7 +77,13 @@ service cloud.firestore {
     match /profiles_public/{profileId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && (request.resource.data.uid == request.auth.uid || isAdmin());
-      allow update: if isSignedIn() && (resource.data.uid == request.auth.uid || isAdmin());
+      // Allow owner updates; also allow backfilling uid if older docs were created without it.
+      allow update: if isSignedIn()
+        && (
+          isAdmin()
+          || resource.data.uid == request.auth.uid
+          || (resource.data.uid == null && request.resource.data.uid == request.auth.uid)
+        );
       allow delete: if isSignedIn() && (resource.data.uid == request.auth.uid || isAdmin());
     }
 

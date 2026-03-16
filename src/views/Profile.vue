@@ -14,10 +14,12 @@ const saving = ref(false)
 
 const displayName = ref('')
 const contactNumber = ref('')
+const orgCourses = ref<string[]>([])
+const newCourse = ref('')
 
 // Role-specific form fields
 const studentFields = ref({
-  studentId: '',
+  studentNumber: '',
   schoolName: '',
   course: '',
   yearLevel: '',
@@ -60,9 +62,10 @@ function loadProfile() {
   const p = (authStore.user.profile || {}) as Record<string, unknown>
   displayName.value = authStore.user.displayName || ''
   contactNumber.value = (p.contactNumber as string) || (p.companyContactNumber as string) || (p.schoolContactNumber as string) || ''
+  orgCourses.value = Array.isArray(p.courses) ? (p.courses as string[]) : []
 
   studentFields.value = {
-    studentId: (p.studentId as string) || '',
+    studentNumber: (p.studentNumber as string) || (p.studentId as string) || '',
     schoolName: (p.schoolName as string) || '',
     course: (p.course as string) || '',
     yearLevel: (p.yearLevel as string) || '',
@@ -106,16 +109,32 @@ function buildUpdatedProfile(): Record<string, unknown> {
   const role = authStore.user?.role
 
   if (role === 'student') {
-    return { contactNumber: contactNumber.value, ...studentFields.value }
+    const studentNumber = studentFields.value.studentNumber?.trim() || ''
+    // Keep backward-compatible key `studentId` (used in other screens) while introducing `studentNumber`.
+    return { contactNumber: contactNumber.value, studentNumber, studentId: studentNumber, ...studentFields.value }
   }
   if (role === 'company') {
-    return { contactNumber: contactNumber.value, companyContactNumber: companyFields.value.companyContactNumber || contactNumber.value, ...companyFields.value }
+    return { contactNumber: contactNumber.value, companyContactNumber: companyFields.value.companyContactNumber || contactNumber.value, courses: orgCourses.value, ...companyFields.value }
   }
   if (role === 'school') {
-    return { contactNumber: contactNumber.value, schoolContactNumber: schoolFields.value.schoolContactNumber || contactNumber.value, ...schoolFields.value }
+    return { contactNumber: contactNumber.value, schoolContactNumber: schoolFields.value.schoolContactNumber || contactNumber.value, courses: orgCourses.value, ...schoolFields.value }
   }
   // Guest or no role
   return { contactNumber: contactNumber.value, ...guestFields.value }
+}
+
+function addCourse() {
+  const value = newCourse.value.trim()
+  if (!value) return
+  const normalized = value.toUpperCase()
+  if (!orgCourses.value.some((c) => c.toUpperCase() === normalized)) {
+    orgCourses.value.push(value)
+  }
+  newCourse.value = ''
+}
+
+function removeCourse(course: string) {
+  orgCourses.value = orgCourses.value.filter((c) => c !== course)
 }
 
 async function saveProfile() {
@@ -136,6 +155,7 @@ async function saveProfile() {
         role: authStore.user.role,
         orgName: orgName || displayName.value,
         email: authStore.user.email,
+        courses: (updatedProfile.courses as string[]) || [],
       }).catch(() => {})
     }
     await Swal.fire({
@@ -182,8 +202,8 @@ async function saveProfile() {
         <!-- Student fields -->
         <template v-if="user.role === 'student'">
           <div class="field">
-            <label>Student ID</label>
-            <input v-model="studentFields.studentId" type="text" placeholder="Student ID" />
+            <label>Student Number</label>
+            <input v-model="studentFields.studentNumber" type="text" placeholder="e.g. 2026-0001" />
           </div>
           <div class="field">
             <label>School Name</label>
@@ -241,6 +261,20 @@ async function saveProfile() {
             <label>Company Phone</label>
             <input v-model="companyFields.companyContactNumber" type="tel" placeholder="Phone number" />
           </div>
+          <div class="field">
+            <label>Courses Accepted</label>
+            <div class="course-entry-inline">
+              <input v-model="newCourse" type="text" placeholder="e.g. BSIT" @keydown.enter.prevent="addCourse" />
+              <button type="button" class="course-add-inline" @click="addCourse">Add</button>
+            </div>
+            <div v-if="orgCourses.length" class="course-chip-list-inline">
+              <div v-for="c in orgCourses" :key="c" class="course-chip-inline">
+                <span>{{ c }}</span>
+                <button type="button" class="course-chip-remove-inline" @click="removeCourse(c)">x</button>
+              </div>
+            </div>
+            <small class="course-hint">These are visible to schools during contract creation.</small>
+          </div>
         </template>
 
         <!-- School fields -->
@@ -272,6 +306,20 @@ async function saveProfile() {
           <div class="field">
             <label>School Address</label>
             <input v-model="schoolFields.schoolAddress" type="text" placeholder="Address" />
+          </div>
+          <div class="field">
+            <label>Courses Offered</label>
+            <div class="course-entry-inline">
+              <input v-model="newCourse" type="text" placeholder="e.g. BSIT" @keydown.enter.prevent="addCourse" />
+              <button type="button" class="course-add-inline" @click="addCourse">Add</button>
+            </div>
+            <div v-if="orgCourses.length" class="course-chip-list-inline">
+              <div v-for="c in orgCourses" :key="c" class="course-chip-inline">
+                <span>{{ c }}</span>
+                <button type="button" class="course-chip-remove-inline" @click="removeCourse(c)">x</button>
+              </div>
+            </div>
+            <small class="course-hint">These are used to align courses with companies in contracts.</small>
           </div>
         </template>
 
@@ -359,6 +407,71 @@ async function saveProfile() {
 }
 .field {
   margin-bottom: 1.25rem;
+}
+
+.course-entry-inline {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.course-entry-inline input {
+  flex: 1;
+}
+
+.course-add-inline {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid #2563eb;
+  background: #2563eb;
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.course-add-inline:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+.course-chip-list-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.course-chip-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1d4ed8;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.course-chip-remove-inline {
+  border: none;
+  background: transparent;
+  color: #1d4ed8;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.course-chip-remove-inline:hover {
+  color: #1e40af;
+}
+
+.course-hint {
+  display: block;
+  margin-top: 8px;
+  color: #6b7280;
+  font-size: 12px;
 }
 .field label {
   display: block;

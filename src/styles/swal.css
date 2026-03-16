@@ -9,22 +9,135 @@
     Roboto,
     Arial,
     sans-serif;
-  border-radius: 10px;
+  border-radius: 16px;
+  padding: 22px 22px 18px;
+  box-shadow:
+    0 40px 80px rgba(0, 0, 0, 0.22),
+    0 10px 24px rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.35);
 }
 
 .capstone-swal-title {
-  color: #16a34a; /* green */
-  font-weight: 700;
+  color: #0f172a;
+  font-weight: 900;
   font-size: 18px;
+  margin: 0;
 }
 
 .capstone-swal-text {
-  color: #6b7280;
-  font-size: 12px;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.capstone-swal-actions {
+  margin-top: 16px !important;
+  gap: 10px !important;
+}
+
+.capstone-swal-confirm,
+.capstone-swal-cancel,
+.capstone-swal-deny {
+  border-radius: 12px !important;
+  font-weight: 900 !important;
+  padding: 10px 14px !important;
+  min-height: 42px;
+  border: 1px solid transparent !important;
 }
 
 .capstone-swal-confirm {
-  border-radius: 6px !important;
-  font-weight: 600 !important;
+  background: #2563eb !important;
+  color: white !important;
+  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.22) !important;
 }
 
+.capstone-swal-confirm:hover {
+  background: #1d4ed8 !important;
+}
+
+.capstone-swal-cancel {
+  background: rgba(148, 163, 184, 0.12) !important;
+  color: #0f172a !important;
+  border-color: rgba(148, 163, 184, 0.25) !important;
+}
+
+.capstone-swal-cancel:hover {
+  background: rgba(148, 163, 184, 0.18) !important;
+}
+
+.capstone-swal-deny {
+  background: #dc2626 !important;
+  color: white !important;
+  box-shadow: 0 12px 24px rgba(220, 38, 38, 0.18) !important;
+}
+
+.capstone-swal-deny:hover {
+  background: #b91c1c !important;
+}
+
+.capstone-swal-input,
+.capstone-swal-select,
+.swal2-input,
+.swal2-select {
+  border-radius: 12px !important;
+  border: 1px solid rgba(148, 163, 184, 0.45) !important;
+  background: white !important;
+  color: #0f172a !important;
+  box-shadow: none !important;
+  min-height: 44px;
+}
+
+.capstone-swal-input:focus,
+.capstone-swal-select:focus,
+.swal2-input:focus,
+.swal2-select:focus {
+  border-color: rgba(37, 99, 235, 0.65) !important;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12) !important;
+}
+
+.swal2-html-container {
+  margin: 10px 0 0 0 !important;
+}
+
+.capstone-swal-backdrop {
+  animation: capstoneFadeIn 0.12s ease-out both;
+}
+
+.capstone-swal-show {
+  animation: capstonePopIn 0.12s ease-out both;
+}
+
+.capstone-swal-hide {
+  animation: capstonePopOut 0.1s ease-in both;
+}
+
+@keyframes capstoneFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes capstonePopIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes capstonePopOut {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}

@@ -65,6 +65,15 @@
 
       <div
         class="nav-item"
+        :class="{ active: activeItem === 'subscription' }"
+        @click="setActiveItem('subscription')"
+      >
+        <img src="/icons/icon-save.png" alt="Subscription" class="nav-icon-img" />
+        <span>Subscription</span>
+      </div>
+
+      <div
+        class="nav-item"
         :class="{ active: activeItem === 'student-emails' }"
         @click="setActiveItem('student-emails')"
       >

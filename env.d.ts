@@ -20,5 +20,6 @@ declare module 'tom-select' {
     on(event: string, handler: (...args: unknown[]) => void): void
     getValue(): string | string[]
     setValue(value: string[] | string, silent?: boolean): void
+    sync(get_settings?: boolean): void
   }
 }

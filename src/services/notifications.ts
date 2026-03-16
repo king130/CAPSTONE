@@ -23,13 +23,20 @@ export interface NotificationItem {
 export function subscribeToNotifications(userId: string, callback: (items: NotificationItem[]) => void) {
   const notificationsRef = collection(db, 'notifications')
   const q = query(notificationsRef, where('userId', '==', userId), orderBy('createdAt', 'desc'))
-  return onSnapshot(q, (snapshot) => {
-    const items = snapshot.docs.map((docSnap) => ({
-      id: docSnap.id,
-      ...(docSnap.data() as Omit<NotificationItem, 'id'>),
-    }))
-    callback(items)
-  })
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const items = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...(docSnap.data() as Omit<NotificationItem, 'id'>),
+      }))
+      callback(items)
+    },
+    (err) => {
+      console.warn('Notifications subscription error:', err?.message || err)
+      callback([])
+    }
+  )
 }
 
 export async function sendNotification(userId: string, title: string, body: string) {

@@ -22,6 +22,7 @@ export interface InternshipRecord {
   duration: string
   slotsAvailable: number
   eligibleCourses?: string[]
+  courseCompletionHours?: Record<string, number>
   requirements?: string[]
   allowance?: string
   status: 'active' | 'draft' | 'closed'
@@ -32,13 +33,20 @@ export interface InternshipRecord {
 export function subscribeInternships(callback: (items: InternshipRecord[]) => void) {
   const internshipsRef = collection(db, 'internships')
   const q = query(internshipsRef, orderBy('createdAt', 'desc'))
-  return onSnapshot(q, (snapshot) => {
-    const items = snapshot.docs.map((docSnap) => ({
-      id: docSnap.id,
-      ...(docSnap.data() as Omit<InternshipRecord, 'id'>),
-    }))
-    callback(items)
-  })
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const items = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...(docSnap.data() as Omit<InternshipRecord, 'id'>),
+      }))
+      callback(items)
+    },
+    (err) => {
+      console.warn('Internships subscription error:', err?.message || err)
+      callback([])
+    }
+  )
 }
 
 export function subscribeActiveInternships(callback: (items: InternshipRecord[]) => void) {

@@ -19,12 +19,19 @@ let unsubscribe: null | (() => void) = null
 onMounted(() => {
   const usersRef = collection(db, 'users')
   const usersQuery = query(usersRef, where('isTemporary', '==', true), orderBy('createdAt', 'desc'))
-  unsubscribe = onSnapshot(usersQuery, (snapshot) => {
-    tempUsers.value = snapshot.docs.map((docSnap) => ({
-      uid: docSnap.id,
-      ...(docSnap.data() as Omit<TempUser, 'uid'>),
-    }))
-  })
+  unsubscribe = onSnapshot(
+    usersQuery,
+    (snapshot) => {
+      tempUsers.value = snapshot.docs.map((docSnap) => ({
+        uid: docSnap.id,
+        ...(docSnap.data() as Omit<TempUser, 'uid'>),
+      }))
+    },
+    (err) => {
+      console.warn('Admin temp users subscription error:', err?.message || err)
+      tempUsers.value = []
+    }
+  )
 })
 
 onUnmounted(() => {

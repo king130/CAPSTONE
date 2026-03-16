@@ -31,13 +31,20 @@ export interface ApplicationRecord {
 export function subscribeApplications(userId: string, callback: (items: ApplicationRecord[]) => void) {
   const applicationsRef = collection(db, 'applications')
   const q = query(applicationsRef, where('studentId', '==', userId), orderBy('createdAt', 'desc'))
-  return onSnapshot(q, (snapshot) => {
-    const items = snapshot.docs.map((docSnap) => ({
-      id: docSnap.id,
-      ...(docSnap.data() as Omit<ApplicationRecord, 'id'>),
-    }))
-    callback(items)
-  })
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const items = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...(docSnap.data() as Omit<ApplicationRecord, 'id'>),
+      }))
+      callback(items)
+    },
+    (err) => {
+      console.warn('Applications subscription error:', err?.message || err)
+      callback([])
+    }
+  )
 }
 
 /** Subscribe to applications for a company's internships (by companyId). */

@@ -76,11 +76,13 @@ export const useAuthStore = defineStore('auth', () => {
           if (profile.role === 'school' || profile.role === 'company') {
             const p = profile.profile as Record<string, unknown> | undefined
             const orgName = (profile.role === 'school' ? p?.institutionName : p?.companyName) as string | undefined
+            const courses = (p?.courses as string[] | undefined) || []
             ensurePublicProfile(profile.uid, {
               displayName: profile.displayName || 'User',
               role: profile.role,
               orgName: orgName || profile.displayName || profile.email?.split('@')[0],
               email: profile.email,
+              courses,
             }).catch(() => {})
           }
           console.log('✅ Auth initialized (user:', profile.email, 'role:', profile.role || 'guest', ')')
@@ -133,11 +135,13 @@ export const useAuthStore = defineStore('auth', () => {
       if (profile.role === 'school' || profile.role === 'company') {
         const p = profile.profile as Record<string, unknown> | undefined
         const orgName = (profile.role === 'school' ? p?.institutionName : p?.companyName) as string | undefined
+        const courses = (p?.courses as string[] | undefined) || []
         ensurePublicProfile(profile.uid, {
           displayName: profile.displayName || 'User',
           role: profile.role,
           orgName: orgName || profile.displayName || profile.email?.split('@')[0],
           email: profile.email,
+          courses,
         }).catch(() => {})
       }
       return profile

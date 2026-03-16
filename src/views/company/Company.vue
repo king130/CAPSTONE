@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import Sidebar from '../../components/Sidebar.vue'
 import CompanySettings from '../../components/CompanySettings.vue'
+import SubscriptionManager from '../../components/SubscriptionManager.vue'
 import FloatingChatWidget from '../../components/FloatingChatWidget.vue'
 import { useAuthStore } from '@/stores/auth'
 import Swal from 'sweetalert2'
@@ -13,6 +14,7 @@ import {
   subscribeCompanyContracts,
   acceptContract,
   rejectContract,
+  cancelContract,
   type ContractRecord,
 } from '@/services/contracts'
 import { createInternship, subscribeCompanyInternships, type InternshipRecord } from '@/services/internships'
@@ -229,6 +231,7 @@ const applicationsByInternships = ref<ApplicationRecord[]>([])
 
 // Contracts (company-school)
 const companyContracts = ref<ContractRecord[]>([])
+const expandedReceivedContractId = ref<string | null>(null)
 let unsubCompanyContracts: (() => void) | null = null
 
 watch(
@@ -249,7 +252,11 @@ function setupSubscriptions(uid: string) {
     displayName: companyName.value,
     role: 'company',
     orgName: companyName.value,
-    email: authStore.user?.email,
+    email:
+      (((authStore.user?.profile as Record<string, unknown> | undefined)?.companyEmail as string | undefined) ||
+        authStore.user?.email) ??
+      undefined,
+    courses: ((authStore.user?.profile as Record<string, unknown> | undefined)?.courses as string[] | undefined) || [],
   }).catch(() => {})
 
   unsubCompanyContracts = subscribeCompanyContracts(uid, (items) => {
@@ -334,6 +341,7 @@ const formType = ref('on-site')
 const formDepartment = ref('')
 const formHoursPerWeek = ref(20)
 const formAllowance = ref('')
+const courseCompletionHours = ref<Record<string, number | ''>>({})
 
 // Cavite Municipalities and their Barangays
 const caviteBarangays: Record<string, string[]> = {
@@ -365,6 +373,22 @@ const caviteBarangays: Record<string, string[]> = {
 const availableBarangays = computed(() => {
   return caviteBarangays[formMunicipality.value] || []
 })
+
+const postingLocation = computed(() => {
+  const municipality = formMunicipality.value.trim()
+  const barangay = formBarangay.value.trim()
+  if (barangay && municipality) return `${barangay}, ${municipality}, Cavite`
+  if (municipality) return `${municipality}, Cavite`
+  return ''
+})
+
+watch(
+  () => [formMunicipality.value, formBarangay.value] as const,
+  () => {
+    formLocation.value = postingLocation.value
+  },
+  { immediate: true }
+)
 
 const selectedCourses = ref<string[]>([])
 const courseSelectRef = ref<HTMLSelectElement | null>(null)
@@ -443,75 +467,117 @@ watch(
 )
 
 watch(
-  () => [currentFormStep.value, availableCourseOptions.value.join('|')] as const,
-  async ([step]) => {
-    if (step !== 2) {
-      destroyCourseTomSelect()
-      return
+  () => selectedCourses.value.join('|'),
+  () => {
+    const next: Record<string, number | ''> = {}
+    for (const course of selectedCourses.value) {
+      next[course] = courseCompletionHours.value[course] ?? ''
     }
-
-    await nextTick()
-
-    const el = courseSelectRef.value
-    if (!el) return
-
-    destroyCourseTomSelect()
-
-    courseTomSelectInstance = new TomSelect(el, {
-      plugins: ['remove_button'],
-      persist: false,
-      create(input: string) {
-        const value = input.trim().toUpperCase()
-        return value ? { value, text: value } : false
-      },
-      closeAfterSelect: true,
-    })
-
-    if (selectedCourses.value.length) {
-      courseTomSelectInstance.setValue(selectedCourses.value, true)
-    }
-
-    courseTomSelectInstance.on('change', () => {
-      selectedCourses.value = normalizeTomSelectValues(courseTomSelectInstance?.getValue())
-    })
+    courseCompletionHours.value = next
   },
   { immediate: true }
 )
 
 watch(
-  () => [currentFormStep.value, selectedCourses.value.join('|'), availableSkillOptions.value.join('|')] as const,
-  async ([step]) => {
-    if (step !== 2) {
-      destroySkillsTomSelect()
-      return
-    }
+  () => currentFormStep.value,
+  async (step, _prev, onCleanup) => {
+    let cancelled = false
+    onCleanup(() => {
+      cancelled = true
+    })
+
+    if (step !== 2) return
 
     await nextTick()
+    if (cancelled || currentFormStep.value !== 2) return
 
-    const el = skillsSelectRef.value
-    if (!el) return
+    const courseEl = courseSelectRef.value
+    if (courseEl && !courseTomSelectInstance) {
+      courseTomSelectInstance = new TomSelect(courseEl, {
+        plugins: ['remove_button'],
+        persist: false,
+        create(input: string) {
+          const value = input.trim().toUpperCase()
+          return value ? { value, text: value } : false
+        },
+        closeAfterSelect: true,
+      })
 
-    destroySkillsTomSelect()
+      if (selectedCourses.value.length) {
+        courseTomSelectInstance.setValue(selectedCourses.value, true)
+      }
 
-    skillsTomSelectInstance = new TomSelect(el, {
-      plugins: ['remove_button'],
-      persist: false,
-      create(input: string) {
-        const value = input.trim()
-        return value ? { value, text: value } : false
-      },
-      closeAfterSelect: true,
-    })
-
-    if (formSkills.value.length) {
-      skillsTomSelectInstance.setValue(formSkills.value, true)
+      courseTomSelectInstance.on('change', () => {
+        selectedCourses.value = normalizeTomSelectValues(courseTomSelectInstance?.getValue())
+      })
     }
 
-    skillsTomSelectInstance.on('change', () => {
-      formSkills.value = normalizeTomSelectValues(skillsTomSelectInstance?.getValue())
-    })
+    const skillsEl = skillsSelectRef.value
+    if (skillsEl && !skillsTomSelectInstance) {
+      skillsTomSelectInstance = new TomSelect(skillsEl, {
+        plugins: ['remove_button'],
+        persist: false,
+        create(input: string) {
+          const value = input.trim()
+          return value ? { value, text: value } : false
+        },
+        closeAfterSelect: true,
+      })
+
+      if (formSkills.value.length) {
+        skillsTomSelectInstance.setValue(formSkills.value, true)
+      }
+
+      skillsTomSelectInstance.on('change', () => {
+        formSkills.value = normalizeTomSelectValues(skillsTomSelectInstance?.getValue())
+      })
+    }
   },
   { immediate: true }
+)
+
+watch(
+  () => [currentFormStep.value, availableCourseOptions.value.join('|')] as const,
+  async ([step], _prev, onCleanup) => {
+    let cancelled = false
+    onCleanup(() => {
+      cancelled = true
+    })
+
+    if (step !== 2) return
+    if (!courseTomSelectInstance) return
+
+    await nextTick()
+    if (cancelled || currentFormStep.value !== 2) return
+
+    try {
+      courseTomSelectInstance.sync()
+    } catch {
+      // ignore sync errors from torn-down nodes
+    }
+  }
+)
+
+watch(
+  () => [currentFormStep.value, availableSkillOptions.value.join('|')] as const,
+  async ([step], _prev, onCleanup) => {
+    let cancelled = false
+    onCleanup(() => {
+      cancelled = true
+    })
+
+    if (step !== 2) return
+    if (!skillsTomSelectInstance) return
+
+    await nextTick()
+    if (cancelled || currentFormStep.value !== 2) return
+
+    try {
+      skillsTomSelectInstance.sync()
+    } catch {
+      // ignore sync errors from torn-down nodes
+    }
+  }
 )
 
 watch(
@@ -562,8 +628,8 @@ function prevFormStep() {
   }
 }
 
-function saveDraft() {
-  submitInternship('draft')
+async function saveDraft() {
+  await submitInternship('draft')
 }
 
 async function submitForApproval() {
@@ -577,25 +643,47 @@ async function submitInternship(status: 'active' | 'draft') {
     return
   }
 
-  if (!formTitle.value.trim()) {
+  const trimmedTitle = formTitle.value.trim()
+  if (!trimmedTitle) {
     await Swal.fire({ icon: 'warning', title: 'Missing title', text: 'Please enter an internship title.' })
     return
   }
-  if (!formDescription.value.trim()) {
+
+  const isActive = status === 'active'
+  if (isActive && !formDescription.value.trim()) {
     await Swal.fire({ icon: 'warning', title: 'Missing description', text: 'Please enter an internship description.' })
     return
   }
-  if (!formLocation.value.trim()) {
-    await Swal.fire({ icon: 'warning', title: 'Missing location', text: 'Please enter a location.' })
+  if (isActive && (!formMunicipality.value.trim() || !formBarangay.value.trim())) {
+    await Swal.fire({ icon: 'warning', title: 'Missing location', text: 'Please select both city/municipality and barangay.' })
     return
   }
-  if (selectedCourses.value.length === 0) {
+  if (isActive && selectedCourses.value.length === 0) {
     await Swal.fire({ icon: 'warning', title: 'Missing courses', text: 'Please add at least one preferred course or program.' })
     return
   }
-  if (formSkills.value.length === 0) {
+  if (isActive && formSkills.value.length === 0) {
     await Swal.fire({ icon: 'warning', title: 'Missing skills', text: 'Please add at least one required skill or technology.' })
     return
+  }
+
+  const normalizedCourseHours: Record<string, number> = {}
+  for (const course of uniqueValues(selectedCourses.value)) {
+    const raw = courseCompletionHours.value[course]
+    const hours = typeof raw === 'number' ? raw : parseInt(String(raw), 10)
+    if (Number.isFinite(hours) && hours > 0) normalizedCourseHours[course] = hours
+  }
+
+  if (isActive && selectedCourses.value.length > 0) {
+    const missing = uniqueValues(selectedCourses.value).filter((course) => !normalizedCourseHours[course])
+    if (missing.length) {
+      await Swal.fire({
+        icon: 'warning',
+        title: 'Missing hours',
+        text: 'Please provide required completion hours for each selected course/program.',
+      })
+      return
+    }
   }
 
   submittingInternship.value = true
@@ -605,16 +693,17 @@ async function submitInternship(status: 'active' | 'draft') {
       : requiredSkills.value.split(/[,\n]/).map((s) => s.trim()).filter(Boolean)
 
     await createInternship({
-      title: formTitle.value.trim(),
-      description: formDescription.value.trim(),
+      title: trimmedTitle,
+      description: formDescription.value.trim() || undefined,
       companyId: uid,
       companyName: companyName.value,
-      location: formLocation.value.trim(),
+      location: postingLocation.value || 'TBD',
       type: formType.value,
-      duration: formDuration.value ? `${formDuration.value} weeks` : '12 weeks',
+      duration: Object.keys(normalizedCourseHours).length ? 'Varies by course' : (formDuration.value ? `${formDuration.value} weeks` : 'TBD'),
       slotsAvailable: typeof slotsAvailable.value === 'number' ? slotsAvailable.value : parseInt(String(slotsAvailable.value), 10) || 1,
-      eligibleCourses: uniqueValues(selectedCourses.value),
-      requirements,
+      eligibleCourses: selectedCourses.value.length ? uniqueValues(selectedCourses.value) : undefined,
+      courseCompletionHours: Object.keys(normalizedCourseHours).length ? normalizedCourseHours : undefined,
+      requirements: requirements.length ? requirements : undefined,
       allowance: formAllowance.value || undefined,
       status,
     })
@@ -644,6 +733,8 @@ function resetCreateForm() {
   formTitle.value = ''
   formDescription.value = ''
   formLocation.value = ''
+  formMunicipality.value = ''
+  formBarangay.value = ''
   formDuration.value = ''
   formType.value = 'on-site'
   formDepartment.value = ''
@@ -652,6 +743,7 @@ function resetCreateForm() {
   formHoursPerWeek.value = 20
   formAllowance.value = ''
   selectedCourses.value = []
+  courseCompletionHours.value = {}
   minimumGPA.value = ''
   requiredSkills.value = ''
   yearLevel.value = ''
@@ -803,6 +895,50 @@ async function handleRejectContractRequest(contract: ContractRecord) {
   }
 }
 
+function displayContractStatus(status?: string) {
+  const s = (status || 'pending').toLowerCase()
+  if (s === 'active') return 'approved'
+  return s
+}
+
+function displayContractStatusLabel(status?: string) {
+  const s = displayContractStatus(status)
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+async function handleCancelContract(contract: ContractRecord) {
+  const result = await Swal.fire({
+    icon: 'warning',
+    title: 'Cancel contract?',
+    input: 'textarea',
+    inputLabel: 'Reason (optional)',
+    inputPlaceholder: 'Add a short reason for cancellation...',
+    showCancelButton: true,
+    confirmButtonText: 'Cancel contract',
+    cancelButtonText: 'Keep it',
+    confirmButtonColor: '#dc2626',
+  })
+
+  if (!result.isConfirmed) return
+
+  try {
+    await cancelContract(contract.id, 'company', (result.value as string | undefined)?.trim())
+    await Swal.fire({
+      icon: 'success',
+      title: 'Cancelled',
+      text: 'The contract has been cancelled.',
+      confirmButtonColor: '#2563eb',
+    })
+  } catch (err) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Could not cancel contract',
+      text: err instanceof Error ? err.message : 'Please try again.',
+      confirmButtonColor: '#2563eb',
+    })
+  }
+}
+
 // TEMPORARY DATA: Sample journal activity for journals view - replace with real data from backend
 const recentJournalActivity = ref([
   { type: 'completed' as const, title: 'Completed: Backend API Integration', description: 'Applied Python, Django, RESTful API principles. 8 hours.', status: 'Approved' as const, date: 'May 15, 2024' },
@@ -829,6 +965,10 @@ function getActivityDots(iso: string): string[] {
 
 function toIsoKey(d: Date): string {
   return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
+}
+
+function toggleReceivedContractDetails(id: string) {
+  expandedReceivedContractId.value = expandedReceivedContractId.value === id ? null : id
 }
 
 function prevJournalMonth() {
@@ -1756,72 +1896,97 @@ onUnmounted(() => {
             <div v-if="companyContracts.length === 0" class="empty-applications">
               No contract requests yet from schools.
             </div>
-            <div v-else class="contracts-list">
-              <div v-for="c in companyContracts" :key="c.id" class="contract-card">
-                <div class="contract-doc-header">
-                  <span class="contract-doc-title">MEMORANDUM OF AGREEMENT</span>
-                  <span class="contract-doc-parties">{{ c.schoolName }} <-> {{ c.companyName }}</span>
-                </div>
-                <div class="contract-info">
-                  <div class="contract-header-row">
-                    <h3>{{ c.schoolName }}</h3>
-                    <span class="status-badge-app" :class="(c.status || 'pending').toLowerCase()">
-                      {{ (c.status || 'pending').charAt(0).toUpperCase() + (c.status || 'pending').slice(1) }}
-                    </span>
-                  </div>
-                  <div v-if="(c.status || 'pending') === 'pending'" class="contract-actions">
-                    <button class="contract-btn contract-btn-accept" @click="handleAcceptContractRequest(c)">
-                      Accept
-                    </button>
-                    <button class="contract-btn contract-btn-reject" @click="handleRejectContractRequest(c)">
-                      Reject
-                    </button>
-                  </div>
-                  <p class="contract-type">{{ c.contractType || 'MOA' }}</p>
-                  <p v-if="c.moaReferenceNo" class="contract-purpose"><strong>Ref:</strong> {{ c.moaReferenceNo }}</p>
-                  <p v-if="c.purpose" class="contract-purpose">{{ c.purpose }}</p>
-                  <div v-if="c.startDate || c.endDate" class="contract-dates">
-                    <strong>Duration:</strong> {{ c.startDate && c.endDate ? `${c.startDate} - ${c.endDate}` : (c.startDate || c.endDate || '-') }}
-                  </div>
-                  <div v-if="c.internshipSlots || c.studentPrograms" class="contract-dates">
-                    <strong>Slots/Programs:</strong> {{ c.internshipSlots || '-' }} slots<span v-if="c.studentPrograms"> | {{ c.studentPrograms }}</span>
-                  </div>
-                  <div v-if="c.courseAllocations && c.courseAllocations.length" class="contract-section">
-                    <strong>Course Slots:</strong>
-                    <p v-for="item in c.courseAllocations" :key="`${c.id}-${item.course}`">{{ item.course }}: {{ item.slots }}</p>
-                  </div>
-                  <div v-if="c.schoolContactName || c.schoolContactEmail || c.companyContactName || c.companyContactEmail" class="contract-section">
-                    <strong>Contacts:</strong>
-                    <p>School: {{ c.schoolContactName || '-' }} <span v-if="c.schoolContactEmail">({{ c.schoolContactEmail }})</span></p>
-                    <p>Company: {{ c.companyContactName || '-' }} <span v-if="c.companyContactEmail">({{ c.companyContactEmail }})</span></p>
-                  </div>
-                  <div v-if="c.schoolResponsibilities" class="contract-section">
-                    <strong>School Responsibilities:</strong>
-                    <p>{{ c.schoolResponsibilities }}</p>
-                  </div>
-                  <div v-if="c.companyResponsibilities" class="contract-section">
-                    <strong>Company Responsibilities:</strong>
-                    <p>{{ c.companyResponsibilities }}</p>
-                  </div>
-                  <div v-if="c.terms" class="contract-section">
-                    <strong>Terms & Conditions:</strong>
-                    <p>{{ c.terms }}</p>
-                  </div>
-                  <div v-if="c.notes" class="contract-section">
-                    <strong>Notes:</strong>
-                    <p>{{ c.notes }}</p>
-                  </div>
-                  <div v-if="c.rejectedReason && (c.status || 'pending') === 'rejected'" class="contract-section">
-                    <strong>Rejected Reason:</strong>
-                    <p>{{ c.rejectedReason }}</p>
-                  </div>
-                  <div v-if="c.attachments && c.attachments.length" class="contract-section">
-                    <strong>Attached Files:</strong>
-                    <p v-for="a in c.attachments" :key="`${c.id}-${a.name}`">{{ a.name }}</p>
-                  </div>
-                  <p class="contract-purpose">Requested on {{ formatApplicationDate(c.createdAt) }}</p>
-                </div>
-              </div>
+            <div v-else class="contracts-table-wrap">
+              <table class="contracts-table">
+                <thead>
+                  <tr>
+                    <th>Ref</th>
+                    <th>School</th>
+                    <th>Subject</th>
+                    <th>Status</th>
+                    <th>Requested</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template v-for="c in companyContracts" :key="c.id">
+                    <tr>
+                      <td class="mono">{{ c.moaReferenceNo || '-' }}</td>
+                      <td>{{ c.schoolName }}</td>
+                      <td>{{ c.subject || '-' }}</td>
+                      <td>
+                        <span class="status-badge-app" :class="displayContractStatus(c.status)">{{ displayContractStatusLabel(c.status) }}</span>
+                      </td>
+                      <td>{{ formatApplicationDate(c.createdAt) }}</td>
+                      <td class="actions-cell">
+                        <button type="button" class="table-btn" @click="toggleReceivedContractDetails(c.id)">
+                          {{ expandedReceivedContractId === c.id ? 'Hide' : 'View' }}
+                        </button>
+                        <button
+                          v-if="(c.status || 'pending') === 'pending'"
+                          type="button"
+                          class="table-btn ok"
+                          @click="handleAcceptContractRequest(c)"
+                        >
+                          Accept
+                        </button>
+                        <button
+                          v-if="(c.status || 'pending') === 'pending'"
+                          type="button"
+                          class="table-btn danger"
+                          @click="handleRejectContractRequest(c)"
+                        >
+                          Reject
+                        </button>
+                        <button
+                          v-if="(c.status || 'pending') === 'active'"
+                          type="button"
+                          class="table-btn danger"
+                          @click="handleCancelContract(c)"
+                        >
+                          Cancel
+                        </button>
+                      </td>
+                    </tr>
+                    <tr v-if="expandedReceivedContractId === c.id" class="details-row">
+                      <td colspan="6">
+                        <div class="details-panel">
+                          <div class="details-grid">
+                            <div><strong>Type:</strong> {{ c.contractType || 'MOA' }}</div>
+                            <div><strong>Duration:</strong> {{ c.startDate && c.endDate ? `${c.startDate} - ${c.endDate}` : (c.startDate || c.endDate || '-') }}</div>
+                            <div><strong>Slots:</strong> {{ c.internshipSlots || '-' }}</div>
+                            <div><strong>Programs:</strong> {{ c.studentPrograms || '-' }}</div>
+                          </div>
+                          <div v-if="c.courseAllocations && c.courseAllocations.length" class="contract-section">
+                            <strong>Course Slots:</strong>
+                            <p v-for="item in c.courseAllocations" :key="`${c.id}-${item.course}`">{{ item.course }}: {{ item.slots }}</p>
+                          </div>
+                          <div v-if="c.purpose" class="contract-section">
+                            <strong>Purpose:</strong>
+                            <p>{{ c.purpose }}</p>
+                          </div>
+                          <div v-if="c.notes" class="contract-section">
+                            <strong>Notes:</strong>
+                            <p>{{ c.notes }}</p>
+                          </div>
+                          <div v-if="c.rejectedReason && (c.status || 'pending') === 'rejected'" class="contract-section">
+                            <strong>Rejected Reason:</strong>
+                            <p>{{ c.rejectedReason }}</p>
+                          </div>
+                          <div v-if="(c.status || 'pending') === 'cancelled'" class="contract-section">
+                            <strong>Cancelled:</strong>
+                            <p>{{ c.cancelledReason || 'No reason provided.' }}</p>
+                          </div>
+                          <div v-if="c.attachments && c.attachments.length" class="contract-section">
+                            <strong>Files:</strong>
+                            <p v-for="a in c.attachments" :key="`${c.id}-${a.name}`">{{ a.name }}</p>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
             </div>
           </div>
         </main>
@@ -2354,7 +2519,7 @@ onUnmounted(() => {
               </div>
 
               <!-- Qualifications & Responsibilities Section (Step 2) -->
-              <div class="form-card" v-if="currentFormStep === 2">
+              <div class="form-card" v-show="currentFormStep === 2">
                 <div class="form-card-header">
                   <img src="/icons/icon-student.png" alt="Qualifications" class="section-icon" />
                   <h2 class="section-title">Qualifications & Responsibilities</h2>
@@ -2375,6 +2540,28 @@ onUnmounted(() => {
                     </option>
                   </select>
                   <p class="form-hint">Select multiple courses or type a custom one like BSED, BSBA, or other programs.</p>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">Required Completion Hours (Per Course) <span class="required">*</span></label>
+                  <div v-if="selectedCourses.length === 0" class="form-hint">Select at least one course/program first.</div>
+                  <div v-else class="course-hours-list">
+                    <div v-for="course in selectedCourses" :key="course" class="course-hours-row">
+                      <div class="course-hours-name">{{ course }}</div>
+                      <div class="course-hours-input">
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          v-model.number="courseCompletionHours[course]"
+                          placeholder="e.g. 400"
+                          class="form-input"
+                        />
+                        <span class="input-suffix">hours</span>
+                      </div>
+                    </div>
+                  </div>
+                  <p class="form-hint">Set the total hours students from each selected course/program must complete.</p>
                 </div>
 
                 <div class="form-group">
@@ -2432,8 +2619,8 @@ onUnmounted(() => {
                   ></textarea>
                 </div>
 
-                <div class="form-group">
-                  <label class="form-label">Duration <span class="required">*</span></label>
+                <div class="form-group" v-if="false">
+                  <!-- Duration removed: now handled via per-course completion hours -->
                   <input
                     type="number"
                     v-model="formDuration"
@@ -2443,7 +2630,7 @@ onUnmounted(() => {
                   <span class="input-suffix">weeks</span>
                 </div>
 
-                <div class="form-group">
+                <div class="form-group" v-if="false">
                   <label class="form-label">Required Internship Hours / Week <span class="required">*</span></label>
                   <input
                     type="number"
@@ -2653,7 +2840,7 @@ onUnmounted(() => {
                   </div>
                 </div>
 
-                <button class="btn-save-draft">
+                <button class="btn-save-draft" @click="saveDraft" :disabled="submittingInternship">
                   <img src="/icons/icon-save.png" alt="Save" class="btn-icon" />
                   Save as Draft
                 </button>
@@ -3150,6 +3337,9 @@ onUnmounted(() => {
           </div>
         </Teleport>
       </div>
+
+      <!-- Subscription View -->
+      <SubscriptionManager v-if="currentView === 'subscription'" role="company" />
 
       <!-- Settings View -->
       <CompanySettings v-if="currentView === 'settings'" />
@@ -4479,6 +4669,36 @@ onUnmounted(() => {
   outline: none;
   border-color: #2563eb;
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.course-hours-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.course-hours-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+
+.course-hours-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.course-hours-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 240px;
 }
 
 /* Rich Text Editor */
@@ -6962,6 +7182,20 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 16px;
 }
+
+.contracts-table-wrap { overflow-x: auto; }
+.contracts-table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; }
+.contracts-table th, .contracts-table td { padding: 10px 12px; border-bottom: 1px solid #eef2f7; text-align: left; font-size: 0.9rem; color: #111827; vertical-align: top; }
+.contracts-table th { background: #f8fafc; font-weight: 700; color: #334155; font-size: 0.85rem; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size: 0.85rem; }
+.actions-cell { display: flex; gap: 8px; flex-wrap: wrap; }
+.table-btn { padding: 8px 10px; border-radius: 10px; border: 1px solid #cbd5e1; background: #fff; font-weight: 700; cursor: pointer; font-size: 0.85rem; }
+.table-btn:hover { background: #f8fafc; }
+.table-btn.danger { border-color: rgba(220, 38, 38, 0.25); background: rgba(220, 38, 38, 0.08); color: #991b1b; }
+.table-btn.ok { border-color: rgba(5, 150, 105, 0.25); background: rgba(5, 150, 105, 0.08); color: #065f46; }
+.details-row td { background: #f8fafc; }
+.details-panel { padding: 12px 10px; }
+.details-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 12px; margin-bottom: 10px; color: #334155; font-size: 0.9rem; }
 
 .contract-card {
   background: #fff;

@@ -18,6 +18,7 @@ export interface SchoolStudentRecord {
   schoolId: string
   email: string
   studentName?: string
+  studentNumber?: string
   defaultPassword?: string
   course?: string
   yearLevel?: string
@@ -36,13 +37,20 @@ export function subscribeSchoolStudents(
     where('schoolId', '==', schoolId),
     orderBy('createdAt', 'desc')
   )
-  return onSnapshot(q, (snapshot) => {
-    const items = snapshot.docs.map((docSnap) => ({
-      id: docSnap.id,
-      ...(docSnap.data() as Omit<SchoolStudentRecord, 'id'>),
-    }))
-    callback(items)
-  })
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const items = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...(docSnap.data() as Omit<SchoolStudentRecord, 'id'>),
+      }))
+      callback(items)
+    },
+    (err) => {
+      console.warn('School students subscription error:', err?.message || err)
+      callback([])
+    }
+  )
 }
 
 /** Add a student email (the Gmail the school distributes). */
@@ -51,6 +59,7 @@ export async function addSchoolStudent(
   email: string,
   options?: {
     studentName?: string
+    studentNumber?: string
     defaultPassword?: string
     course?: string
     yearLevel?: string
@@ -64,6 +73,7 @@ export async function addSchoolStudent(
     schoolId,
     email: normalizedEmail,
     studentName: options?.studentName || null,
+    studentNumber: options?.studentNumber || null,
     defaultPassword: options?.defaultPassword || null,
     course: options?.course || null,
     yearLevel: options?.yearLevel || null,

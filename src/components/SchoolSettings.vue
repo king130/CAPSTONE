@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { doc, updateDoc } from 'firebase/firestore'
+import { doc, setDoc, updateDoc } from 'firebase/firestore'
 import { db } from '@/services/firebase'
+import { ensurePublicProfile } from '@/services/profilesPublic'
 import Swal from 'sweetalert2'
 import { BellIcon } from '@heroicons/vue/24/outline'
 
@@ -26,6 +27,7 @@ const organizationName = computed(() => {
 
 const loading = ref(true)
 const saving = ref(false)
+const hydrated = ref(false)
 
 // Form data - Initialize with empty values
 const personalInfo = ref({
@@ -47,6 +49,9 @@ const institutionInfo = ref({
   zipCode: ''
 })
 
+const courses = ref<string[]>([])
+const newCourse = ref('')
+
 const security = ref({
   oldPassword: '',
   newPassword: '',
@@ -56,20 +61,26 @@ const security = ref({
 
 const profilePicture = ref('/icons/profiles/alex-doe.jpg')
 
-// Load user data on mount
-onMounted(() => {
-  if (authStore.user) {
-    const profile = authStore.user.profile as Record<string, unknown> | undefined
+watch(
+  () => authStore.user,
+  (user) => {
+    if (!user) {
+      loading.value = false
+      hydrated.value = false
+      return
+    }
+    if (hydrated.value) return
+    const profile = user.profile as Record<string, unknown> | undefined
     personalInfo.value = {
-      name: authStore.user.displayName || '',
-      email: authStore.user.email || '',
+      name: user.displayName || '',
+      email: user.email || '',
       phoneNumber: (profile?.schoolContactNumber as string) || (profile?.contactNumber as string) || '',
       institutionName: (profile?.institutionName as string) || '',
       department: (profile?.department as string) || '',
       position: (profile?.position as string) || '',
       officeLocation: (profile?.officeLocation as string) || ''
     }
-    
+
     institutionInfo.value = {
       institutionType: (profile?.institutionType as string) || '',
       address: (profile?.schoolAddress as string) || '',
@@ -78,17 +89,21 @@ onMounted(() => {
       city: (profile?.cityMunicipality as string) || '',
       zipCode: (profile?.zipCode as string) || ''
     }
-    
-    // Load security settings from profile if available
+
+    courses.value = Array.isArray(profile?.courses) ? (profile?.courses as string[]) : []
+
     if (profile?.twoFactorAuth !== undefined) {
       security.value.twoFactorAuth = profile.twoFactorAuth as boolean
     }
     if (profile?.loginAlerts !== undefined) {
       security.value.loginAlerts = profile.loginAlerts as boolean
     }
-  }
-  loading.value = false
-})
+
+    hydrated.value = true
+    loading.value = false
+  },
+  { immediate: true }
+)
 
 // Functions
 function updateProfilePicture() {
@@ -99,6 +114,20 @@ function updateProfilePicture() {
     confirmButtonText: 'OK',
     confirmButtonColor: '#3b82f6'
   })
+}
+
+function addCourse() {
+  const value = newCourse.value.trim()
+  if (!value) return
+  const normalized = value.toUpperCase()
+  if (!courses.value.some((c) => c.toUpperCase() === normalized)) {
+    courses.value.push(value)
+  }
+  newCourse.value = ''
+}
+
+function removeCourse(course: string) {
+  courses.value = courses.value.filter((c) => c !== course)
 }
 
 async function saveChanges() {
@@ -139,10 +168,11 @@ async function saveChanges() {
     const userRef = doc(db, 'users', authStore.user.uid)
     
     // Update Firestore with new profile data
-    await updateDoc(userRef, {
+    const updatePayload = {
       displayName: personalInfo.value.name,
       email: personalInfo.value.email,
       'profile.schoolContactNumber': personalInfo.value.phoneNumber,
+      'profile.contactNumber': personalInfo.value.phoneNumber,
       'profile.institutionName': personalInfo.value.institutionName,
       'profile.department': personalInfo.value.department,
       'profile.position': personalInfo.value.position,
@@ -153,19 +183,54 @@ async function saveChanges() {
       'profile.province': institutionInfo.value.province,
       'profile.cityMunicipality': institutionInfo.value.city,
       'profile.zipCode': institutionInfo.value.zipCode,
+      'profile.courses': courses.value.map((c) => c.trim()).filter(Boolean),
       'profile.twoFactorAuth': security.value.twoFactorAuth,
       'profile.loginAlerts': security.value.loginAlerts,
       updatedAt: new Date()
-    })
+    } as const
 
-    await Swal.fire({
-      icon: 'success',
-      title: 'Changes Saved!',
-      text: 'Your profile has been updated successfully.',
-      confirmButtonColor: '#3b82f6',
-      timer: 2000,
-      showConfirmButton: false
-    })
+    try {
+      await updateDoc(userRef, updatePayload)
+    } catch (e) {
+      const code = (e as { code?: string })?.code || ''
+      if (code === 'not-found') {
+        await setDoc(userRef, updatePayload, { merge: true })
+      } else {
+        throw e
+      }
+    }
+
+    let publicProfileFailed = false
+    try {
+      await ensurePublicProfile(authStore.user.uid, {
+        displayName: personalInfo.value.name,
+        role: 'school',
+        orgName: personalInfo.value.institutionName || personalInfo.value.name,
+        email: personalInfo.value.email,
+        courses: courses.value.map((c) => c.trim()).filter(Boolean),
+      })
+    } catch (e) {
+      publicProfileFailed = true
+      console.warn('ensurePublicProfile failed (school):', e)
+    }
+
+    if (publicProfileFailed) {
+      await Swal.fire({
+        icon: 'warning',
+        title: 'Saved (Directory Update Failed)',
+        text: 'Your profile was saved, but the public school directory could not be updated. Companies may not see your school/courses until this succeeds.',
+        confirmButtonColor: '#3b82f6',
+      })
+    } else {
+      await Swal.fire({
+        icon: 'success',
+        title: 'Changes Saved!',
+        text: 'Your profile has been updated successfully.',
+        confirmButtonColor: '#3b82f6',
+        timer: 2000,
+        showConfirmButton: false
+      })
+    }
   } catch (error) {
     console.error('Error saving changes:', error)
     await Swal.fire({
@@ -374,6 +439,36 @@ function handleImageError(event: Event) {
                   class="form-input"
                   placeholder="Enter province"
                 />
+              </div>
+            </div>
+          </div>
+
+          <!-- Courses Card -->
+          <div class="settings-card full-width">
+            <div class="card-header">
+              <h3 class="card-title">Courses Offered</h3>
+              <p class="card-subtitle">Courses your school offers (used for contract course alignment)</p>
+            </div>
+            <div class="card-body">
+              <div class="form-group">
+                <label class="form-label">Add Course</label>
+                <div class="course-entry">
+                  <input
+                    v-model="newCourse"
+                    type="text"
+                    class="form-input"
+                    placeholder="e.g., BSIT, BSHM, BSED"
+                    @keydown.enter.prevent="addCourse"
+                  />
+                  <button type="button" class="course-add-btn" @click="addCourse">Add</button>
+                </div>
+                <div v-if="courses.length" class="course-chip-list">
+                  <div v-for="c in courses" :key="c" class="course-chip">
+                    <span>{{ c }}</span>
+                    <button type="button" class="course-chip-remove" @click="removeCourse(c)">x</button>
+                  </div>
+                </div>
+                <p v-else class="courses-hint">No courses added yet.</p>
               </div>
             </div>
           </div>
@@ -909,6 +1004,66 @@ function handleImageError(event: Event) {
 
 .toggle-input:checked + .toggle-slider:before {
   transform: translateX(24px);
+}
+
+.course-entry {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.course-add-btn {
+  white-space: nowrap;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid #2563eb;
+  background: #2563eb;
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.course-add-btn:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+.course-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.course-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1d4ed8;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.course-chip-remove {
+  border: none;
+  background: transparent;
+  color: #1d4ed8;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.course-chip-remove:hover {
+  color: #1e40af;
+}
+
+.courses-hint {
+  margin-top: 10px;
+  color: #6b7280;
+  font-size: 12px;
 }
 
 /* Responsive */

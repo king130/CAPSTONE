@@ -19,7 +19,8 @@ export interface ContractRecord {
   schoolId: string
   schoolName: string
   requestedByRole?: 'school' | 'company'
-  status: 'pending' | 'active' | 'rejected'
+  status: 'pending' | 'active' | 'rejected' | 'cancelled'
+  subject?: string
   contractType?: string
   moaReferenceNo?: string
   purpose?: string
@@ -47,6 +48,18 @@ export interface ContractRecord {
   createdAt?: unknown
   updatedAt?: unknown
   rejectedReason?: string
+  cancelledReason?: string
+  cancelledAt?: unknown
+  cancelledByRole?: 'school' | 'company'
+}
+
+function generateMoaReferenceNo() {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  const rand = Math.random().toString(16).slice(2, 6).toUpperCase()
+  return `MOA-${y}${m}${d}-${rand}`
 }
 
 /** Create a contract request between school and company (MOA-style). */
@@ -56,6 +69,7 @@ export async function createContractRequest(payload: {
   schoolId: string
   schoolName: string
   requestedByRole?: 'school' | 'company'
+  subject?: string
   contractType?: string
   moaReferenceNo?: string
   purpose?: string
@@ -82,8 +96,25 @@ export async function createContractRequest(payload: {
   }>
 }) {
   const ref = collection(db, 'contracts')
+
+  // Prevent duplicate pending requests for the same school/company pair (school-side requirement).
+  if ((payload.requestedByRole || 'school') === 'school') {
+    const pendingQ = query(
+      ref,
+      where('schoolId', '==', payload.schoolId),
+      where('companyId', '==', payload.companyId),
+      where('status', '==', 'pending')
+    )
+    const pendingSnap = await getDocs(pendingQ)
+    if (!pendingSnap.empty) {
+      throw new Error('You already have a pending contract request with this company.')
+    }
+  }
+
+  const moaReferenceNo = payload.moaReferenceNo?.trim() || generateMoaReferenceNo()
   const docRef = await addDoc(ref, {
     ...payload,
+    moaReferenceNo,
     status: 'pending',
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -102,13 +133,20 @@ export function subscribeCompanyContracts(
     where('companyId', '==', companyId),
     orderBy('createdAt', 'desc')
   )
-  return onSnapshot(q, (snapshot) => {
-    const items = snapshot.docs.map((docSnap) => ({
-      id: docSnap.id,
-      ...(docSnap.data() as Omit<ContractRecord, 'id'>),
-    }))
-    callback(items)
-  })
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const items = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...(docSnap.data() as Omit<ContractRecord, 'id'>),
+      }))
+      callback(items)
+    },
+    (err) => {
+      console.warn('Company contracts subscription error:', err?.message || err)
+      callback([])
+    }
+  )
 }
 
 /** Subscribe to contracts for a school. */
@@ -122,13 +160,20 @@ export function subscribeSchoolContracts(
     where('schoolId', '==', schoolId),
     orderBy('createdAt', 'desc')
   )
-  return onSnapshot(q, (snapshot) => {
-    const items = snapshot.docs.map((docSnap) => ({
-      id: docSnap.id,
-      ...(docSnap.data() as Omit<ContractRecord, 'id'>),
-    }))
-    callback(items)
-  })
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const items = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...(docSnap.data() as Omit<ContractRecord, 'id'>),
+      }))
+      callback(items)
+    },
+    (err) => {
+      console.warn('School contracts subscription error:', err?.message || err)
+      callback([])
+    }
+  )
 }
 
 /** Accept a contract request. */
@@ -146,6 +191,18 @@ export async function rejectContract(contractId: string, reason?: string) {
   await updateDoc(ref, {
     status: 'rejected',
     rejectedReason: reason || null,
+    updatedAt: serverTimestamp(),
+  })
+}
+
+/** Cancel a contract (works for pending or active). */
+export async function cancelContract(contractId: string, cancelledByRole: 'school' | 'company', reason?: string) {
+  const ref = doc(db, 'contracts', contractId)
+  await updateDoc(ref, {
+    status: 'cancelled',
+    cancelledByRole,
+    cancelledReason: reason || null,
+    cancelledAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   })
 }

@@ -29,12 +29,19 @@ let unsubscribe: null | (() => void) = null
 onMounted(() => {
   const usersRef = collection(db, 'users')
   const usersQuery = query(usersRef, orderBy('createdAt', 'desc'))
-  unsubscribe = onSnapshot(usersQuery, (snapshot) => {
-    users.value = snapshot.docs.map((docSnap) => ({
-      uid: docSnap.id,
-      ...(docSnap.data() as Omit<UserRow, 'uid'>),
-    }))
-  })
+  unsubscribe = onSnapshot(
+    usersQuery,
+    (snapshot) => {
+      users.value = snapshot.docs.map((docSnap) => ({
+        uid: docSnap.id,
+        ...(docSnap.data() as Omit<UserRow, 'uid'>),
+      }))
+    },
+    (err) => {
+      console.warn('Admin users subscription error:', err?.message || err)
+      users.value = []
+    }
+  )
 })
 
 onUnmounted(() => {

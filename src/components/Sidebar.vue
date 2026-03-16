@@ -70,6 +70,14 @@
         <img src="/icons/icon-reports.png" alt="Reports" class="nav-icon-img" />
         <span>Reports</span>
       </div>
+      <div
+        class="nav-item"
+        :class="{ active: activeNav === 'subscription' }"
+        @click="setActiveNav('subscription')"
+      >
+        <img src="/icons/icon-save.png" alt="Subscription" class="nav-icon-img" />
+        <span>Subscription</span>
+      </div>
     </nav>
 
     <div class="sidebar-bottom">

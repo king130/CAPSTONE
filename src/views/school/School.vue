@@ -3,11 +3,12 @@ import { ref, computed, watch, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import SchoolSidebar from '../../components/SchoolSidebar.vue'
 import SchoolSettings from '../../components/SchoolSettings.vue'
+import SubscriptionManager from '../../components/SubscriptionManager.vue'
 import FloatingChatWidget from '../../components/FloatingChatWidget.vue'
 import { useAuthStore } from '@/stores/auth'
 import { subscribeSchoolStudents, addSchoolStudent, removeSchoolStudent, type SchoolStudentRecord } from '@/services/schoolStudents'
-import { subscribeSchoolContracts, createContractRequest, type ContractRecord } from '@/services/contracts'
-import { ensurePublicProfile, subscribePublicProfiles, type PublicProfile } from '@/services/profilesPublic'
+import { subscribeSchoolContracts, createContractRequest, cancelContract, type ContractRecord } from '@/services/contracts'
+import { ensurePublicProfile, listPublicProfiles, subscribePublicProfiles, type PublicProfile } from '@/services/profilesPublic'
 import Swal from 'sweetalert2'
 import {
   BellIcon,
@@ -74,6 +75,14 @@ const handleMenuClick = (item: string) => {
 
 const setActiveSettingsTab = (tab: string) => {
   activeSettingsTab.value = tab
+}
+
+function formatApplicationDate(createdAt: unknown): string {
+  if (!createdAt) return '—'
+  const d = (createdAt as { toDate?: () => Date })?.toDate?.() ?? new Date(String(createdAt))
+  return d instanceof Date && !isNaN(d.getTime())
+    ? d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+    : '—'
 }
 
 // Student sidebar state
@@ -754,6 +763,27 @@ const requiredDocumentsList = ref([
 
 // Student Emails (school-generated) - from Firebase
 const schoolStudentEmails = ref<SchoolStudentRecord[]>([])
+const studentEmailSearchQuery = ref('')
+const filteredSchoolStudentEmails = computed(() => {
+  const q = studentEmailSearchQuery.value.trim().toLowerCase()
+  if (!q) return schoolStudentEmails.value
+
+  return schoolStudentEmails.value.filter((s) => {
+    const haystack = [
+      s.email,
+      s.studentName,
+      s.studentNumber,
+      s.course,
+      s.yearLevel,
+      s.status,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+
+    return haystack.includes(q)
+  })
+})
 let unsubSchoolStudents: (() => void) | null = null
 const newStudentFirstName = ref('')
 const newStudentLastName = ref('')
@@ -880,12 +910,19 @@ async function importStudentsFromFile(event: Event) {
     return
   }
 
-  const isCsv = file.name.toLowerCase().endsWith('.csv') || file.type.includes('csv')
-  if (!isCsv) {
+  const lowerName = file.name.toLowerCase()
+  const isCsv = lowerName.endsWith('.csv') || file.type.includes('csv')
+  const isExcel =
+    lowerName.endsWith('.xlsx') ||
+    lowerName.endsWith('.xls') ||
+    file.type.includes('sheet') ||
+    file.type.includes('excel')
+
+  if (!isCsv && !isExcel) {
     await Swal.fire({
       icon: 'info',
-      title: 'Use CSV Export',
-      text: 'Please upload a CSV file exported from Excel (.xlsx/.xls -> Save As CSV).',
+      title: 'Unsupported file',
+      text: 'Please upload an Excel file (.xlsx/.xls) or CSV file (.csv).',
       confirmButtonColor: '#2563eb',
     })
     input.value = ''
@@ -894,20 +931,62 @@ async function importStudentsFromFile(event: Event) {
 
   importingStudentEmails.value = true
   try {
-    const text = await file.text()
-    const lines = text
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0)
+    let headers: string[] = []
+    let dataRows: string[][] = []
 
-    if (lines.length < 2) {
-      throw new Error('CSV is empty or missing data rows.')
+    if (isCsv) {
+      const text = await file.text()
+      const lines = text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+
+      if (lines.length < 2) {
+        throw new Error('CSV is empty or missing data rows.')
+      }
+
+      headers = parseCsvLine(lines[0]!).map(normalizeHeader)
+      dataRows = lines.slice(1).map((line) => parseCsvLine(line))
+    } else {
+      let XLSX: typeof import('xlsx')
+      try {
+        // Keep this as a normal dynamic import so Vite can bundle/serve the dependency correctly.
+        XLSX = await import('xlsx')
+      } catch {
+        throw new Error('Excel import requires the "xlsx" package. Run: npm.cmd install xlsx')
+      }
+
+      const buffer = await file.arrayBuffer()
+      const workbook = XLSX.read(buffer, { type: 'array' })
+      const sheetName = workbook.SheetNames[0]
+      if (!sheetName) {
+        throw new Error('Excel file has no worksheets.')
+      }
+
+      const sheet = workbook.Sheets[sheetName]
+      if (!sheet) {
+        throw new Error('Could not read the first worksheet.')
+      }
+
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', blankrows: false }) as Array<Array<unknown>>
+      const cleaned = rows
+        .map((row) => row.map((cell) => (cell == null ? '' : String(cell))).map((cell) => cell.trim()))
+        .filter((row) => row.some((cell) => cell.length > 0))
+
+      if (cleaned.length < 2) {
+        throw new Error('Excel sheet is empty or missing data rows.')
+      }
+
+      headers = cleaned[0]!.map(normalizeHeader)
+      dataRows = cleaned.slice(1)
     }
 
-    const headers = parseCsvLine(lines[0]!).map(normalizeHeader)
     const firstNameIdx = headers.findIndex((h) => ['firstname', 'first', 'givenname'].includes(h))
     const lastNameIdx = headers.findIndex((h) => ['lastname', 'last', 'surname', 'familyname'].includes(h))
     const fullNameIdx = headers.findIndex((h) => ['name', 'studentname', 'fullname'].includes(h))
+    const studentNumberIdx = headers.findIndex((h) =>
+      ['studentnumber', 'studentno', 'studentid', 'idnumber', 'studentidnumber'].includes(h)
+    )
     const courseIdx = headers.findIndex((h) => ['course', 'program'].includes(h))
     const yearLevelIdx = headers.findIndex((h) => ['yearlevel', 'year', 'level'].includes(h))
 
@@ -920,8 +999,7 @@ async function importStudentsFromFile(event: Event) {
     let imported = 0
     let skipped = 0
 
-    for (let i = 1; i < lines.length; i += 1) {
-      const row = parseCsvLine(lines[i]!)
+    for (const row of dataRows) {
       if (row.length === 0) {
         skipped += 1
         continue
@@ -960,6 +1038,7 @@ async function importStudentsFromFile(event: Event) {
 
       await addSchoolStudent(uid, email, {
         studentName,
+        studentNumber: studentNumberIdx >= 0 ? (row[studentNumberIdx] || '').trim() || undefined : undefined,
         defaultPassword,
         course: courseIdx >= 0 ? (row[courseIdx] || '').trim() || undefined : undefined,
         yearLevel: yearLevelIdx >= 0 ? (row[yearLevelIdx] || '').trim() || undefined : undefined,
@@ -994,9 +1073,11 @@ const creatingContract = ref(false)
 const newContractCourse = ref('')
 const selectedContractCourses = ref<string[]>([])
 const contractCourseSlots = ref<Record<string, string>>({})
+const expandedSentContractId = ref<string | null>(null)
 const schoolContractForm = ref({
   companyId: '',
   companyName: '',
+  subject: '',
   contractType: 'Memorandum of Agreement (MOA) for OJT Internship',
   moaReferenceNo: '',
   purpose: '',
@@ -1028,6 +1109,20 @@ watch(() => schoolContractForm.value.companyId, (newVal) => {
   }
 })
 
+watch(
+  () => [authStore.user?.email, authStore.user?.displayName] as const,
+  ([email, displayName]) => {
+    if (!email && !displayName) return
+    if (!schoolContractForm.value.schoolContactName) {
+      schoolContractForm.value.schoolContactName = displayName || schoolName.value
+    }
+    if (!schoolContractForm.value.schoolContactEmail) {
+      schoolContractForm.value.schoolContactEmail = email || ''
+    }
+  },
+  { immediate: true }
+)
+
 let unsubSchoolContracts: (() => void) | null = null
 let unsubCompaniesPublic: (() => void) | null = null
 
@@ -1051,7 +1146,10 @@ function onSchoolContractCompanySelect(e: Event) {
   const company = companiesForContract.value.find((c) => c.uid === id)
   if (!company) return
   schoolContractForm.value.companyId = company.uid
-  schoolContractForm.value.companyName = company.orgName || company.displayName
+  const label = company.orgName || company.displayName || company.email || 'Company'
+  schoolContractForm.value.companyName = label
+  schoolContractForm.value.companyContactName = label
+  schoolContractForm.value.companyContactEmail = company.email || ''
 }
 
 function triggerContractFileInput() {
@@ -1072,9 +1170,14 @@ function removeContractFile(index: number) {
 }
 
 function resetSchoolContractForm() {
+  const profile = authStore.user?.profile as Record<string, unknown> | undefined
+  const defaultSchoolContactName = authStore.user?.displayName || schoolName.value
+  const defaultSchoolContactEmail = authStore.user?.email || (profile?.officialSchoolEmail as string) || ''
+
   schoolContractForm.value = {
     companyId: '',
     companyName: '',
+    subject: '',
     contractType: 'Memorandum of Agreement (MOA) for OJT Internship',
     moaReferenceNo: '',
     purpose: '',
@@ -1082,8 +1185,8 @@ function resetSchoolContractForm() {
     endDate: '',
     internshipSlots: '',
     studentPrograms: '',
-    schoolContactName: '',
-    schoolContactEmail: '',
+    schoolContactName: defaultSchoolContactName,
+    schoolContactEmail: defaultSchoolContactEmail,
     companyContactName: '',
     companyContactEmail: '',
     schoolResponsibilities: '',
@@ -1096,6 +1199,74 @@ function resetSchoolContractForm() {
   contractCourseSlots.value = {}
 }
 
+const selectedCompanyHasPendingContract = computed(() => {
+  const companyId = schoolContractForm.value.companyId
+  if (!companyId) return false
+  return schoolContracts.value.some((c) => c.companyId === companyId && (c.status || 'pending') === 'pending')
+})
+
+const schoolCourses = computed(() => {
+  const p = authStore.user?.profile as Record<string, unknown> | undefined
+  const courses = (p?.courses as string[] | undefined) || []
+  return courses.map((c) => c.trim()).filter(Boolean)
+})
+
+const selectedCompanyPublic = computed(() => {
+  const companyId = schoolContractForm.value.companyId
+  if (!companyId) return null
+  return companiesForContract.value.find((c) => c.uid === companyId) || null
+})
+
+const selectedCompanyCourses = computed(() => {
+  const c = selectedCompanyPublic.value as (PublicProfile & { courses?: string[] }) | null
+  const courses = (c?.courses as string[] | undefined) || []
+  return courses.map((x) => x.trim()).filter(Boolean)
+})
+
+const alignedContractCourses = computed(() => {
+  const schoolSet = new Set(schoolCourses.value.map((c) => c.toUpperCase()))
+  return selectedCompanyCourses.value
+    .filter((c) => schoolSet.has(c.toUpperCase()))
+    .sort((a, b) => a.localeCompare(b))
+})
+
+function displayContractStatus(status?: string) {
+  const s = (status || 'pending').toLowerCase()
+  if (s === 'active') return 'approved'
+  return s
+}
+
+function displayContractStatusLabel(status?: string) {
+  const s = displayContractStatus(status)
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+watch(
+  () => [schoolContractForm.value.companyId, alignedContractCourses.value.join('|')] as const,
+  () => {
+    // When company changes (or alignment changes), preselect aligned courses.
+    selectedContractCourses.value = [...alignedContractCourses.value]
+    // Clear any stale slot entries for courses not in the aligned list.
+    const alignedSet = new Set(alignedContractCourses.value)
+    for (const k of Object.keys(contractCourseSlots.value)) {
+      if (!alignedSet.has(k)) delete contractCourseSlots.value[k]
+    }
+  }
+)
+
+function toggleAlignedCourse(course: string) {
+  if (selectedContractCourses.value.includes(course)) {
+    selectedContractCourses.value = selectedContractCourses.value.filter((c) => c !== course)
+    delete contractCourseSlots.value[course]
+    return
+  }
+  selectedContractCourses.value.push(course)
+}
+
+function toggleSentContractDetails(id: string) {
+  expandedSentContractId.value = expandedSentContractId.value === id ? null : id
+}
+
 async function submitSchoolContractRequest() {
   const schoolId = authStore.user?.uid
   if (!schoolId) return
@@ -1104,6 +1275,26 @@ async function submitSchoolContractRequest() {
       icon: 'warning',
       title: 'Select Company',
       text: 'Please select a company to send this contract request.',
+      confirmButtonColor: '#2563eb',
+    })
+    return
+  }
+
+  if (selectedCompanyHasPendingContract.value) {
+    await Swal.fire({
+      icon: 'warning',
+      title: 'Pending Request Exists',
+      text: 'You already have a pending contract request with this company. Please wait for a response or cancel the pending request first.',
+      confirmButtonColor: '#2563eb',
+    })
+    return
+  }
+
+  if (!schoolContractForm.value.subject.trim()) {
+    await Swal.fire({
+      icon: 'warning',
+      title: 'Missing Subject',
+      text: 'Please enter a subject for the contract (e.g., "OJT Partnership for SY 2026").',
       confirmButtonColor: '#2563eb',
     })
     return
@@ -1120,12 +1311,33 @@ async function submitSchoolContractRequest() {
 
     const programsFromAllocations = courseAllocations.map((item) => item.course).join(', ')
 
+    if (alignedContractCourses.value.length === 0) {
+      await Swal.fire({
+        icon: 'warning',
+        title: 'No Aligned Courses',
+        text: 'There are no aligned courses between your school and this company. Add your school courses in Settings and ask the company to add the courses they accept.',
+        confirmButtonColor: '#2563eb',
+      })
+      return
+    }
+
+    if (courseAllocations.length === 0) {
+      await Swal.fire({
+        icon: 'warning',
+        title: 'Missing Course Slots',
+        text: 'Please select at least one aligned course and set the number of slots.',
+        confirmButtonColor: '#2563eb',
+      })
+      return
+    }
+
     await createContractRequest({
       companyId: schoolContractForm.value.companyId,
       companyName: schoolContractForm.value.companyName,
       schoolId,
       schoolName: schoolName.value,
       requestedByRole: 'school',
+      subject: schoolContractForm.value.subject.trim(),
       contractType: schoolContractForm.value.contractType || undefined,
       moaReferenceNo: schoolContractForm.value.moaReferenceNo.trim() || autoGeneratedMoaRef.value,
       purpose: schoolContractForm.value.purpose.trim() || undefined,
@@ -1179,9 +1391,43 @@ async function submitSchoolContractRequest() {
   }
 }
 
+async function handleCancelSchoolContract(contract: ContractRecord) {
+  const result = await Swal.fire({
+    icon: 'warning',
+    title: 'Cancel Contract?',
+    input: 'textarea',
+    inputLabel: 'Reason (optional)',
+    inputPlaceholder: 'Add a short reason for cancellation...',
+    showCancelButton: true,
+    confirmButtonText: 'Cancel contract',
+    cancelButtonText: 'Keep it',
+    confirmButtonColor: '#dc2626',
+  })
+
+  if (!result.isConfirmed) return
+  const reason = (result.value as string | undefined)?.trim() || undefined
+
+  try {
+    await cancelContract(contract.id, 'school', reason)
+    await Swal.fire({
+      icon: 'success',
+      title: 'Cancelled',
+      text: 'The contract has been cancelled.',
+      confirmButtonColor: '#2563eb',
+    })
+  } catch (e) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Failed',
+      text: e instanceof Error ? e.message : 'Could not cancel the contract.',
+      confirmButtonColor: '#2563eb',
+    })
+  }
+}
+
 watch(
   () => [authStore.user?.uid, authStore.user?.role] as const,
-  ([uid, role]) => {
+  async ([uid, role]) => {
     if (unsubSchoolStudents) {
       unsubSchoolStudents()
       unsubSchoolStudents = null
@@ -1207,6 +1453,7 @@ watch(
       role: 'school',
       orgName: schoolName.value,
       email: authStore.user?.email,
+      courses: ((authStore.user?.profile as Record<string, unknown> | undefined)?.courses as string[] | undefined) || [],
     }).catch(() => {})
 
     unsubSchoolStudents = subscribeSchoolStudents(uid, (items) => {
@@ -1215,6 +1462,14 @@ watch(
     unsubSchoolContracts = subscribeSchoolContracts(uid, (items) => {
       schoolContracts.value = items
     })
+
+    // Initial load (helps when snapshot takes time or when debugging empty lists)
+    try {
+      companiesForContract.value = await listPublicProfiles('company')
+    } catch {
+      companiesForContract.value = []
+    }
+
     unsubCompaniesPublic = subscribePublicProfiles('company', (items) => {
       const byUid = new Map<string, PublicProfile>()
       for (const item of items) byUid.set(item.uid, item)
@@ -1239,6 +1494,7 @@ async function addStudentEmail() {
     const defaultPassword = generateDefaultStudentPassword(generatedStudentFullName.value || email)
     await addSchoolStudent(uid, email, {
       studentName: generatedStudentFullName.value || undefined,
+      studentNumber: newStudentId.value.trim() || undefined,
       defaultPassword,
       course: newStudentCourse.value.trim() || undefined,
       yearLevel: newStudentYearLevel.value.trim() || undefined,
@@ -1256,6 +1512,7 @@ async function addStudentEmail() {
     newStudentFirstName.value = ''
     newStudentLastName.value = ''
     // Don't clear domain - it's auto-populated
+    newStudentId.value = ''
     newStudentCourse.value = ''
     newStudentYearLevel.value = ''
   } catch (err) {
@@ -2300,8 +2557,11 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                     <label>Select Company <span class="required">*</span></label>
                     <select v-model="schoolContractForm.companyId" class="form-input" @change="onSchoolContractCompanySelect">
                       <option value="">-- Select Company --</option>
-                      <option v-for="c in companiesForContract" :key="c.uid" :value="c.uid">{{ c.orgName || c.displayName }}</option>
+                      <option v-for="c in companiesForContract" :key="c.uid" :value="c.uid">{{ c.orgName || c.displayName || c.email || c.uid }}</option>
                     </select>
+                    <p v-if="companiesForContract.length === 0" class="bulk-import-hint" style="margin-top:8px;">
+                      No companies available yet. Ask a company to log in and complete their profile (Company Settings) so it appears here.
+                    </p>
                   </div>
                   <div class="form-group">
                     <label>Contract Type</label>
@@ -2310,6 +2570,15 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                   <div class="form-group">
                     <label>MOA Reference No.</label>
                     <input :value="schoolContractForm.moaReferenceNo || autoGeneratedMoaRef" type="text" class="form-input" readonly style="background: #f3f4f6; cursor: not-allowed;" />
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Subject <span class="required">*</span></label>
+                    <input v-model="schoolContractForm.subject" type="text" class="form-input" placeholder="e.g. OJT Partnership for SY 2026" />
+                    <p v-if="selectedCompanyHasPendingContract" class="bulk-import-hint" style="color:#b45309; margin-top:6px;">
+                      You already have a pending contract request for this company. Cancel the pending request or wait for the company response.
+                    </p>
                   </div>
                 </div>
                 <div class="form-row">
@@ -2334,22 +2603,28 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                 </div>
                 <div class="form-row">
                   <div class="form-group full-width">
-                    <label>Course Allocation (add course and set slots)</label>
-                    <div class="course-add-row">
-                      <input
-                        v-model="newContractCourse"
-                        type="text"
-                        class="form-input"
-                        placeholder="Add course (e.g. BSIT, BSHM)"
-                        @keydown.enter.prevent="addContractCourse"
-                      />
-                      <button type="button" class="btn-import-file" @click="addContractCourse">Add Course</button>
+                    <label>Aligned Courses (select and set slots)</label>
+                    <p v-if="!schoolContractForm.companyId" class="bulk-import-hint">Select a company to see aligned courses.</p>
+                    <p v-else-if="alignedContractCourses.length === 0" class="bulk-import-hint">
+                      No aligned courses found. Add your school courses in Settings, and make sure the company adds the courses they accept.
+                    </p>
+                    <div v-else class="aligned-courses">
+                      <button
+                        v-for="course in alignedContractCourses"
+                        :key="course"
+                        type="button"
+                        class="aligned-course-btn"
+                        :class="{ active: selectedContractCourses.includes(course) }"
+                        @click="toggleAlignedCourse(course)"
+                      >
+                        {{ course }}
+                      </button>
                     </div>
-                    <div class="course-allocation-grid">
+                    <div v-if="selectedContractCourses.length" class="course-allocation-grid">
                       <div v-for="course in selectedContractCourses" :key="course" class="course-allocation-item">
                         <div class="course-allocation-label">
                           <span>{{ course }}</span>
-                          <button type="button" class="file-chip-remove" @click="removeContractCourse(course)">x</button>
+                          <button type="button" class="file-chip-remove" @click="toggleAlignedCourse(course)">x</button>
                         </div>
                         <input
                           v-model="contractCourseSlots[course]"
@@ -2416,7 +2691,12 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                     </div>
                   </div>
                 </div>
-                <button type="button" class="btn-add-email" :disabled="creatingContract || !schoolContractForm.companyId" @click="submitSchoolContractRequest">
+                <button
+                  type="button"
+                  class="btn-add-email"
+                  :disabled="creatingContract || !schoolContractForm.companyId || selectedCompanyHasPendingContract"
+                  @click="submitSchoolContractRequest"
+                >
                   <PlusIcon class="icon-sm" />
                   {{ creatingContract ? 'Sending...' : 'Send Contract Request' }}
                 </button>
@@ -2427,57 +2707,77 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
             <div v-if="schoolContracts.length === 0" class="empty-state">
               No contract requests sent yet.
             </div>
-            <div v-else class="contracts-list">
-              <div v-for="c in schoolContracts" :key="c.id" class="contract-card">
-                <div class="contract-doc-header">
-                  <span class="contract-doc-title">MEMORANDUM OF AGREEMENT</span>
-                  <span class="contract-doc-parties">{{ c.companyName }} <-> {{ c.schoolName }}</span>
-                </div>
-                <div class="contract-info">
-                  <div class="contract-header-row">
-                    <h3>{{ c.companyName }}</h3>
-                    <span class="status-badge" :class="(c.status || 'pending').toLowerCase()">{{ c.status }}</span>
-                  </div>
-                  <p class="contract-type">{{ c.contractType || 'Memorandum of Agreement (MOA)' }}</p>
-                  <p v-if="c.moaReferenceNo" class="contract-purpose"><strong>Ref:</strong> {{ c.moaReferenceNo }}</p>
-                  <p v-if="c.purpose" class="contract-purpose">{{ c.purpose }}</p>
-                  <div v-if="c.startDate || c.endDate" class="contract-dates">
-                    <strong>Duration:</strong> {{ c.startDate && c.endDate ? `${c.startDate} - ${c.endDate}` : (c.startDate || c.endDate || '-') }}
-                  </div>
-                  <div v-if="c.internshipSlots || c.studentPrograms" class="contract-dates">
-                    <strong>Slots/Programs:</strong> {{ c.internshipSlots || '-' }} slots<span v-if="c.studentPrograms"> | {{ c.studentPrograms }}</span>
-                  </div>
-                  <div v-if="c.courseAllocations && c.courseAllocations.length" class="contract-section">
-                    <strong>Course Slots:</strong>
-                    <p v-for="item in c.courseAllocations" :key="`${c.id}-${item.course}`">{{ item.course }}: {{ item.slots }}</p>
-                  </div>
-                  <div v-if="c.schoolContactName || c.schoolContactEmail || c.companyContactName || c.companyContactEmail" class="contract-section">
-                    <strong>Contacts:</strong>
-                    <p>School: {{ c.schoolContactName || '-' }} <span v-if="c.schoolContactEmail">({{ c.schoolContactEmail }})</span></p>
-                    <p>Company: {{ c.companyContactName || '-' }} <span v-if="c.companyContactEmail">({{ c.companyContactEmail }})</span></p>
-                  </div>
-                  <div v-if="c.companyResponsibilities" class="contract-section">
-                    <strong>Company Responsibilities:</strong>
-                    <p>{{ c.companyResponsibilities }}</p>
-                  </div>
-                  <div v-if="c.schoolResponsibilities" class="contract-section">
-                    <strong>School Responsibilities:</strong>
-                    <p>{{ c.schoolResponsibilities }}</p>
-                  </div>
-                  <div v-if="c.terms" class="contract-section">
-                    <strong>Terms & Conditions:</strong>
-                    <p>{{ c.terms }}</p>
-                  </div>
-                  <div v-if="c.notes" class="contract-section">
-                    <strong>Notes:</strong>
-                    <p>{{ c.notes }}</p>
-                  </div>
-                  <div v-if="c.attachments && c.attachments.length" class="contract-section">
-                    <strong>Files:</strong>
-                    <p v-for="a in c.attachments" :key="`${c.id}-${a.name}`">{{ a.name }}</p>
-                  </div>
-                </div>
-              </div>
+            <div v-else class="contracts-table-wrap">
+              <table class="contracts-table">
+                <thead>
+                  <tr>
+                    <th>Ref</th>
+                    <th>Company</th>
+                    <th>Subject</th>
+                    <th>Status</th>
+                    <th>Requested</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template v-for="c in schoolContracts" :key="c.id">
+                    <tr>
+                      <td class="mono">{{ c.moaReferenceNo || '-' }}</td>
+                      <td>{{ c.companyName }}</td>
+                      <td>{{ c.subject || '-' }}</td>
+                      <td>
+                        <span class="status-badge" :class="displayContractStatus(c.status)">{{ displayContractStatusLabel(c.status) }}</span>
+                      </td>
+                      <td>{{ formatApplicationDate(c.createdAt) }}</td>
+                      <td class="actions-cell">
+                        <button type="button" class="table-btn" @click="toggleSentContractDetails(c.id)">
+                          {{ expandedSentContractId === c.id ? 'Hide' : 'View' }}
+                        </button>
+                        <button
+                          v-if="(c.status || 'pending') === 'pending' || (c.status || 'pending') === 'active'"
+                          type="button"
+                          class="table-btn danger"
+                          @click="handleCancelSchoolContract(c)"
+                        >
+                          Cancel
+                        </button>
+                      </td>
+                    </tr>
+                    <tr v-if="expandedSentContractId === c.id" class="details-row">
+                      <td colspan="6">
+                        <div class="details-panel">
+                          <div class="details-grid">
+                            <div><strong>Type:</strong> {{ c.contractType || 'MOA' }}</div>
+                            <div><strong>Duration:</strong> {{ c.startDate && c.endDate ? `${c.startDate} - ${c.endDate}` : (c.startDate || c.endDate || '-') }}</div>
+                            <div><strong>Slots:</strong> {{ c.internshipSlots || '-' }}</div>
+                            <div><strong>Programs:</strong> {{ c.studentPrograms || '-' }}</div>
+                          </div>
+                          <div v-if="c.courseAllocations && c.courseAllocations.length" class="contract-section">
+                            <strong>Course Slots:</strong>
+                            <p v-for="item in c.courseAllocations" :key="`${c.id}-${item.course}`">{{ item.course }}: {{ item.slots }}</p>
+                          </div>
+                          <div v-if="c.purpose" class="contract-section">
+                            <strong>Purpose:</strong>
+                            <p>{{ c.purpose }}</p>
+                          </div>
+                          <div v-if="c.notes" class="contract-section">
+                            <strong>Notes:</strong>
+                            <p>{{ c.notes }}</p>
+                          </div>
+                          <div v-if="(c.status || 'pending') === 'cancelled'" class="contract-section">
+                            <strong>Cancelled:</strong>
+                            <p>{{ c.cancelledReason || 'No reason provided.' }}</p>
+                          </div>
+                          <div v-if="c.attachments && c.attachments.length" class="contract-section">
+                            <strong>Files:</strong>
+                            <p v-for="a in c.attachments" :key="`${c.id}-${a.name}`">{{ a.name }}</p>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
             </div>
           </div>
         </main>
@@ -3278,6 +3578,10 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                     <input :value="generatedStudentEmail || 'Fill first name, last name, and domain to generate'" type="text" class="form-input" readonly />
                   </div>
                   <div class="form-group">
+                    <label>Student Number (optional)</label>
+                    <input v-model="newStudentId" type="text" placeholder="e.g. 2026-0001" class="form-input" />
+                  </div>
+                  <div class="form-group">
                     <label>Course (optional)</label>
                     <input v-model="newStudentCourse" type="text" placeholder="BS Computer Science" class="form-input" />
                   </div>
@@ -3307,7 +3611,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                     {{ importingStudentEmails ? 'Importing...' : 'Import From Excel/CSV' }}
                   </button>
                   <p class="bulk-import-hint">
-                    Upload CSV exported from Excel with headers: First Name, Last Name, Course (optional), Year Level (optional).
+                    Upload Excel/CSV with headers: First Name, Last Name, Student Number (optional), Course (optional), Year Level (optional).
                   </p>
                 </div>
               </div>
@@ -3319,45 +3623,65 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                 <EnvelopeIcon class="empty-icon" />
                 <p>No student emails added yet. Add emails above to get started.</p>
               </div>
-              <div v-else class="emails-table-wrap">
-                <table class="emails-table">
-                  <thead>
-                    <tr>
-                      <th>EMAIL</th>
-                      <th>NAME</th>
-                      <th>COURSE</th>
-                      <th>YEAR LEVEL</th>
-                      <th>DEFAULT PASSWORD</th>
-                      <th>STATUS</th>
-                      <th>ACTIONS</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="s in schoolStudentEmails" :key="s.id">
-                      <td>{{ s.email }}</td>
-                      <td>{{ s.studentName || '—' }}</td>
-                      <td>{{ s.course || '—' }}</td>
-                      <td>{{ s.yearLevel || '—' }}</td>
-                      <td class="password-cell">
-                        <span class="password-text">{{ s.defaultPassword || '-' }}</span>
-                        <button
-                          v-if="s.defaultPassword"
-                          type="button"
-                          class="btn-copy-password"
-                          @click="copyToClipboard(s.defaultPassword, 'Default password')"
-                        >
-                          Copy
-                        </button>
-                      </td>
-                      <td><span class="status-badge" :class="s.status">{{ s.status }}</span></td>
-                      <td>
-                        <button @click="removeStudentEmail(s)" class="btn-remove" title="Remove">
-                          <TrashIcon class="icon-sm" />
-                        </button>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+              <div v-else class="emails-list">
+                <div class="emails-toolbar">
+                  <div class="emails-search">
+                    <MagnifyingGlassIcon class="emails-search-icon" />
+                    <input
+                      type="text"
+                      placeholder="Search email, name, student number..."
+                      class="emails-search-input"
+                      v-model="studentEmailSearchQuery"
+                    />
+                  </div>
+                  <div class="emails-count">{{ filteredSchoolStudentEmails.length }} student(s)</div>
+                </div>
+
+                <div v-if="filteredSchoolStudentEmails.length === 0" class="empty-state emails-empty">
+                  <p>No matching students.</p>
+                </div>
+                <div v-else class="emails-table-wrap">
+                  <table class="emails-table">
+                    <thead>
+                      <tr>
+                        <th>EMAIL</th>
+                        <th>NAME</th>
+                        <th>STUDENT NO</th>
+                        <th>COURSE</th>
+                        <th>YEAR LEVEL</th>
+                        <th>DEFAULT PASSWORD</th>
+                        <th>STATUS</th>
+                        <th>ACTIONS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="s in filteredSchoolStudentEmails" :key="s.id">
+                        <td>{{ s.email }}</td>
+                        <td>{{ s.studentName || '—' }}</td>
+                        <td>{{ s.studentNumber || '—' }}</td>
+                        <td>{{ s.course || '—' }}</td>
+                        <td>{{ s.yearLevel || '—' }}</td>
+                        <td class="password-cell">
+                          <span class="password-text">{{ s.defaultPassword || '-' }}</span>
+                          <button
+                            v-if="s.defaultPassword"
+                            type="button"
+                            class="btn-copy-password"
+                            @click="copyToClipboard(s.defaultPassword, 'Default password')"
+                          >
+                            Copy
+                          </button>
+                        </td>
+                        <td><span class="status-badge" :class="s.status">{{ s.status }}</span></td>
+                        <td>
+                          <button @click="removeStudentEmail(s)" class="btn-remove" title="Remove">
+                            <TrashIcon class="icon-sm" />
+                          </button>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </div>
@@ -3460,6 +3784,10 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
         </main>
       </div>
 
+      <div v-else-if="currentView === 'subscription'">
+        <SubscriptionManager role="school" />
+      </div>
+
       <div v-else-if="currentView === 'settings'">
         <SchoolSettings />
       </div>
@@ -3505,6 +3833,19 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
 .status-badge.active { background: #d1fae5; color: #065f46; }
 .status-badge.rejected { background: #fee2e2; color: #991b1b; }
 .empty-state { padding: 24px; text-align: center; color: #6b7280; }
+.contracts-table-wrap { overflow-x: auto; }
+.contracts-table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; }
+.contracts-table th, .contracts-table td { padding: 10px 12px; border-bottom: 1px solid #eef2f7; text-align: left; font-size: 0.9rem; color: #111827; vertical-align: top; }
+.contracts-table th { background: #f8fafc; font-weight: 700; color: #334155; font-size: 0.85rem; }
+.contracts-table tr:last-child td { border-bottom: none; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size: 0.85rem; }
+.actions-cell { display: flex; gap: 8px; flex-wrap: wrap; }
+.table-btn { padding: 8px 10px; border-radius: 10px; border: 1px solid #cbd5e1; background: #fff; font-weight: 700; cursor: pointer; font-size: 0.85rem; }
+.table-btn:hover { background: #f8fafc; }
+.table-btn.danger { border-color: rgba(220, 38, 38, 0.25); background: rgba(220, 38, 38, 0.08); color: #991b1b; }
+.details-row td { background: #f8fafc; }
+.details-panel { padding: 12px 10px; }
+.details-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 12px; margin-bottom: 10px; color: #334155; font-size: 0.9rem; }
 
 .student-emails-section { padding: 24px; }
 .student-emails-section .section-card {
@@ -3525,6 +3866,22 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
 .add-student-form .field-note { font-size: 0.75rem; color: #6b7280; margin-top: 4px; font-style: italic; }
 .course-add-row { display: flex; gap: 10px; margin-bottom: 10px; }
 .course-add-row .form-input { flex: 1; }
+.aligned-courses { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.aligned-course-btn {
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #0f172a;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+.aligned-course-btn.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
 .course-allocation-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -3578,6 +3935,21 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
 .icon-sm { width: 18px; height: 18px; }
 .empty-state { text-align: center; padding: 48px 24px; color: #6b7280; }
 .empty-state .empty-icon { width: 48px; height: 48px; margin-bottom: 16px; opacity: 0.5; }
+.emails-list { display: flex; flex-direction: column; gap: 12px; }
+.emails-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.emails-search { position: relative; flex: 1; max-width: 520px; }
+.emails-search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 18px; height: 18px; color: #6b7280; }
+.emails-search-input {
+  width: 100%;
+  padding: 10px 12px 10px 40px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  outline: none;
+}
+.emails-search-input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12); }
+.emails-count { font-size: 0.85rem; color: #6b7280; white-space: nowrap; }
+.emails-empty { padding: 18px 0; }
 .emails-table-wrap { overflow-x: auto; }
 .emails-table { width: 100%; border-collapse: collapse; }
 .emails-table th, .emails-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e5e7eb; }
