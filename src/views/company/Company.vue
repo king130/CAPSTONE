@@ -17,13 +17,14 @@ import {
   cancelContract,
   type ContractRecord,
 } from '@/services/contracts'
-import { createInternship, subscribeCompanyInternships, type InternshipRecord } from '@/services/internships'
+import { createInternship, subscribeCompanyInternships, updateInternship, type InternshipRecord } from '@/services/internships'
 import {
   subscribeCompanyApplications,
   subscribeCompanyApplicationsByInternships,
   updateApplicationStatus,
   type ApplicationRecord,
 } from '@/services/applications'
+import { subscribeAllSchoolPrograms, type ProgramOption } from '@/services/schoolPrograms'
 import { 
   DocumentIcon, 
   ClockIcon, 
@@ -49,7 +50,9 @@ import {
   PhoneIcon,
   PencilIcon,
   CloudIcon,
-  InformationCircleIcon
+  InformationCircleIcon,
+  EllipsisVerticalIcon,
+  UsersIcon
 } from '@heroicons/vue/24/outline'
 
 const authStore = useAuthStore()
@@ -124,6 +127,14 @@ function toggleNotifications() {
 }
 
 const currentView = ref('dashboard')
+
+// Internship details view state
+const showInternshipDetailsModal = ref(false)
+const selectedInternshipForDetails = ref<InternshipRecord | null>(null)
+
+// Edit mode state
+const isEditMode = ref(false)
+const editingInternshipId = ref<string | null>(null)
 
 const handleNavChange = (nav: string) => {
   // Don't set currentView for logout as it's handled in Sidebar
@@ -289,8 +300,16 @@ let stopAuthWatch: (() => void) | null = null
 onMounted(() => {
   function trySetup() {
     const uid = authStore.user?.uid
-    if (uid && authStore.user?.role === 'company') setupSubscriptions(uid)
+    if (uid && authStore.user?.role === 'company') {
+      setupSubscriptions(uid)
+    }
   }
+  
+  // Always subscribe to school programs, even if not authenticated yet
+  unsubSchoolPrograms = subscribeAllSchoolPrograms((programs) => {
+    availableSchoolPrograms.value = programs
+  })
+  
   trySetup()
   stopAuthWatch = watch(
     () => [authStore.initializing, authStore.user?.uid, authStore.user?.role] as const,
@@ -309,6 +328,7 @@ onUnmounted(() => {
   if (unsubCompanyApplications) unsubCompanyApplications()
   if (unsubByInternships) unsubByInternships()
   if (unsubCompanyContracts) unsubCompanyContracts()
+  if (unsubSchoolPrograms) unsubSchoolPrograms()
 })
 
 function removeSkill(skill: string) {
@@ -341,7 +361,7 @@ const formType = ref('on-site')
 const formDepartment = ref('')
 const formHoursPerWeek = ref(20)
 const formAllowance = ref('')
-const courseCompletionHours = ref<Record<string, number | ''>>({})
+const hasAllowance = ref(false)
 
 // Cavite Municipalities and their Barangays
 const caviteBarangays: Record<string, string[]> = {
@@ -393,6 +413,11 @@ watch(
 const selectedCourses = ref<string[]>([])
 const courseSelectRef = ref<HTMLSelectElement | null>(null)
 const skillsSelectRef = ref<HTMLSelectElement | null>(null)
+
+// Dynamic program options from schools
+const availableSchoolPrograms = ref<ProgramOption[]>([])
+let unsubSchoolPrograms: (() => void) | null = null
+
 const defaultCourseSkillMap: Record<string, string[]> = {
   BSIT: ['HTML/CSS', 'JavaScript', 'TypeScript', 'Vue.js', 'React', 'Node.js', 'PHP', 'SQL', 'Git', 'REST APIs'],
   BSCS: ['Python', 'Java', 'C++', 'Data Structures', 'Algorithms', 'SQL', 'Git', 'Testing', 'REST APIs'],
@@ -400,16 +425,22 @@ const defaultCourseSkillMap: Record<string, string[]> = {
   BSED: ['Lesson Planning', 'Classroom Management', 'Content Writing', 'Presentation Skills', 'Documentation'],
   ANY: ['Communication', 'Teamwork', 'Problem Solving', 'Time Management'],
 }
-const defaultCourseOptions = Object.keys(defaultCourseSkillMap)
 
 function uniqueValues(values: string[]) {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)))
 }
 
-const availableCourseOptions = computed(() => uniqueValues([
-  ...defaultCourseOptions,
-  ...selectedCourses.value,
-]))
+const availableCourseOptions = computed(() => {
+  const schoolPrograms = availableSchoolPrograms.value.map(p => p.shortName)
+  const staticPrograms = Object.keys(defaultCourseSkillMap)
+  const selectedPrograms = selectedCourses.value
+  
+  return uniqueValues([
+    ...schoolPrograms,
+    ...staticPrograms,
+    ...selectedPrograms,
+  ])
+})
 
 const availableSkillOptions = computed(() => uniqueValues([
   ...selectedCourses.value.flatMap((course) => defaultCourseSkillMap[course] || []),
@@ -418,6 +449,10 @@ const availableSkillOptions = computed(() => uniqueValues([
 
 let courseTomSelectInstance: TomSelect | null = null
 let skillsTomSelectInstance: TomSelect | null = null
+
+// Reactive key to force re-rendering of select elements
+const selectKey = ref(0)
+
 const minimumGPA = ref('')
 const yearLevel = ref('')
 const additionalRequirements = ref('')
@@ -427,6 +462,12 @@ const learningObjectives = ref('')
 const projectsDeliverables = ref('')
 const applicationInstructions = ref('')
 const contactInfo = ref('')
+const hasEmailContact = ref(false)
+const emailContact = ref('')
+const hasSocialMediaContact = ref(false)
+const socialMediaContact = ref('')
+const hasSmsContact = ref(false)
+const smsContact = ref('')
 const submittingInternship = ref(false)
 
 function normalizeTomSelectValues(raw: string | string[] | null | undefined) {
@@ -442,21 +483,130 @@ function normalizeTomSelectValues(raw: string | string[] | null | undefined) {
 function destroyCourseTomSelect() {
   if (!courseTomSelectInstance) return
   try {
+    // Destroy the instance
     courseTomSelectInstance.destroy()
-  } catch {
-    // ignore cleanup errors from torn-down nodes
+  } catch (error) {
+    console.warn('Error destroying course TomSelect:', error)
+  } finally {
+    courseTomSelectInstance = null
   }
-  courseTomSelectInstance = null
 }
 
 function destroySkillsTomSelect() {
   if (!skillsTomSelectInstance) return
   try {
+    // Destroy the instance
     skillsTomSelectInstance.destroy()
-  } catch {
-    // ignore cleanup errors from torn-down nodes
+  } catch (error) {
+    console.warn('Error destroying skills TomSelect:', error)
+  } finally {
+    skillsTomSelectInstance = null
   }
-  skillsTomSelectInstance = null
+}
+
+function reinitializeTomSelect() {
+  console.log('Reinitializing Tom Select...')
+  
+  // Clean up any existing instances
+  destroyCourseTomSelect()
+  destroySkillsTomSelect()
+  
+  // Increment key to force re-render of select elements
+  selectKey.value++
+  
+  // Force re-initialization on next tick
+  nextTick(() => {
+    if (currentFormStep.value === 2) {
+      initializeTomSelectForStep2()
+    }
+  })
+}
+
+async function initializeTomSelectForStep2() {
+  console.log('Initializing Tom Select for step 2...')
+  
+  // Wait longer to ensure DOM is fully ready
+  await nextTick()
+  await new Promise(resolve => setTimeout(resolve, 200))
+  
+  // Initialize Course Tom Select
+  const courseEl = courseSelectRef.value
+  console.log('Course element:', courseEl, 'exists:', !!courseEl)
+  
+  if (courseEl && !(courseEl as any).tomselect) {
+    try {
+      // Clear any existing instance
+      if (courseTomSelectInstance) {
+        destroyCourseTomSelect()
+      }
+      
+      courseTomSelectInstance = new TomSelect(courseEl, {
+        plugins: ['remove_button'],
+        persist: false,
+        create(input: string) {
+          const value = input.trim().toUpperCase()
+          return value ? { value, text: value } : false
+        },
+        closeAfterSelect: true,
+        maxItems: null,
+        placeholder: 'Select or type courses/programs...'
+      })
+
+      console.log('Course Tom Select initialized successfully')
+
+      // Set initial values if any
+      if (selectedCourses.value.length) {
+        courseTomSelectInstance.setValue(selectedCourses.value, true)
+      }
+
+      // Handle changes
+      courseTomSelectInstance.on('change', () => {
+        selectedCourses.value = normalizeTomSelectValues(courseTomSelectInstance?.getValue())
+      })
+    } catch (error) {
+      console.error('Error initializing course Tom Select:', error)
+    }
+  }
+
+  // Initialize Skills Tom Select
+  const skillsEl = skillsSelectRef.value
+  console.log('Skills element:', skillsEl, 'exists:', !!skillsEl)
+  
+  if (skillsEl && !(skillsEl as any).tomselect) {
+    try {
+      // Clear any existing instance
+      if (skillsTomSelectInstance) {
+        destroySkillsTomSelect()
+      }
+      
+      skillsTomSelectInstance = new TomSelect(skillsEl, {
+        plugins: ['remove_button'],
+        persist: false,
+        create(input: string) {
+          const value = input.trim()
+          return value ? { value, text: value } : false
+        },
+        closeAfterSelect: true,
+        maxItems: null,
+        placeholder: 'Select or type required skills...'
+      })
+
+      console.log('Skills Tom Select initialized successfully')
+
+      // Set initial values if any
+      if (formSkills.value.length) {
+        skillsTomSelectInstance.setValue(formSkills.value, true)
+      }
+
+      // Handle changes
+      skillsTomSelectInstance.on('change', () => {
+        const newValues = normalizeTomSelectValues(skillsTomSelectInstance?.getValue())
+        formSkills.value = newValues
+      })
+    } catch (error) {
+      console.error('Error initializing skills Tom Select:', error)
+    }
+  }
 }
 
 watch(
@@ -467,18 +617,6 @@ watch(
 )
 
 watch(
-  () => selectedCourses.value.join('|'),
-  () => {
-    const next: Record<string, number | ''> = {}
-    for (const course of selectedCourses.value) {
-      next[course] = courseCompletionHours.value[course] ?? ''
-    }
-    courseCompletionHours.value = next
-  },
-  { immediate: true }
-)
-
-watch(
   () => currentFormStep.value,
   async (step, _prev, onCleanup) => {
     let cancelled = false
@@ -486,107 +624,34 @@ watch(
       cancelled = true
     })
 
-    if (step !== 2) return
+    console.log(`Step watcher triggered: ${step}`)
 
-    await nextTick()
-    if (cancelled || currentFormStep.value !== 2) return
-
-    const courseEl = courseSelectRef.value
-    if (courseEl && !courseTomSelectInstance) {
-      courseTomSelectInstance = new TomSelect(courseEl, {
-        plugins: ['remove_button'],
-        persist: false,
-        create(input: string) {
-          const value = input.trim().toUpperCase()
-          return value ? { value, text: value } : false
-        },
-        closeAfterSelect: true,
-      })
-
-      if (selectedCourses.value.length) {
-        courseTomSelectInstance.setValue(selectedCourses.value, true)
-      }
-
-      courseTomSelectInstance.on('change', () => {
-        selectedCourses.value = normalizeTomSelectValues(courseTomSelectInstance?.getValue())
-      })
-    }
-
-    const skillsEl = skillsSelectRef.value
-    if (skillsEl && !skillsTomSelectInstance) {
-      skillsTomSelectInstance = new TomSelect(skillsEl, {
-        plugins: ['remove_button'],
-        persist: false,
-        create(input: string) {
-          const value = input.trim()
-          return value ? { value, text: value } : false
-        },
-        closeAfterSelect: true,
-      })
-
-      if (formSkills.value.length) {
-        skillsTomSelectInstance.setValue(formSkills.value, true)
-      }
-
-      skillsTomSelectInstance.on('change', () => {
-        formSkills.value = normalizeTomSelectValues(skillsTomSelectInstance?.getValue())
-      })
+    if (step === 2) {
+      await nextTick()
+      if (cancelled || currentFormStep.value !== 2) return
+      
+      console.log('About to initialize Tom Select for step 2')
+      initializeTomSelectForStep2()
+    } else {
+      // Clean up Tom Select instances when leaving step 2
+      destroyCourseTomSelect()
+      destroySkillsTomSelect()
     }
   },
   { immediate: true }
 )
 
 watch(
-  () => [currentFormStep.value, availableCourseOptions.value.join('|')] as const,
-  async ([step], _prev, onCleanup) => {
-    let cancelled = false
-    onCleanup(() => {
-      cancelled = true
-    })
-
-    if (step !== 2) return
-    if (!courseTomSelectInstance) return
-
-    await nextTick()
-    if (cancelled || currentFormStep.value !== 2) return
-
-    try {
-      courseTomSelectInstance.sync()
-    } catch {
-      // ignore sync errors from torn-down nodes
-    }
-  }
-)
-
-watch(
-  () => [currentFormStep.value, availableSkillOptions.value.join('|')] as const,
-  async ([step], _prev, onCleanup) => {
-    let cancelled = false
-    onCleanup(() => {
-      cancelled = true
-    })
-
-    if (step !== 2) return
-    if (!skillsTomSelectInstance) return
-
-    await nextTick()
-    if (cancelled || currentFormStep.value !== 2) return
-
-    try {
-      skillsTomSelectInstance.sync()
-    } catch {
-      // ignore sync errors from torn-down nodes
-    }
-  }
-)
-
-watch(
   () => selectedCourses.value.join('|'),
   (courses) => {
     if (!courseTomSelectInstance) return
-    const selectedValues = normalizeTomSelectValues(courseTomSelectInstance.getValue())
-    if (selectedValues.join('|') !== courses) {
-      courseTomSelectInstance.setValue(selectedCourses.value, true)
+    try {
+      const selectedValues = normalizeTomSelectValues(courseTomSelectInstance.getValue())
+      if (selectedValues.join('|') !== courses) {
+        courseTomSelectInstance.setValue(selectedCourses.value, true)
+      }
+    } catch (error) {
+      console.warn('Error updating course Tom Select values:', error)
     }
   }
 )
@@ -597,20 +662,63 @@ watch(
     requiredSkills.value = formSkills.value.join(', ')
 
     if (!skillsTomSelectInstance) return
-    const selectedValues = normalizeTomSelectValues(skillsTomSelectInstance.getValue())
-    if (selectedValues.join('|') !== skills) {
-      skillsTomSelectInstance.setValue(formSkills.value, true)
+    
+    try {
+      const selectedValues = normalizeTomSelectValues(skillsTomSelectInstance.getValue())
+      if (selectedValues.join('|') !== skills) {
+        skillsTomSelectInstance.setValue(formSkills.value, true)
+      }
+    } catch (error) {
+      console.warn('Error updating skills Tom Select values:', error)
     }
   }
 )
 
+// Clear allowance input when checkbox is unchecked
+watch(hasAllowance, (newValue) => {
+  if (!newValue) {
+    formAllowance.value = ''
+  }
+})
+
+// Clear contact inputs when checkboxes are unchecked
+watch(hasEmailContact, (newValue) => {
+  if (!newValue) {
+    emailContact.value = ''
+  }
+})
+
+watch(hasSocialMediaContact, (newValue) => {
+  if (!newValue) {
+    socialMediaContact.value = ''
+  }
+})
+
+watch(hasSmsContact, (newValue) => {
+  if (!newValue) {
+    smsContact.value = ''
+  }
+})
+
 function openCreateForm() {
+  // Reset edit mode when creating new internship
+  isEditMode.value = false
+  editingInternshipId.value = null
+  
   showCreateForm.value = true
   currentView.value = 'create-internship'
   currentFormStep.value = 1
 }
 
 function closeCreateForm() {
+  // Clean up Tom Select instances
+  destroyCourseTomSelect()
+  destroySkillsTomSelect()
+  
+  // Reset edit mode state
+  isEditMode.value = false
+  editingInternshipId.value = null
+  
   showCreateForm.value = false
   currentView.value = 'internships'
   currentFormStep.value = 1
@@ -658,69 +766,75 @@ async function submitInternship(status: 'active' | 'draft') {
     await Swal.fire({ icon: 'warning', title: 'Missing location', text: 'Please select both city/municipality and barangay.' })
     return
   }
-  if (isActive && selectedCourses.value.length === 0) {
-    await Swal.fire({ icon: 'warning', title: 'Missing courses', text: 'Please add at least one preferred course or program.' })
-    return
-  }
   if (isActive && formSkills.value.length === 0) {
     await Swal.fire({ icon: 'warning', title: 'Missing skills', text: 'Please add at least one required skill or technology.' })
     return
   }
 
-  const normalizedCourseHours: Record<string, number> = {}
-  for (const course of uniqueValues(selectedCourses.value)) {
-    const raw = courseCompletionHours.value[course]
-    const hours = typeof raw === 'number' ? raw : parseInt(String(raw), 10)
-    if (Number.isFinite(hours) && hours > 0) normalizedCourseHours[course] = hours
-  }
-
-  if (isActive && selectedCourses.value.length > 0) {
-    const missing = uniqueValues(selectedCourses.value).filter((course) => !normalizedCourseHours[course])
-    if (missing.length) {
-      await Swal.fire({
-        icon: 'warning',
-        title: 'Missing hours',
-        text: 'Please provide required completion hours for each selected course/program.',
-      })
-      return
-    }
-  }
-
+  // Remove the hours validation since schools will set this
   submittingInternship.value = true
+  
   try {
     const requirements = formSkills.value.length
       ? uniqueValues(formSkills.value)
       : requiredSkills.value.split(/[,\n]/).map((s) => s.trim()).filter(Boolean)
 
-    await createInternship({
+    // Build contact information from selected methods
+    const contactMethods = []
+    if (hasEmailContact.value && emailContact.value) {
+      contactMethods.push(`Email: ${emailContact.value}`)
+    }
+    if (hasSocialMediaContact.value && socialMediaContact.value) {
+      contactMethods.push(`Social Media: ${socialMediaContact.value}`)
+    }
+    if (hasSmsContact.value && smsContact.value) {
+      contactMethods.push(`SMS/Phone: ${smsContact.value}`)
+    }
+
+    const internshipData = {
       title: trimmedTitle,
       description: formDescription.value.trim() || undefined,
       companyId: uid,
       companyName: companyName.value,
       location: postingLocation.value || 'TBD',
       type: formType.value,
-      duration: Object.keys(normalizedCourseHours).length ? 'Varies by course' : (formDuration.value ? `${formDuration.value} weeks` : 'TBD'),
+      duration: formDuration.value ? `${formDuration.value} weeks` : 'TBD',
       slotsAvailable: typeof slotsAvailable.value === 'number' ? slotsAvailable.value : parseInt(String(slotsAvailable.value), 10) || 1,
       eligibleCourses: selectedCourses.value.length ? uniqueValues(selectedCourses.value) : undefined,
-      courseCompletionHours: Object.keys(normalizedCourseHours).length ? normalizedCourseHours : undefined,
       requirements: requirements.length ? requirements : undefined,
-      allowance: formAllowance.value || undefined,
+      allowance: hasAllowance.value && formAllowance.value ? formAllowance.value : undefined,
+      contactInfo: contactMethods.length ? contactMethods.join(' | ') : undefined,
       status,
-    })
+    }
 
-    await Swal.fire({
-      icon: 'success',
-      title: status === 'active' ? 'Internship Posted!' : 'Draft Saved',
-      text: status === 'active' ? 'Your internship is now visible to students.' : 'Your draft has been saved.',
-      confirmButtonColor: '#2563eb',
-    })
+    if (isEditMode.value && editingInternshipId.value) {
+      // Update existing internship
+      await updateInternship(editingInternshipId.value, internshipData)
+      
+      await Swal.fire({
+        icon: 'success',
+        title: 'Internship Updated!',
+        text: 'Your internship has been successfully updated.',
+        confirmButtonColor: '#2563eb',
+      })
+    } else {
+      // Create new internship
+      await createInternship(internshipData)
+      
+      await Swal.fire({
+        icon: 'success',
+        title: status === 'active' ? 'Internship Posted!' : 'Draft Saved',
+        text: status === 'active' ? 'Your internship is now visible to students.' : 'Your draft has been saved.',
+        confirmButtonColor: '#2563eb',
+      })
+    }
 
     closeCreateForm()
     resetCreateForm()
   } catch (err) {
     await Swal.fire({
       icon: 'error',
-      title: 'Failed to post',
+      title: isEditMode.value ? 'Failed to update' : 'Failed to post',
       text: err instanceof Error ? err.message : 'Could not save internship.',
       confirmButtonColor: '#2563eb',
     })
@@ -730,6 +844,15 @@ async function submitInternship(status: 'active' | 'draft') {
 }
 
 function resetCreateForm() {
+  // Clean up Tom Select instances first
+  destroyCourseTomSelect()
+  destroySkillsTomSelect()
+  
+  // Reset edit mode state
+  isEditMode.value = false
+  editingInternshipId.value = null
+  
+  // Reset form data
   formTitle.value = ''
   formDescription.value = ''
   formLocation.value = ''
@@ -742,8 +865,8 @@ function resetCreateForm() {
   slotsAvailable.value = 1
   formHoursPerWeek.value = 20
   formAllowance.value = ''
+  hasAllowance.value = false
   selectedCourses.value = []
-  courseCompletionHours.value = {}
   minimumGPA.value = ''
   requiredSkills.value = ''
   yearLevel.value = ''
@@ -753,8 +876,92 @@ function resetCreateForm() {
   projectsDeliverables.value = ''
   applicationInstructions.value = ''
   contactInfo.value = ''
+  hasEmailContact.value = false
+  emailContact.value = ''
+  hasSocialMediaContact.value = false
+  socialMediaContact.value = ''
+  hasSmsContact.value = false
+  smsContact.value = ''
   startDateForm.value = ''
   endDateForm.value = ''
+  
+  // Reset select key to force re-render
+  selectKey.value++
+}
+
+function openInternshipDetails(internship: InternshipRecord) {
+  selectedInternshipForDetails.value = internship
+  showInternshipDetailsModal.value = true
+}
+
+function closeInternshipDetails() {
+  showInternshipDetailsModal.value = false
+  selectedInternshipForDetails.value = null
+}
+
+function editInternship(internshipId: string) {
+  // Close the details modal first
+  closeInternshipDetails()
+  
+  // Find the internship to edit
+  const internship = internshipsList.value.find(i => i.id === internshipId)
+  if (internship) {
+    // Set edit mode
+    isEditMode.value = true
+    editingInternshipId.value = internshipId
+    
+    // Populate the form with existing data
+    formTitle.value = internship.title
+    formDescription.value = internship.description || ''
+    formLocation.value = internship.location
+    formType.value = internship.type
+    formDuration.value = internship.duration.replace(' weeks', '') || ''
+    slotsAvailable.value = internship.slotsAvailable
+    selectedCourses.value = internship.eligibleCourses || []
+    formSkills.value = internship.requirements || []
+    formAllowance.value = internship.allowance || ''
+    hasAllowance.value = !!(internship.allowance && internship.allowance.trim())
+    
+    // Parse contact information
+    if (internship.contactInfo) {
+      const contactMethods = internship.contactInfo.split(' | ')
+      contactMethods.forEach((method: string) => {
+        if (method.startsWith('Email: ')) {
+          hasEmailContact.value = true
+          emailContact.value = method.replace('Email: ', '')
+        } else if (method.startsWith('Social Media: ')) {
+          hasSocialMediaContact.value = true
+          socialMediaContact.value = method.replace('Social Media: ', '')
+        } else if (method.startsWith('SMS/Phone: ')) {
+          hasSmsContact.value = true
+          smsContact.value = method.replace('SMS/Phone: ', '')
+        }
+      })
+    }
+    
+    // Parse location if it's in the format "Barangay, Municipality, Cavite"
+    const locationParts = internship.location?.split(', ')
+    if (locationParts && locationParts.length >= 2) {
+      formBarangay.value = locationParts[0] || ''
+      formMunicipality.value = locationParts[1] || ''
+    }
+    
+    // Open the create form in edit mode
+    showCreateForm.value = true
+    currentView.value = 'create-internship'
+    currentFormStep.value = 1
+  }
+}
+
+function viewInternshipApplications(internshipId: string) {
+  // Close the details modal first
+  closeInternshipDetails()
+  
+  // Set the filter to show applications for this specific internship
+  selectedInternshipFilter.value = internshipId
+  
+  // Navigate to applications view
+  currentView.value = 'applications'
 }
 
 // TEMPORARY DATA: Sample attendance records for reports view - replace with real data from backend
@@ -1401,12 +1608,6 @@ function saveSettings() {
   // Add save logic here
   currentView.value = 'dashboard'
 }
-
-// Cleanup Tom Select on component unmount
-onUnmounted(() => {
-  destroyCourseTomSelect()
-  destroySkillsTomSelect()
-})
 </script>
 
 <template>
@@ -1620,35 +1821,38 @@ onUnmounted(() => {
           <div class="internships-layout">
             <!-- Left Column: Filters -->
             <aside class="filters-column">
-              <h2 class="filters-title">Filters</h2>
+              <h2 class="filters-title">Filter Your Postings</h2>
               
+              <div class="filter-group">
+                <label class="filter-label">Status</label>
+                <div class="checkbox-group">
+                  <label>
+                    <input type="checkbox" value="active" />
+                    <span>Active</span>
+                  </label>
+                  <label>
+                    <input type="checkbox" value="draft" />
+                    <span>Draft</span>
+                  </label>
+                  <label>
+                    <input type="checkbox" value="closed" />
+                    <span>Closed</span>
+                  </label>
+                </div>
+              </div>
+
               <div class="filter-group">
                 <label class="filter-label">Location</label>
                 <input
                   type="text"
                   v-model="locationFilter"
-                  placeholder="e.g. New York, Remote."
+                  placeholder="Filter by location..."
                   class="filter-input"
                 />
               </div>
 
               <div class="filter-group">
-                <label class="filter-label">Skills</label>
-                <div class="selected-skills" v-if="selectedSkills.length > 0">
-                  <span
-                    v-for="skill in selectedSkills"
-                    :key="skill"
-                    class="skill-tag"
-                  >
-                    {{ skill }}
-                    <button @click="removeSkill(skill)" class="skill-remove"><XMarkIcon class="icon-size-sm" /></button>
-                  </span>
-                </div>
-                <p v-else class="no-skills">No skills selected</p>
-              </div>
-
-              <div class="filter-group">
-                <label class="filter-label">Availability</label>
+                <label class="filter-label">Posted Date</label>
                 <div class="date-inputs">
                   <input
                     type="date"
@@ -1664,25 +1868,11 @@ onUnmounted(() => {
               </div>
 
               <div class="filter-group">
-                <label class="filter-label">Company Type</label>
-                <div class="checkbox-group">
-                  <label v-for="type in ['Startup', 'Enterprise', 'Non-profit', 'Government']" :key="type">
-                    <input
-                      type="checkbox"
-                      :value="type"
-                      v-model="companyTypes"
-                    />
-                    <span>{{ type }}</span>
-                  </label>
-                </div>
-              </div>
-
-              <div class="filter-group">
                 <label class="filter-label">Duration</label>
                 <input
                   type="text"
                   v-model="duration"
-                  placeholder="4-6 Months"
+                  placeholder="e.g. 3-6 Months"
                   class="filter-input"
                 />
               </div>
@@ -1696,7 +1886,7 @@ onUnmounted(() => {
             <!-- Right Column: Available Internships -->
             <div class="internships-column">
               <div class="internships-header">
-                <h2 class="internships-title">Available Internships</h2>
+                <h2 class="internships-title">Your Posted Internships</h2>
                 <div class="search-section">
                   <div class="search-wrapper">
                     <span class="search-icon">
@@ -1705,7 +1895,7 @@ onUnmounted(() => {
                     <input
                       type="text"
                       v-model="searchQuery"
-                      placeholder="Search Internship by keyword..."
+                      placeholder="Search your internship postings..."
                       class="search-input"
                     />
                   </div>
@@ -1717,38 +1907,85 @@ onUnmounted(() => {
                 <div
                   v-for="internship in internshipsList"
                   :key="internship.id"
-                  class="internship-card"
+                  class="company-internship-card"
                 >
-                  <div class="card-header">
-                    <div class="company-logo">{{ internship.logo }}</div>
-                    <div class="card-info">
-                      <h4>{{ internship.title }}</h4>
-                      <p class="company-name">{{ internship.company || internship.companyName }}</p>
-                      <p class="location">
-                        <MapPinIcon class="icon-size-sm" /> {{ internship.location }}
-                      </p>
+                  <div class="internship-header">
+                    <div class="internship-title-section">
+                      <h3 class="internship-title">{{ internship.title }}</h3>
+                      <div class="internship-meta">
+                        <span class="posted-date">Posted {{ formatApplicationDate(internship.createdAt) }}</span>
+                        <span class="status-indicator" :class="internship.status">{{ internship.status.charAt(0).toUpperCase() + internship.status.slice(1) }}</span>
+                      </div>
                     </div>
-                    <div class="match-badge">{{ internship.match }}% Match</div>
+                    <div class="internship-actions-menu">
+                      <button class="action-menu-btn">
+                        <EllipsisVerticalIcon class="menu-icon" />
+                      </button>
+                    </div>
                   </div>
-                  <div v-if="internship.recommended" class="recommended-badge">
-                    <span class="star-icon">
-                      <StarIcon class="icon-size-sm" />
-                    </span>
-                    Recommended for You
+
+                  <div v-if="internship.status === 'draft'" class="draft-notice">
+                    <ExclamationTriangleIcon class="draft-icon" />
+                    <span>Draft - Not visible to students</span>
                   </div>
-                  <p class="card-description">{{ internship.description }}</p>
-                  <div class="skills-tags">
-                    <span
-                      v-for="skill in (internship.skills || internship.requirements || [])"
-                      :key="skill"
-                      class="skill-tag-card"
-                    >
-                      {{ skill }}
-                    </span>
+
+                  <div class="internship-details">
+                    <div class="detail-row">
+                      <div class="detail-item">
+                        <MapPinIcon class="detail-icon" />
+                        <span>{{ internship.location }}</span>
+                      </div>
+                      <div class="detail-item">
+                        <ClockIcon class="detail-icon" />
+                        <span>{{ internship.duration }}</span>
+                      </div>
+                      <div class="detail-item">
+                        <UsersIcon class="detail-icon" />
+                        <span>{{ internship.slotsAvailable }} slots</span>
+                      </div>
+                    </div>
+                    
+                    <div class="internship-description">
+                      {{ internship.description || 'No description provided' }}
+                    </div>
+
+                    <div class="requirements-section" v-if="internship.requirements && internship.requirements.length > 0">
+                      <span class="requirements-label">Required Skills:</span>
+                      <div class="skills-list">
+                        <span
+                          v-for="skill in internship.requirements.slice(0, 3)"
+                          :key="skill"
+                          class="skill-chip"
+                        >
+                          {{ skill }}
+                        </span>
+                        <span v-if="internship.requirements.length > 3" class="more-skills">
+                          +{{ internship.requirements.length - 3 }} more
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div class="card-actions">
-                    <button class="btn-quick-apply">Quick Apply</button>
-                    <button class="btn-view-details">View Details</button>
+
+                  <div class="internship-stats">
+                    <div class="stat-item">
+                      <span class="stat-number">0</span>
+                      <span class="stat-label">Applications</span>
+                    </div>
+                    <div class="stat-item">
+                      <span class="stat-number">0</span>
+                      <span class="stat-label">Interviews</span>
+                    </div>
+                    <div class="stat-item">
+                      <span class="stat-number">0</span>
+                      <span class="stat-label">Hired</span>
+                    </div>
+                  </div>
+
+                  <div class="internship-footer">
+                    <div class="footer-actions">
+                      <button class="btn-secondary-small" @click="editInternship(internship.id)">Edit Posting</button>
+                      <button class="btn-primary-small" @click="openInternshipDetails(internship)">View Applications</button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1772,108 +2009,175 @@ onUnmounted(() => {
           </div>
         </header>
         <main class="main-content">
-          <div class="applications-container">
-            <div class="applications-header">
-              <h2 class="applications-title">All Applications</h2>
-              <div class="applications-filters">
-                <div class="filter-group">
-                  <label class="filter-label">Filter by Internship:</label>
-                  <select v-model="selectedInternshipFilter" class="filter-select">
-                    <option value="">All Internships</option>
-                    <option v-for="i in internshipsList" :key="i.id" :value="i.id">{{ i.title }}</option>
-                  </select>
+          <div class="applications-layout">
+            <!-- Applications Dashboard Header -->
+            <div class="applications-dashboard-header">
+              <div class="dashboard-title-section">
+                <h2 class="dashboard-title">Application Management</h2>
+                <p class="dashboard-subtitle">Review and manage student applications for your internship positions</p>
+              </div>
+              
+              <!-- Statistics Cards -->
+              <div class="stats-grid">
+                <div class="stat-card-modern">
+                  <div class="stat-icon-wrapper total">
+                    <ClipboardDocumentListIcon class="stat-icon" />
+                  </div>
+                  <div class="stat-content">
+                    <div class="stat-number">{{ filteredApplications.length }}</div>
+                    <div class="stat-label">Total Applications</div>
+                  </div>
                 </div>
-                <div class="search-group">
-                  <label class="filter-label">Search:</label>
-                  <div class="search-input-wrapper">
-                    <span class="search-icon">
-                      <MagnifyingGlassIcon class="icon-size" />
-                    </span>
-                    <input
-                      type="text"
-                      v-model="searchStudent"
-                      placeholder="Search Student..."
-                      class="search-input-applications"
-                    />
+                
+                <div class="stat-card-modern">
+                  <div class="stat-icon-wrapper pending">
+                    <ClockIcon class="stat-icon" />
+                  </div>
+                  <div class="stat-content">
+                    <div class="stat-number">{{ filteredApplications.filter(app => app.status === 'pending').length }}</div>
+                    <div class="stat-label">Pending Review</div>
+                  </div>
+                </div>
+                
+                <div class="stat-card-modern">
+                  <div class="stat-icon-wrapper accepted">
+                    <CheckIcon class="stat-icon" />
+                  </div>
+                  <div class="stat-content">
+                    <div class="stat-number">{{ filteredApplications.filter(app => app.status === 'accepted').length }}</div>
+                    <div class="stat-label">Accepted</div>
+                  </div>
+                </div>
+                
+                <div class="stat-card-modern">
+                  <div class="stat-icon-wrapper declined">
+                    <XMarkIcon class="stat-icon" />
+                  </div>
+                  <div class="stat-content">
+                    <div class="stat-number">{{ filteredApplications.filter(app => app.status === 'declined').length }}</div>
+                    <div class="stat-label">Declined</div>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div class="applications-table-container">
-              <table class="applications-table">
-                <thead>
-                  <tr>
-                    <th>STUDENT NAME</th>
-                    <th>COURSE/PROGRAM</th>
-                    <th>INTERN JOBS</th>
-                    <th>SKILLS MATCH %</th>
-                    <th>RESUME</th>
-                    <th>APPLICATION DATE</th>
-                    <th>STATUS</th>
-                    <th>ACTIONS</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-if="filteredApplications.length === 0">
-                    <td colspan="8" class="empty-applications">
-                      No applications yet. Student Quick Apply submissions will appear here.
-                    </td>
-                  </tr>
-                  <tr v-for="app in filteredApplications" :key="app.id">
-                    <td>
-                      <span class="student-link">{{ app.studentName || app.studentEmail || 'Student' }}</span>
-                    </td>
-                    <td>{{ app.studentCourse || '—' }}</td>
-                    <td>{{ app.internshipTitle || '—' }}</td>
-                    <td>
-                      <div class="match-cell">
-                        <span class="match-percentage">—</span>
-                        <div class="match-bar-wrapper">
-                          <div class="match-bar" :style="{ width: '0%' }"></div>
+            <!-- Filters and Search -->
+            <div class="applications-controls">
+              <div class="controls-left">
+                <div class="filter-dropdown">
+                  <select v-model="selectedInternshipFilter" class="modern-select">
+                    <option value="">All Internships</option>
+                    <option v-for="i in internshipsList" :key="i.id" :value="i.id">{{ i.title }}</option>
+                  </select>
+                </div>
+              </div>
+              
+              <div class="controls-right">
+                <div class="search-wrapper">
+                  <MagnifyingGlassIcon class="search-icon-modern" />
+                  <input
+                    type="text"
+                    v-model="searchStudent"
+                    placeholder="Search students..."
+                    class="search-input-modern"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <!-- Applications Grid -->
+            <div class="applications-grid-modern">
+              <div v-if="filteredApplications.length === 0" class="empty-state-modern">
+                <div class="empty-icon-modern">
+                  <ClipboardDocumentListIcon class="empty-icon-svg-modern" />
+                </div>
+                <h3 class="empty-title-modern">No Applications Found</h3>
+                <p class="empty-description-modern">Student applications will appear here when they apply to your internships.</p>
+              </div>
+
+              <div
+                v-for="app in filteredApplications"
+                :key="app.id"
+                class="application-card-modern"
+              >
+                <!-- Card Header -->
+                <div class="card-header-modern">
+                  <div class="student-profile">
+                    <div class="student-avatar-modern">
+                      {{ (app.studentName || app.studentEmail || 'S').charAt(0).toUpperCase() }}
+                    </div>
+                    <div class="student-info-modern">
+                      <h3 class="student-name-modern">{{ app.studentName || app.studentEmail || 'Student' }}</h3>
+                      <p class="student-course-modern">{{ app.studentCourse || 'Course not specified' }}</p>
+                    </div>
+                  </div>
+                  <div class="status-wrapper">
+                    <span class="status-badge-modern" :class="(app.status || 'pending').toLowerCase()">
+                      {{ (app.status || 'pending').charAt(0).toUpperCase() + (app.status || 'pending').slice(1) }}
+                    </span>
+                  </div>
+                </div>
+
+                <!-- Application Details -->
+                <div class="card-body-modern">
+                  <div class="application-info">
+                    <div class="info-row">
+                      <span class="info-label">Position Applied:</span>
+                      <span class="info-value">{{ app.internshipTitle || 'Unknown Position' }}</span>
+                    </div>
+                    <div class="info-row">
+                      <span class="info-label">Application Date:</span>
+                      <span class="info-value">{{ formatApplicationDate(app.createdAt) }}</span>
+                    </div>
+                    <div class="info-row">
+                      <span class="info-label">Skills Match:</span>
+                      <div class="skills-match-modern">
+                        <div class="match-progress">
+                          <div class="match-bar-modern" :style="{ width: '75%' }"></div>
                         </div>
+                        <span class="match-text">75% Match</span>
                       </div>
-                    </td>
-                    <td>
-                      <button class="download-btn" title="Resume" :disabled="app.documentsPending || !app.resume">
-                        <ArrowDownTrayIcon class="icon-size" />
+                    </div>
+                  </div>
+
+                  <!-- Documents Section -->
+                  <div class="documents-section" v-if="app.resume">
+                    <div class="document-item-modern">
+                      <DocumentIcon class="document-icon-modern" />
+                      <span class="document-name-modern">Resume.pdf</span>
+                      <button class="download-btn-modern" title="Download Resume">
+                        <ArrowDownTrayIcon class="download-icon-modern" />
                       </button>
-                    </td>
-                    <td>{{ formatApplicationDate(app.createdAt) }}</td>
-                    <td>
-                      <span
-                        class="status-badge-app"
-                        :class="(app.status || 'pending').toLowerCase()"
-                      >
-                        {{ (app.status || 'pending').charAt(0).toUpperCase() + (app.status || 'pending').slice(1) }}
-                      </span>
-                    </td>
-                    <td>
-                      <div class="action-icons">
-                        <button class="action-icon" title="View Details">
-                          <EyeIcon class="icon-size" />
-                        </button>
-                        <button
-                          class="action-icon"
-                          :class="{ disabled: app.status === 'accepted' }"
-                          title="Accept"
-                          @click="handleAcceptApplication(app)"
-                        >
-                          <CheckIcon class="icon-size" />
-                        </button>
-                        <button
-                          class="action-icon"
-                          :class="{ disabled: app.status === 'accepted' }"
-                          title="Decline"
-                          @click="handleDeclineApplication(app)"
-                        >
-                          <XMarkIcon class="icon-size" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Card Actions -->
+                <div class="card-actions-modern">
+                  <button class="action-btn-secondary" title="View Full Profile">
+                    <EyeIcon class="action-icon-modern" />
+                    View Profile
+                  </button>
+                  <button 
+                    class="action-btn-decline"
+                    :class="{ disabled: app.status === 'accepted' }"
+                    title="Decline Application"
+                    @click="handleDeclineApplication(app)"
+                  >
+                    <XMarkIcon class="action-icon-modern" />
+                    Decline
+                  </button>
+                  <button
+                    class="action-btn-accept"
+                    :class="{ disabled: app.status === 'accepted' }"
+                    title="Accept Application"
+                    @click="handleAcceptApplication(app)"
+                  >
+                    <CheckIcon class="action-icon-modern" />
+                    Accept
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </main>
@@ -2399,7 +2703,7 @@ onUnmounted(() => {
         <header class="top-header">
           <div class="header-left">
             <img src="/icons/icon-post_new_internship.png" alt="Post New Internship" class="header-icon-img" />
-            <h1>Post New Internship</h1>
+            <h1>{{ isEditMode ? 'Edit Internship' : 'Post New Internship' }}</h1>
           </div>
           <div class="header-right">
             <div class="notification-wrapper">
@@ -2528,9 +2832,10 @@ onUnmounted(() => {
                 <p class="section-description">Define the requirements and responsibilities for this internship position.</p>
                 
                 <div class="form-group">
-                  <label class="form-label">Preferred Courses/Programs <span class="required">*</span></label>
+                  <label class="form-label">Preferred College Programs</label>
                   <select
                     ref="courseSelectRef"
+                    :key="`course-select-${selectKey}`"
                     multiple
                     class="form-select-multiple"
                     placeholder="Select or type courses/programs..."
@@ -2539,35 +2844,24 @@ onUnmounted(() => {
                       {{ course }}
                     </option>
                   </select>
-                  <p class="form-hint">Select multiple courses or type a custom one like BSED, BSBA, or other programs.</p>
+                  <p class="form-hint">Select from programs offered by partner schools, or type custom ones. Schools will use this to match suitable students.</p>
                 </div>
 
                 <div class="form-group">
-                  <label class="form-label">Required Completion Hours (Per Course) <span class="required">*</span></label>
-                  <div v-if="selectedCourses.length === 0" class="form-hint">Select at least one course/program first.</div>
-                  <div v-else class="course-hours-list">
-                    <div v-for="course in selectedCourses" :key="course" class="course-hours-row">
-                      <div class="course-hours-name">{{ course }}</div>
-                      <div class="course-hours-input">
-                        <input
-                          type="number"
-                          min="1"
-                          step="1"
-                          v-model.number="courseCompletionHours[course]"
-                          placeholder="e.g. 400"
-                          class="form-input"
-                        />
-                        <span class="input-suffix">hours</span>
-                      </div>
+                  <div class="info-message">
+                    <InformationCircleIcon class="info-icon" />
+                    <div>
+                      <strong>Note:</strong> Program options are loaded from partner schools in the system. 
+                      Internship hours and final requirements are set by schools during the approval process.
                     </div>
                   </div>
-                  <p class="form-hint">Set the total hours students from each selected course/program must complete.</p>
                 </div>
 
                 <div class="form-group">
                   <label class="form-label">Required Skills & Technologies <span class="required">*</span></label>
                   <select
                     ref="skillsSelectRef"
+                    :key="`skills-select-${selectKey}`"
                     multiple
                     class="form-select-multiple"
                     placeholder="Select or type required skills..."
@@ -2577,13 +2871,6 @@ onUnmounted(() => {
                     </option>
                   </select>
                   <p class="form-hint">Select suggested skills from the chosen courses or type custom skills like PHP, Laravel, SAP, or anything else.</p>
-                </div>
-
-                <div class="form-group" v-if="selectedCourses.length === 0">
-                  <p class="info-message">
-                    <InformationCircleIcon class="info-icon" />
-                    Add at least one course first. You can also type a custom course if it is not in the list.
-                  </p>
                 </div>
 
                 <div class="form-row">
@@ -2745,25 +3032,98 @@ onUnmounted(() => {
                     rows="4"
                   ></textarea>
                 </div>
-
                 <div class="form-group">
-                  <label class="form-label">Allowance (optional)</label>
-                  <input
-                    type="text"
-                    v-model="formAllowance"
-                    placeholder="e.g. ₱5,000/month or None"
-                    class="form-input"
-                  />
+                  <div class="allowance-container">
+                    <div class="allowance-header">
+                      <input
+                        type="checkbox"
+                        id="hasAllowance"
+                        v-model="hasAllowance"
+                        class="form-checkbox"
+                      />
+                      <label for="hasAllowance" class="allowance-label">This internship provides an allowance (optional)</label>
+                    </div>
+                    
+                    <div v-if="hasAllowance" class="allowance-input-section">
+                      <label class="form-label">Allowance Amount</label>
+                      <input
+                        type="text"
+                        v-model="formAllowance"
+                        placeholder="e.g. ₱5,000/month, ₱15,000 total, etc."
+                        class="form-input"
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 <div class="form-group">
                   <label class="form-label">Contact Information</label>
-                  <textarea
-                    v-model="contactInfo"
-                    placeholder="Contact details for questions about this internship"
-                    class="form-textarea"
-                    rows="3"
-                  ></textarea>
+                  <p class="form-description">Select the contact methods students can use to inquire about this internship</p>
+                  
+                  <div class="contact-methods-container">
+                    <!-- Email Contact -->
+                    <div class="contact-method-row">
+                      <div class="contact-method-header">
+                        <input
+                          type="checkbox"
+                          id="hasEmailContact"
+                          v-model="hasEmailContact"
+                          class="form-checkbox"
+                        />
+                        <label for="hasEmailContact" class="contact-method-label">Email</label>
+                      </div>
+                      <div v-if="hasEmailContact" class="contact-method-input">
+                        <input
+                          type="email"
+                          v-model="emailContact"
+                          placeholder="e.g. hr@company.com or john.doe@company.com"
+                          class="form-input"
+                        />
+                      </div>
+                    </div>
+
+                    <!-- Social Media Contact -->
+                    <div class="contact-method-row">
+                      <div class="contact-method-header">
+                        <input
+                          type="checkbox"
+                          id="hasSocialMediaContact"
+                          v-model="hasSocialMediaContact"
+                          class="form-checkbox"
+                        />
+                        <label for="hasSocialMediaContact" class="contact-method-label">Social Media</label>
+                      </div>
+                      <div v-if="hasSocialMediaContact" class="contact-method-input">
+                        <input
+                          type="text"
+                          v-model="socialMediaContact"
+                          placeholder="e.g. @company_official, facebook.com/company"
+                          class="form-input"
+                        />
+                      </div>
+                    </div>
+
+                    <!-- SMS Contact -->
+                    <div class="contact-method-row">
+                      <div class="contact-method-header">
+                        <input
+                          type="checkbox"
+                          id="hasSmsContact"
+                          v-model="hasSmsContact"
+                          class="form-checkbox"
+                        />
+                        <label for="hasSmsContact" class="contact-method-label">SMS/Phone</label>
+                      </div>
+                      <div v-if="hasSmsContact" class="contact-method-input">
+                        <input
+                          type="tel"
+                          v-model="smsContact"
+                          placeholder="e.g. +63 912 345 6789"
+                          class="form-input"
+                        />
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 <div class="form-actions">
@@ -2773,10 +3133,10 @@ onUnmounted(() => {
                   </button>
                   <button class="btn-save-draft" @click="saveDraft" :disabled="submittingInternship">
                     <img src="/icons/icon-save.png" alt="Save" class="btn-icon" />
-                    Save Draft
+                    {{ isEditMode ? 'Save Changes' : 'Save Draft' }}
                   </button>
                   <button class="btn-next-section" @click="submitForApproval" :disabled="submittingInternship">
-                    {{ submittingInternship ? 'Posting...' : 'Submit for Approval' }}
+                    {{ submittingInternship ? (isEditMode ? 'Updating...' : 'Posting...') : (isEditMode ? 'Update Internship' : 'Submit for Approval') }}
                     <span class="arrow-icon">
                       <CheckIcon class="icon-size-sm" />
                     </span>
@@ -2788,7 +3148,7 @@ onUnmounted(() => {
             <!-- Right Column: Progress Sidebar -->
             <div class="progress-column">
               <div class="progress-card">
-                <h3 class="progress-title">Your Internship Post</h3>
+                <h3 class="progress-title">{{ isEditMode ? 'Edit Internship' : 'Your Internship Post' }}</h3>
                 
                 <div class="progress-steps">
                   <div class="progress-step" :class="{ active: currentFormStep === 1 }">
@@ -2842,7 +3202,7 @@ onUnmounted(() => {
 
                 <button class="btn-save-draft" @click="saveDraft" :disabled="submittingInternship">
                   <img src="/icons/icon-save.png" alt="Save" class="btn-icon" />
-                  Save as Draft
+                  {{ isEditMode ? 'Save Changes' : 'Save as Draft' }}
                 </button>
               </div>
             </div>
@@ -3348,7 +3708,199 @@ onUnmounted(() => {
 
     <!-- Floating Chat Widget -->
     <FloatingChatWidget userType="company" />
+
+    <!-- Internship Details Modal -->
+    <div v-if="showInternshipDetailsModal && selectedInternshipForDetails" class="modal-overlay" @click="closeInternshipDetails">
+      <div class="modal-content internship-details-modal" @click.stop>
+        <!-- Modal Header with Company Branding -->
+        <div class="modal-header-enhanced">
+          <div class="header-content">
+            <div class="company-avatar">
+              {{ companyInitials }}
+            </div>
+            <div class="header-info">
+              <h1 class="internship-title">{{ selectedInternshipForDetails.title }}</h1>
+              <div class="company-info">
+                <span class="company-name">{{ selectedInternshipForDetails.companyName }}</span>
+                <span class="status-badge" :class="selectedInternshipForDetails.status">
+                  {{ selectedInternshipForDetails.status.charAt(0).toUpperCase() + selectedInternshipForDetails.status.slice(1) }}
+                </span>
+              </div>
+            </div>
+          </div>
+          <button class="modal-close-enhanced" @click="closeInternshipDetails">
+            <XMarkIcon class="close-icon" />
+          </button>
+        </div>
+        
+        <div class="modal-body-enhanced">
+          <!-- Key Information Cards -->
+          <div class="key-info-grid">
+            <div class="info-card">
+              <div class="info-card-icon location">
+                <MapPinIcon />
+              </div>
+              <div class="info-card-content">
+                <div class="info-card-label">Location</div>
+                <div class="info-card-value">{{ selectedInternshipForDetails.location }}</div>
+              </div>
+            </div>
+            
+            <div class="info-card">
+              <div class="info-card-icon duration">
+                <ClockIcon />
+              </div>
+              <div class="info-card-content">
+                <div class="info-card-label">Duration</div>
+                <div class="info-card-value">{{ selectedInternshipForDetails.duration }}</div>
+              </div>
+            </div>
+            
+            <div class="info-card">
+              <div class="info-card-icon type">
+                <CloudIcon />
+              </div>
+              <div class="info-card-content">
+                <div class="info-card-label">Work Type</div>
+                <div class="info-card-value">{{ selectedInternshipForDetails.type }}</div>
+              </div>
+            </div>
+            
+            <div class="info-card">
+              <div class="info-card-icon slots">
+                <UserIcon />
+              </div>
+              <div class="info-card-content">
+                <div class="info-card-label">Available Slots</div>
+                <div class="info-card-value">{{ selectedInternshipForDetails.slotsAvailable }}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Description Section -->
+          <div class="content-section" v-if="selectedInternshipForDetails.description">
+            <div class="section-header">
+              <InformationCircleIcon class="section-icon" />
+              <h3>About This Internship</h3>
+            </div>
+            <div class="description-card">
+              <p>{{ selectedInternshipForDetails.description }}</p>
+            </div>
+          </div>
+
+          <!-- Allowance Section -->
+          <div class="content-section" v-if="selectedInternshipForDetails.allowance">
+            <div class="section-header">
+              <StarIcon class="section-icon" />
+              <h3>Compensation</h3>
+            </div>
+            <div class="allowance-card">
+              <div class="allowance-amount">{{ selectedInternshipForDetails.allowance }}</div>
+              <div class="allowance-label">Monthly Allowance</div>
+            </div>
+          </div>
+
+          <!-- Programs and Skills Grid -->
+          <div class="programs-skills-grid">
+            <!-- Eligible Programs -->
+            <div class="content-section" v-if="selectedInternshipForDetails.eligibleCourses && selectedInternshipForDetails.eligibleCourses.length > 0">
+              <div class="section-header">
+                <AcademicCapIcon class="section-icon" />
+                <h3>Eligible Programs</h3>
+              </div>
+              <div class="tags-container">
+                <span v-for="course in selectedInternshipForDetails.eligibleCourses" :key="course" class="program-tag-enhanced">
+                  {{ course }}
+                </span>
+              </div>
+            </div>
+
+            <!-- Required Skills -->
+            <div class="content-section" v-if="selectedInternshipForDetails.requirements && selectedInternshipForDetails.requirements.length > 0">
+              <div class="section-header">
+                <ChartBarIcon class="section-icon" />
+                <h3>Required Skills</h3>
+              </div>
+              <div class="tags-container">
+                <span v-for="skill in selectedInternshipForDetails.requirements" :key="skill" class="skill-tag-enhanced">
+                  {{ skill }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Contact Information -->
+          <div class="content-section" v-if="selectedInternshipForDetails.contactInfo">
+            <div class="section-header">
+              <EnvelopeIcon class="section-icon" />
+              <h3>Contact Information</h3>
+            </div>
+            <div class="contact-methods-card">
+              <div v-for="method in selectedInternshipForDetails.contactInfo.split(' | ')" :key="method" class="contact-method">
+                <div v-if="method.startsWith('Email: ')" class="contact-item email">
+                  <EnvelopeIcon class="contact-icon" />
+                  <div class="contact-details">
+                    <div class="contact-type">Email</div>
+                    <div class="contact-value">{{ method.replace('Email: ', '') }}</div>
+                  </div>
+                </div>
+                <div v-else-if="method.startsWith('Social Media: ')" class="contact-item social">
+                  <CloudIcon class="contact-icon" />
+                  <div class="contact-details">
+                    <div class="contact-type">Social Media</div>
+                    <div class="contact-value">{{ method.replace('Social Media: ', '') }}</div>
+                  </div>
+                </div>
+                <div v-else-if="method.startsWith('SMS/Phone: ')" class="contact-item phone">
+                  <PhoneIcon class="contact-icon" />
+                  <div class="contact-details">
+                    <div class="contact-type">SMS/Phone</div>
+                    <div class="contact-value">{{ method.replace('SMS/Phone: ', '') }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Posting Timeline -->
+          <div class="content-section">
+            <div class="section-header">
+              <CalendarIcon class="section-icon" />
+              <h3>Posting Timeline</h3>
+            </div>
+            <div class="timeline-card">
+              <div class="timeline-item">
+                <div class="timeline-dot created"></div>
+                <div class="timeline-content">
+                  <div class="timeline-label">Posted</div>
+                  <div class="timeline-value">{{ formatApplicationDate(selectedInternshipForDetails.createdAt) }}</div>
+                </div>
+              </div>
+              <div class="timeline-item" v-if="selectedInternshipForDetails.updatedAt">
+                <div class="timeline-dot updated"></div>
+                <div class="timeline-content">
+                  <div class="timeline-label">Last Updated</div>
+                  <div class="timeline-value">{{ formatApplicationDate(selectedInternshipForDetails.updatedAt) }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="modal-footer-enhanced">
+          <button class="btn-secondary-enhanced" @click="viewInternshipApplications(selectedInternshipForDetails?.id || '')">
+            <ClipboardDocumentListIcon class="btn-icon" />
+            View Applications
+          </button>
+          <button class="btn-edit-enhanced" @click="editInternship(selectedInternshipForDetails?.id || '')">
+            <PencilIcon class="btn-icon" />
+            Edit Posting
+          </button>
+        </div>
+      </div>
+    </div>
   </div> <!-- End Dashboard -->
+
 </template>
 
 <style scoped>
@@ -4283,12 +4835,6 @@ onUnmounted(() => {
   margin: 8px 0 0 0;
 }
 
-.checkbox-group {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
 .checkbox-group label {
   display: flex;
   align-items: center;
@@ -4424,162 +4970,261 @@ onUnmounted(() => {
 
 .internships-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 24px;
 }
 
-.internship-card {
-  background: #fff;
-  border: 1px solid #e5e7eb;
+.company-internship-card {
+  background: white;
   border-radius: 12px;
-  padding: 20px;
+  border: 1px solid #e5e7eb;
+  overflow: hidden;
+  transition: all 0.2s ease;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  transition: all 0.2s;
 }
 
-.internship-card:hover {
+.company-internship-card:hover {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  transform: translateY(-2px);
+  border-color: #d1d5db;
 }
 
-.card-header {
+.internship-header {
   display: flex;
+  justify-content: space-between;
   align-items: flex-start;
-  gap: 12px;
-  margin-bottom: 12px;
+  padding: 20px 20px 16px 20px;
+  border-bottom: 1px solid #f3f4f6;
 }
 
-.company-logo {
-  width: 48px;
-  height: 48px;
-  background: #2563eb;
-  color: #fff;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 16px;
-  flex-shrink: 0;
-}
-
-.card-info {
+.internship-title-section {
   flex: 1;
 }
 
-.card-info h4 {
-  font-size: 16px;
+.internship-title {
+  font-size: 18px;
   font-weight: 600;
-  color: #111827;
-  margin: 0 0 4px 0;
+  color: #1f2937;
+  margin: 0 0 8px 0;
+  line-height: 1.3;
 }
 
-.card-info .company-name {
-  font-size: 13px;
-  color: #6b7280;
-  margin: 0 0 4px 0;
-}
-
-.card-info .location {
-  font-size: 13px;
-  color: #6b7280;
-  margin: 0;
+.internship-meta {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 12px;
 }
 
-.match-badge {
-  padding: 4px 10px;
-  background: #10b981;
-  color: #fff;
-  border-radius: 999px;
-  font-size: 12px;
+.posted-date {
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.status-indicator {
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
   font-weight: 600;
-  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-.recommended-badge {
-  display: inline-flex;
+.status-indicator.active {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-indicator.draft {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-indicator.closed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.internship-actions-menu {
+  margin-left: 12px;
+}
+
+.action-menu-btn {
+  background: none;
+  border: none;
+  padding: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.action-menu-btn:hover {
+  background: #f3f4f6;
+}
+
+.menu-icon {
+  width: 18px;
+  height: 18px;
+  color: #6b7280;
+}
+
+.draft-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  background: #fffbeb;
+  border-bottom: 1px solid #fde68a;
+  color: #92400e;
+  font-size: 14px;
+}
+
+.draft-icon {
+  width: 16px;
+  height: 16px;
+  color: #f59e0b;
+}
+
+.internship-details {
+  padding: 20px;
+}
+
+.detail-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.detail-item {
+  display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
-  background: #d1fae5;
-  color: #065f46;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  margin-bottom: 12px;
+  font-size: 14px;
+  color: #6b7280;
 }
 
-.star-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #fbbf24;
+.detail-icon {
+  width: 16px;
+  height: 16px;
+  color: #9ca3af;
 }
 
-.card-description {
+.internship-description {
   font-size: 14px;
   color: #374151;
   line-height: 1.5;
-  margin: 12px 0;
+  margin-bottom: 16px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
-.skills-tags {
+.requirements-section {
+  margin-top: 16px;
+}
+
+.requirements-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #6b7280;
+  display: block;
+  margin-bottom: 8px;
+}
+
+.skills-list {
   display: flex;
-  gap: 8px;
   flex-wrap: wrap;
-  margin: 16px 0;
+  gap: 6px;
+  align-items: center;
 }
 
-.skill-tag-card {
-  padding: 6px 12px;
+.skill-chip {
   background: #eff6ff;
-  color: #2563eb;
-  border-radius: 6px;
+  color: #1d4ed8;
+  padding: 4px 8px;
+  border-radius: 4px;
   font-size: 12px;
   font-weight: 500;
 }
 
-.card-actions {
+.more-skills {
+  font-size: 12px;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.internship-stats {
   display: flex;
-  gap: 12px;
-  margin-top: 16px;
+  justify-content: space-around;
+  padding: 16px 20px;
+  background: #f9fafb;
+  border-top: 1px solid #f3f4f6;
+  border-bottom: 1px solid #f3f4f6;
 }
 
-.btn-quick-apply {
+.stat-item {
+  text-align: center;
+}
+
+.stat-number {
+  display: block;
+  font-size: 20px;
+  font-weight: 700;
+  color: #1f2937;
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: #6b7280;
+  font-weight: 500;
+  margin-top: 4px;
+}
+
+.internship-footer {
+  padding: 16px 20px;
+}
+
+.footer-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-secondary-small {
   flex: 1;
-  padding: 10px;
-  background: #2563eb;
-  color: #fff;
-  border: none;
-  border-radius: 8px;
-  font-weight: 600;
+  background: white;
+  color: #374151 !important;
+  border: 1px solid #d1d5db;
+  padding: 8px 16px;
+  border-radius: 6px;
   font-size: 14px;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.btn-quick-apply:hover {
-  background: #1d4ed8;
-}
-
-.btn-view-details {
-  flex: 1;
-  padding: 10px;
-  background: #fff;
-  color: #2563eb;
-  border: 1px solid #2563eb;
-  border-radius: 8px;
-  font-weight: 600;
-  font-size: 14px;
+  font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
 }
 
-.btn-view-details:hover {
-  background: #eff6ff;
+.btn-secondary-small:hover {
+  background: #f9fafb;
+  border-color: #9ca3af;
+  color: #1f2937 !important;
+}
+
+.btn-primary-small {
+  flex: 1;
+  background: #2563eb;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.btn-primary-small:hover {
+  background: #1d4ed8;
 }
 
 @media (max-width: 1200px) {
@@ -4597,6 +5242,37 @@ onUnmounted(() => {
 
   .internships-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .company-internship-card {
+    margin: 0 -4px;
+  }
+  
+  .internship-header {
+    padding: 16px;
+  }
+  
+  .internship-details {
+    padding: 16px;
+  }
+  
+  .detail-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .internship-stats {
+    padding: 12px 16px;
+  }
+  
+  .internship-footer {
+    padding: 12px 16px;
+  }
+  
+  .footer-actions {
+    flex-direction: column;
   }
 }
 
@@ -4646,6 +5322,239 @@ onUnmounted(() => {
 }
 
 .form-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+/* Checkbox Styles */
+.checkbox-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.checkbox-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+  user-select: none;
+  line-height: 1.4;
+}
+
+.form-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+
+.form-checkbox {
+  width: 18px;
+  height: 18px;
+  accent-color: #2563eb;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.checkbox-label {
+  font-size: 16px;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+  user-select: none;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/* Allowance Section - Clean Layout */
+.allowance-container {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fafafa;
+  padding: 16px;
+}
+
+.allowance-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.allowance-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+  user-select: none;
+}
+
+.allowance-input-section {
+  margin-left: 28px;
+  animation: slideDown 0.2s ease-out;
+}
+
+.allowance-input-section .form-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+}
+
+.allowance-input-section .form-input {
+  width: 100%;
+  max-width: 300px;
+  background: white;
+  border: 1px solid #d1d5db;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.allowance-input-section .form-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .contact-method-input {
+    margin-left: 0;
+    margin-top: 12px;
+  }
+  
+  .allowance-input-section {
+    margin-left: 0;
+    margin-top: 12px;
+  }
+  
+  .contact-method-input .form-input,
+  .allowance-input-section .form-input {
+    max-width: none;
+  }
+  
+  .contact-methods-container,
+  .allowance-container {
+    padding: 12px;
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Contact Method Styles */
+.form-description {
+  font-size: 14px;
+  color: #6b7280;
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+/* Form Group Spacing */
+.form-group {
+  margin-bottom: 24px;
+}
+
+.form-group:last-child {
+  margin-bottom: 0;
+}
+
+.form-description {
+  font-size: 14px;
+  color: #6b7280;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+/* General Form Input Styling */
+.form-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 14px;
+  background: white;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  box-sizing: border-box;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.form-label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+  margin-bottom: 8px;
+}
+
+/* Contact Methods - Clean Layout */
+.contact-methods-container {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fafafa;
+  padding: 16px;
+}
+
+.contact-method-row {
+  margin-bottom: 16px;
+}
+
+.contact-method-row:last-child {
+  margin-bottom: 0;
+}
+
+.contact-method-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.contact-method-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+  user-select: none;
+  min-width: 100px;
+}
+
+.contact-method-input {
+  margin-left: 28px;
+  animation: slideDown 0.2s ease-out;
+}
+
+.contact-method-input .form-input {
+  width: 100%;
+  max-width: 400px;
+  background: white;
+  border: 1px solid #d1d5db;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.contact-method-input .form-input:focus {
   outline: none;
   border-color: #2563eb;
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
@@ -5467,323 +6376,581 @@ onUnmounted(() => {
   }
 }
 
-/* Applications View Styles */
-.applications-container {
-  background: #fff;
-  border-radius: 12px;
+/* Applications View Styles - Modern Design */
+.applications-layout {
   padding: 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  max-width: 1400px;
+  margin: 0 auto;
 }
 
-.applications-header {
+/* Dashboard Header */
+.applications-dashboard-header {
+  margin-bottom: 32px;
+}
+
+.dashboard-title-section {
   margin-bottom: 24px;
 }
 
-.applications-title {
-  font-size: 24px;
+.dashboard-title {
+  font-size: 28px;
   font-weight: 700;
-  color: #111827;
-  margin: 0 0 20px 0;
+  color: #1f2937;
+  margin: 0 0 8px 0;
 }
 
-.applications-filters {
-  display: flex;
+.dashboard-subtitle {
+  font-size: 16px;
+  color: #6b7280;
+  margin: 0;
+}
+
+/* Statistics Grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
   gap: 20px;
-  align-items: flex-start;
-  flex-wrap: wrap;
+  margin-bottom: 32px;
 }
 
-.filter-group {
+.stat-card-modern {
+  background: white;
+  border-radius: 16px;
+  padding: 24px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  align-items: center;
+  gap: 16px;
+  transition: all 0.2s ease;
+}
+
+.stat-card-modern:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+}
+
+.stat-icon-wrapper {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 
-.filter-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: #374151;
-  height: 18px;
-  line-height: 18px;
+.stat-icon-wrapper.total {
+  background: #dbeafe;
 }
 
-.filter-select {
-  padding: 10px 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
+.stat-icon-wrapper.pending {
+  background: #fef3c7;
+}
+
+.stat-icon-wrapper.accepted {
+  background: #dcfce7;
+}
+
+.stat-icon-wrapper.declined {
+  background: #fee2e2;
+}
+
+.stat-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.stat-icon-wrapper.total .stat-icon {
+  color: #2563eb;
+}
+
+.stat-icon-wrapper.pending .stat-icon {
+  color: #d97706;
+}
+
+.stat-icon-wrapper.accepted .stat-icon {
+  color: #059669;
+}
+
+.stat-icon-wrapper.declined .stat-icon {
+  color: #dc2626;
+}
+
+.stat-content {
+  flex: 1;
+}
+
+.stat-number {
+  font-size: 32px;
+  font-weight: 700;
+  color: #1f2937;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.stat-label {
   font-size: 14px;
-  background: #fff;
-  color: #111827;
-  cursor: pointer;
-  min-width: 180px;
-  height: 42px;
-  transition: all 0.2s;
+  color: #6b7280;
+  font-weight: 500;
 }
 
-.filter-select:focus {
+/* Controls Section */
+.applications-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  gap: 20px;
+}
+
+.controls-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.controls-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.modern-select {
+  padding: 12px 16px;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  font-size: 14px;
+  background: white;
+  color: #1f2937;
+  cursor: pointer;
+  transition: all 0.2s;
+  min-width: 200px;
+}
+
+.modern-select:focus {
   outline: none;
   border-color: #2563eb;
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
-.search-group {
-  flex: 1;
-  min-width: 250px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.search-input-wrapper {
+.search-wrapper {
   position: relative;
-  width: 100%;
+  min-width: 300px;
 }
 
-.search-icon {
+.search-icon-modern {
   position: absolute;
-  left: 12px;
+  left: 16px;
   top: 50%;
   transform: translateY(-50%);
-  font-size: 18px;
-  color: #6b7280;
+  width: 20px;
+  height: 20px;
+  color: #9ca3af;
   pointer-events: none;
 }
 
-.search-input-applications {
+.search-input-modern {
   width: 100%;
-  padding: 10px 12px 10px 40px;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  padding: 12px 16px 12px 48px;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
   font-size: 14px;
-  background: #fff;
+  background: white;
   transition: all 0.2s;
   box-sizing: border-box;
-  height: 42px;
 }
 
-.search-input-applications:focus {
+.search-input-modern:focus {
   outline: none;
   border-color: #2563eb;
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
-.applications-table-container {
-  overflow-x: auto;
-  margin-top: 24px;
+/* Applications Grid */
+.applications-grid-modern {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 24px;
 }
 
-.applications-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-}
-
-.applications-table thead {
-  background: #1e3a8a;
-  color: #fff;
-}
-
-.applications-table th {
-  padding: 14px 12px;
-  text-align: left;
-  font-weight: 700;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  white-space: nowrap;
-}
-
-.applications-table tbody tr {
-  border-bottom: 1px solid #f3f4f6;
-  transition: background 0.2s;
-}
-
-.applications-table tbody tr:hover {
-  background: #f9fafb;
-}
-
-.applications-table td {
-  padding: 14px 12px;
-  color: #374151;
-  vertical-align: middle;
-}
-
-.empty-applications {
+.empty-state-modern {
+  grid-column: 1 / -1;
   text-align: center;
-  padding: 48px 24px !important;
-  color: #6b7280;
-  font-size: 0.95rem;
+  padding: 80px 20px;
+  background: white;
+  border-radius: 16px;
+  border: 1px solid #e5e7eb;
 }
 
-.student-link {
-  color: #2563eb;
-  text-decoration: underline;
-  font-weight: 500;
-  transition: color 0.2s;
-}
-
-.student-link:hover {
-  color: #1d4ed8;
-}
-
-.match-cell {
+.empty-icon-modern {
+  margin: 0 auto 20px;
+  width: 80px;
+  height: 80px;
+  background: #f3f4f6;
+  border-radius: 50%;
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-width: 120px;
+  justify-content: center;
 }
 
-.match-percentage {
-  font-weight: 600;
-  color: #111827;
-  min-width: 40px;
+.empty-icon-svg-modern {
+  width: 40px;
+  height: 40px;
+  color: #9ca3af;
 }
 
-.match-bar-wrapper {
-  flex: 1;
-  height: 8px;
-  background: #e5e7eb;
-  border-radius: 4px;
-  overflow: hidden;
-  min-width: 60px;
-}
-
-.match-bar {
-  height: 100%;
-  background: #2563eb;
-  border-radius: 4px;
-  transition: width 0.3s;
-}
-
-.download-btn {
-  background: none;
-  border: none;
-  color: #2563eb;
+.empty-title-modern {
   font-size: 20px;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  transition: background 0.2s;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0 0 8px 0;
 }
 
-.download-btn:hover {
-  background: #eff6ff;
+.empty-description-modern {
+  font-size: 16px;
+  color: #6b7280;
+  margin: 0;
 }
 
-.status-badge-app {
-  display: inline-block;
-  padding: 6px 12px;
+/* Application Cards */
+.application-card-modern {
+  background: white;
+  border-radius: 16px;
+  border: 1px solid #e5e7eb;
+  overflow: hidden;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.application-card-modern:hover {
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+  transform: translateY(-2px);
+  border-color: #d1d5db;
+}
+
+.card-header-modern {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 24px 24px 20px 24px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.student-profile {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 1;
+}
+
+.student-avatar-modern {
+  width: 56px;
+  height: 56px;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: white;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 20px;
+  flex-shrink: 0;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.student-info-modern {
+  flex: 1;
+}
+
+.student-name-modern {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0 0 4px 0;
+}
+
+.student-course-modern {
+  font-size: 14px;
+  color: #6b7280;
+  margin: 0;
+}
+
+.status-wrapper {
+  margin-left: 16px;
+}
+
+.status-badge-modern {
+  padding: 8px 16px;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 600;
   text-transform: capitalize;
 }
 
-.status-badge-app.new,
-.status-badge-app.pending {
-  background: #dbeafe;
-  color: #1e40af;
-}
-
-.status-badge-app.reviewed {
+.status-badge-modern.pending {
   background: #fef3c7;
   color: #92400e;
 }
 
-.status-badge-app.accepted {
-  background: #d1fae5;
-  color: #065f46;
+.status-badge-modern.accepted {
+  background: #dcfce7;
+  color: #166534;
 }
 
-.status-badge-app.active {
-  background: #d1fae5;
-  color: #065f46;
-}
-
-.status-badge-app.declined {
+.status-badge-modern.declined {
   background: #fee2e2;
   color: #991b1b;
 }
 
-.status-badge-app.rejected {
-  background: #fee2e2;
-  color: #991b1b;
+.card-body-modern {
+  padding: 24px;
 }
 
-.status-badge-app.interview {
-  background: #cffafe;
-  color: #155e75;
+.application-info {
+  margin-bottom: 20px;
 }
 
-.action-icons {
+.info-row {
   display: flex;
-  gap: 8px;
+  justify-content: space-between;
   align-items: center;
+  margin-bottom: 12px;
 }
 
-.action-icon {
+.info-row:last-child {
+  margin-bottom: 0;
+}
+
+.info-label {
+  font-size: 14px;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.info-value {
+  font-size: 14px;
+  color: #1f2937;
+  font-weight: 600;
+}
+
+.skills-match-modern {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.match-progress {
+  width: 100px;
+  height: 8px;
+  background: #e5e7eb;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.match-bar-modern {
+  height: 100%;
+  background: linear-gradient(90deg, #10b981, #059669);
+  border-radius: 4px;
+  transition: width 0.3s;
+}
+
+.match-text {
+  font-size: 12px;
+  font-weight: 600;
+  color: #059669;
+}
+
+.documents-section {
+  padding-top: 16px;
+  border-top: 1px solid #f3f4f6;
+}
+
+.document-item-modern {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #f9fafb;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+
+.document-icon-modern {
+  width: 20px;
+  height: 20px;
+  color: #6b7280;
+}
+
+.document-name-modern {
+  flex: 1;
+  font-size: 14px;
+  color: #374151;
+  font-weight: 500;
+}
+
+.download-btn-modern {
   background: none;
   border: none;
-  font-size: 18px;
-  cursor: pointer;
-  padding: 6px;
-  border-radius: 4px;
-  transition: all 0.2s;
   color: #2563eb;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.download-btn-modern:hover {
+  background: #eff6ff;
+}
+
+.download-icon-modern {
+  width: 18px;
+  height: 18px;
+}
+
+.card-actions-modern {
+  display: flex;
+  gap: 12px;
+  padding: 20px 24px;
+  border-top: 1px solid #f3f4f6;
+  background: #fafbfc;
+}
+
+.action-btn-secondary {
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  gap: 8px;
+  padding: 12px 16px;
+  background: white;
+  color: #374151;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
 }
 
-.action-icon:hover:not(.disabled) {
-  background: #eff6ff;
-  transform: scale(1.1);
+.action-btn-secondary:hover {
+  background: #f9fafb;
+  border-color: #9ca3af;
+  transform: translateY(-1px);
 }
 
-.action-icon.disabled {
-  color: #9ca3af;
-  cursor: not-allowed;
+.action-btn-decline {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.action-btn-decline:hover:not(.disabled) {
+  background: #fecaca;
+  border-color: #f87171;
+  transform: translateY(-1px);
+}
+
+.action-btn-accept {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.action-btn-accept:hover:not(.disabled) {
+  background: #bbf7d0;
+  border-color: #86efac;
+  transform: translateY(-1px);
+}
+
+.action-btn-decline.disabled,
+.action-btn-accept.disabled {
   opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
 }
 
+.action-icon-modern {
+  width: 18px;
+  height: 18px;
+}
+
+/* Responsive Design */
 @media (max-width: 1024px) {
-  .applications-table {
-    font-size: 12px;
+  .applications-grid-modern {
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
   }
-
-  .applications-table th,
-  .applications-table td {
-    padding: 10px 8px;
+  
+  .stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   }
-
-  .match-cell {
+  
+  .applications-controls {
     flex-direction: column;
-    align-items: flex-start;
-    gap: 6px;
+    align-items: stretch;
+    gap: 16px;
   }
-
-  .match-bar-wrapper {
-    width: 100%;
+  
+  .controls-left,
+  .controls-right {
+    justify-content: stretch;
+  }
+  
+  .search-wrapper {
+    min-width: unset;
   }
 }
 
 @media (max-width: 768px) {
-  .applications-filters {
+  .applications-layout {
+    padding: 16px;
+  }
+  
+  .applications-grid-modern {
+    grid-template-columns: 1fr;
+  }
+  
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .stat-card-modern {
+    padding: 20px;
+  }
+  
+  .card-actions-modern {
     flex-direction: column;
-    align-items: stretch;
+    gap: 8px;
   }
-
-  .filter-select,
-  .search-group {
-    width: 100%;
-    min-width: unset;
+  
+  .dashboard-title {
+    font-size: 24px;
   }
-
-  .applications-table-container {
-    overflow-x: scroll;
+  
+  .stat-number {
+    font-size: 28px;
   }
 }
 
@@ -6981,6 +8148,13 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
+.company-logo-large .logo-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 12px;
+}
+
 .company-details {
   flex: 1;
 }
@@ -7313,6 +8487,1458 @@ onUnmounted(() => {
 .contract-btn-reject:hover {
   background: #b91c1c;
 }
+
+/* Enhanced Internship Details Modal Styles */
+.internship-details-modal {
+  max-width: 900px;
+  width: 95vw;
+  max-height: 90vh;
+  overflow-y: auto;
+  border-radius: 20px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+}
+
+/* Enhanced Modal Header */
+.modal-header-enhanced {
+  background: linear-gradient(135deg, #f8fafc, #f1f5f9);
+  color: #1f2937;
+  padding: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.header-content {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex: 1;
+}
+
+.company-avatar {
+  width: 64px;
+  height: 64px;
+  background: #e5e7eb;
+  border: 2px solid #d1d5db;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  font-weight: 700;
+  color: #374151;
+}
+
+.company-avatar .avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 14px;
+}
+
+.header-info {
+  flex: 1;
+}
+
+.internship-title {
+  font-size: 28px;
+  font-weight: 700;
+  margin: 0 0 8px 0;
+  color: #1f2937;
+  line-height: 1.2;
+}
+
+.company-info {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.company-name {
+  font-size: 16px;
+  font-weight: 500;
+  color: #6b7280;
+}
+
+.status-badge {
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.status-badge.active {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-badge.draft {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-badge.closed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-badge {
+  padding: 6px 16px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: capitalize;
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid #d1d5db;
+}
+
+.modal-close-enhanced {
+  background: #f9fafb;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.modal-close-enhanced:hover {
+  background: #f3f4f6;
+  transform: scale(1.05);
+}
+
+.close-icon {
+  width: 24px;
+  height: 24px;
+  color: #374151;
+}
+
+/* Enhanced Modal Body */
+.modal-body-enhanced {
+  padding: 32px;
+  overflow-y: auto;
+  background: #fafbfc;
+  max-height: calc(90vh - 200px);
+}
+
+/* Key Information Grid */
+.key-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+.info-card {
+  background: white;
+  border-radius: 16px;
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e5e7eb;
+  transition: all 0.2s ease;
+}
+
+.info-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+}
+
+.info-card-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.info-card-icon.location {
+  background: #2563eb;
+  color: white;
+}
+
+.info-card-icon.duration {
+  background: #ec4899;
+  color: white;
+}
+
+/* Content Sections */
+.content-section-modern {
+  background: white;
+  border-radius: 16px;
+  padding: 24px;
+  margin-bottom: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e5e7eb;
+}
+
+.section-header-modern {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid #f3f4f6;
+}
+
+.section-icon-modern {
+  width: 20px;
+  height: 20px;
+  color: #2563eb;
+}
+
+.section-title-modern {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0;
+}
+
+/* Description Card */
+.description-card-modern {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.description-card-modern p {
+  font-size: 15px;
+  line-height: 1.6;
+  color: #374151;
+  margin: 0;
+}
+
+/* Allowance Card */
+.allowance-card-modern {
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: white;
+  border-radius: 12px;
+  padding: 24px;
+  text-align: center;
+}
+
+.allowance-amount-modern {
+  font-size: 28px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.allowance-label-modern {
+  font-size: 14px;
+  font-weight: 500;
+  opacity: 0.9;
+}
+
+/* Programs and Skills Grid */
+.programs-skills-grid-modern {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+/* Tags Container */
+.tags-container-modern {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.program-tag-modern {
+  background: #2563eb;
+  color: white;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  transition: all 0.2s ease;
+}
+
+.program-tag-modern:hover {
+  background: #1d4ed8;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
+}
+
+.skill-tag-modern {
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.skill-tag-modern:hover {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+  transform: translateY(-1px);
+}
+
+/* Contact Methods */
+.contact-methods-card-modern {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.contact-method-modern {
+  margin-bottom: 16px;
+}
+
+.contact-method-modern:last-child {
+  margin-bottom: 0;
+}
+
+.contact-item-modern {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: white;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+
+.contact-icon-modern {
+  width: 20px;
+  height: 20px;
+  color: #6b7280;
+}
+
+.contact-details-modern {
+  flex: 1;
+}
+
+.contact-type-modern {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.contact-value-modern {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1f2937;
+}
+
+/* Timeline Card */
+.timeline-card-modern {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.timeline-item-modern {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 0;
+}
+
+.timeline-item-modern:not(:last-child) {
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.timeline-dot-modern {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.timeline-dot-modern.created {
+  background: #10b981;
+}
+
+.timeline-dot-modern.updated {
+  background: #f59e0b;
+}
+
+.timeline-content-modern {
+  flex: 1;
+}
+
+.timeline-label-modern {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.timeline-value-modern {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1f2937;
+}
+
+/* Modal Footer */
+.modal-footer-modern {
+  padding: 24px 32px;
+  background: white;
+  border-top: 1px solid #e5e7eb;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.btn-edit-modern {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  background: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-edit-modern:hover {
+  background: #1d4ed8;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
+}
+
+.btn-icon-modern {
+  width: 18px;
+  height: 18px;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .internship-details-modal-modern {
+    width: 100vw;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+  }
+  
+  .modal-header-modern {
+    padding: 24px 20px;
+  }
+  
+  .modal-body-modern {
+    padding: 20px;
+  }
+  
+  .key-info-grid-modern {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  
+  .programs-skills-grid-modern {
+    grid-template-columns: 1fr;
+  }
+  
+  .internship-title-modern {
+    font-size: 24px;
+  }
+}
+
+.info-card-icon.type {
+  background: #06b6d4;
+  color: white;
+}
+
+.info-card-icon.slots {
+  background: #10b981;
+  color: white;
+}
+
+.info-card-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.info-card-content {
+  flex: 1;
+}
+
+.info-card-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.info-card-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f2937;
+  line-height: 1.2;
+}
+
+/* Content Sections */
+.content-section {
+  background: white;
+  border-radius: 16px;
+  padding: 24px;
+  margin-bottom: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e5e7eb;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid #f3f4f6;
+}
+
+.section-icon {
+  width: 20px;
+  height: 20px;
+  color: #2563eb;
+}
+
+.section-header h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0;
+}
+
+/* Description Card */
+.description-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.description-card p {
+  font-size: 15px;
+  line-height: 1.6;
+  color: #374151;
+  margin: 0;
+}
+
+/* Allowance Card */
+.allowance-card {
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: white;
+  border-radius: 12px;
+  padding: 24px;
+  text-align: center;
+}
+
+.allowance-amount {
+  font-size: 28px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.allowance-label {
+  font-size: 14px;
+  font-weight: 500;
+  opacity: 0.9;
+}
+
+/* Programs and Skills Grid */
+.programs-skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+/* Tags Container */
+.tags-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.program-tag-enhanced {
+  background: #2563eb;
+  color: white;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  transition: all 0.2s ease;
+}
+
+.program-tag-enhanced:hover {
+  background: #1d4ed8;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
+}
+
+.skill-tag-enhanced {
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.skill-tag-enhanced:hover {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+  transform: translateY(-1px);
+}
+
+/* Contact Methods */
+.contact-methods-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.contact-method {
+  margin-bottom: 16px;
+}
+
+.contact-method:last-child {
+  margin-bottom: 0;
+}
+
+.contact-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: white;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+
+.contact-icon {
+  width: 20px;
+  height: 20px;
+  color: #6b7280;
+}
+
+.contact-details {
+  flex: 1;
+}
+
+.contact-type {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.contact-value {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1f2937;
+}
+
+/* Timeline Card */
+.timeline-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.timeline-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 0;
+}
+
+.timeline-item:not(:last-child) {
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.timeline-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.timeline-dot.created {
+  background: #10b981;
+}
+
+.timeline-dot.updated {
+  background: #f59e0b;
+}
+
+.timeline-content {
+  flex: 1;
+}
+
+.timeline-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.timeline-value {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1f2937;
+}
+
+/* Allowance Card */
+.allowance-card {
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: white;
+  border-radius: 12px;
+  padding: 24px;
+  text-align: center;
+}
+
+.allowance-label {
+  font-size: 16px;
+  font-weight: 500;
+  opacity: 0.9;
+}
+
+/* Programs and Skills Grid */
+.programs-skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 24px;
+}
+
+/* Tags Container */
+.tags-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.program-tag-enhanced {
+  background: #2563eb;
+  color: white;
+  padding: 12px 20px;
+  border-radius: 25px;
+  font-size: 14px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.program-tag-enhanced:hover {
+  background: #1d4ed8;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
+}
+
+.skill-tag-enhanced {
+  background: #f3f4f6;
+  color: #374151;
+  border: 2px solid #e5e7eb;
+  padding: 10px 18px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.skill-tag-enhanced:hover {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+  transform: translateY(-1px);
+}
+
+/* Timeline Card */
+.timeline-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 24px;
+}
+
+.timeline-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 0;
+}
+
+.timeline-item:not(:last-child) {
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.timeline-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.timeline-dot.created {
+  background: #10b981;
+}
+
+.timeline-dot.updated {
+  background: #f59e0b;
+}
+
+.timeline-content {
+  flex: 1;
+}
+
+.timeline-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #6b7280;
+  margin-bottom: 4px;
+}
+
+.timeline-value {
+  font-size: 16px;
+  font-weight: 500;
+  color: #1f2937;
+}
+
+/* Contact Methods Card */
+.contact-methods-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.contact-method {
+  display: flex;
+  align-items: center;
+}
+
+.contact-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: white;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  width: 100%;
+  transition: all 0.2s ease;
+}
+
+.contact-item:hover {
+  border-color: #2563eb;
+  box-shadow: 0 2px 4px rgba(37, 99, 235, 0.1);
+}
+
+.contact-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  color: #2563eb;
+}
+
+.contact-details {
+  flex: 1;
+}
+
+.contact-type {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 2px;
+}
+
+.contact-value {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1f2937;
+  word-break: break-all;
+}
+
+.contact-item.email .contact-icon {
+  color: #dc2626;
+}
+
+.contact-item.social .contact-icon {
+  color: #7c3aed;
+}
+
+.contact-item.phone .contact-icon {
+  color: #059669;
+}
+
+/* Status Badge */
+.status-badge {
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.status-badge.active {
+  background: rgba(16, 185, 129, 0.1);
+  color: #065f46;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.status-badge.draft {
+  background: rgba(245, 158, 11, 0.1);
+  color: #92400e;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.status-badge.closed {
+  background: rgba(239, 68, 68, 0.1);
+  color: #991b1b;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* Enhanced Modal Footer */
+.modal-footer-enhanced {
+  background: white;
+  padding: 24px 40px;
+  border-top: 1px solid #e5e7eb;
+  display: flex;
+  justify-content: flex-end;
+  gap: 16px;
+}
+
+.btn-secondary-enhanced {
+  background: white;
+  color: #374151;
+  border: 1px solid #d1d5db;
+  padding: 14px 28px;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.btn-secondary-enhanced:hover {
+  background: #f9fafb;
+  border-color: #9ca3af;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.btn-secondary-enhanced .btn-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.btn-edit-enhanced {
+  background: #2563eb;
+  color: white !important;
+  border: none;
+  padding: 14px 28px;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.btn-edit-enhanced:hover {
+  background: #1d4ed8 !important;
+  color: white !important;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(37, 99, 235, 0.4);
+}
+
+.btn-edit-enhanced .btn-icon {
+  width: 18px;
+  height: 18px;
+  color: white !important;
+}
+
+/* Modal Overlay */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.modal-content {
+  background: white;
+  border-radius: 20px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  animation: modalSlideIn 0.3s ease-out;
+}
+
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .key-info-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .programs-skills-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .modal-body-enhanced {
+    padding: 24px;
+  }
+  
+  .modal-header-enhanced {
+    padding: 24px;
+  }
+  
+  .internship-title {
+    font-size: 24px;
+  }
+  
+  .company-avatar {
+    width: 56px;
+    height: 56px;
+    font-size: 20px;
+  }
+}
 </style>
+.modal-header-enhanced {
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  color: #1f2937;
+  padding: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 16px 16px 0 0;
+}
 
+.header-content {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
 
+.company-avatar {
+  width: 64px;
+  height: 64px;
+  background: rgba(255, 255, 255, 0.15);
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  font-weight: 700;
+  color: white;
+}
+
+.header-info {
+  flex: 1;
+}
+
+.internship-title {
+  font-size: 28px;
+  font-weight: 700;
+  margin: 0 0 8px 0;
+  color: #1f2937 !important;
+  line-height: 1.2;
+}
+
+.company-info {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.company-name {
+  font-size: 16px;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.modal-close-enhanced {
+  background: #f9fafb;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.modal-close-enhanced:hover {
+  background: #f3f4f6;
+  transform: scale(1.05);
+}
+
+.modal-body-enhanced {
+  padding: 32px;
+  background: #f8fafc;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.key-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 20px;
+  margin-bottom: 32px;
+}
+
+.info-card {
+  background: white;
+  border-radius: 16px;
+  padding: 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e2e8f0;
+  transition: all 0.3s ease;
+}
+
+.info-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px -8px rgba(0, 0, 0, 0.15);
+}
+
+.info-card-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.info-card-icon.location {
+  background: #2563eb;
+  color: white;
+}
+
+.info-card-icon.duration {
+  background: #059669;
+  color: white;
+}
+
+.info-card-icon.type {
+  background: #0891b2;
+  color: white;
+}
+
+.info-card-icon.slots {
+  background: #dc2626;
+  color: white;
+}
+
+.info-card-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.info-card-content {
+  flex: 1;
+}
+
+.info-card-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.info-card-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1e293b;
+  line-height: 1.2;
+}
+
+.content-section {
+  background: white;
+  border-radius: 16px;
+  padding: 28px;
+  margin-bottom: 24px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e2e8f0;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #f1f5f9;
+}
+
+.section-icon {
+  width: 24px;
+  height: 24px;
+  color: #2563eb;
+}
+
+.section-header h3 {
+  font-size: 20px;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 0;
+}
+
+.description-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 24px;
+}
+
+.description-card p {
+  font-size: 16px;
+  line-height: 1.7;
+  color: #475569;
+  margin: 0;
+}
+
+.allowance-card {
+  background: #059669;
+  color: white;
+  border-radius: 12px;
+  padding: 24px;
+  text-align: center;
+}
+
+.allowance-label {
+  font-size: 16px;
+  opacity: 0.9;
+  font-weight: 500;
+}
+
+.programs-skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.tags-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.program-tag-enhanced {
+  background: #2563eb;
+  color: white;
+  padding: 10px 18px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.3s ease;
+}
+
+.program-tag-enhanced:hover {
+  background: #1d4ed8;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px -8px rgba(37, 99, 235, 0.4);
+}
+
+.skill-tag-enhanced {
+  background: #f1f5f9;
+  color: #374151;
+  border: 1px solid #d1d5db;
+  padding: 8px 16px;
+  border-radius: 16px;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+
+.skill-tag-enhanced:hover {
+  background: #e5e7eb;
+  border-color: #9ca3af;
+  transform: translateY(-1px);
+}
+
+.timeline-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 24px;
+}
+
+.timeline-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 0;
+}
+
+.timeline-item:not(:last-child) {
+  border-bottom: 1px solid #e2e8f0;
+  margin-bottom: 12px;
+  padding-bottom: 24px;
+}
+
+.timeline-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.timeline-dot.created {
+  background: #10b981;
+}
+
+.timeline-dot.updated {
+  background: #f59e0b;
+}
+
+.timeline-content {
+  flex: 1;
+}
+
+.timeline-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.timeline-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.modal-footer-enhanced {
+  background: white;
+  border-top: 1px solid #e2e8f0;
+  padding: 24px 32px;
+  display: flex;
+  justify-content: flex-end;
+  border-radius: 0 0 16px 16px;
+}
+
+.btn-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* Responsive Design for Enhanced Modal */
+@media (max-width: 1024px) {
+  .key-info-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .programs-skills-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .modal-header-enhanced {
+    padding: 24px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+  }
+  
+  .header-content {
+    width: 100%;
+  }
+  
+  .company-avatar {
+    width: 48px;
+    height: 48px;
+    font-size: 18px;
+  }
+  
+  .internship-title {
+    font-size: 22px;
+  }
+  
+  .modal-body-enhanced {
+    padding: 20px;
+  }
+  
+  .key-info-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  
+  .info-card {
+    padding: 20px;
+  }
+  
+  .content-section {
+    padding: 20px;
+  }
+  
+  .modal-footer-enhanced {
+    padding: 20px;
+  }
+  
+  .btn-edit-enhanced {
+    width: 100%;
+    justify-content: center;
+  }
+}

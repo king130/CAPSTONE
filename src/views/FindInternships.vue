@@ -1,13 +1,26 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
-import { RouterLink } from 'vue-router'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { RouterLink, useRouter } from 'vue-router'
 import Navbar from '@/components/Navbar.vue'
 import { subscribeActiveInternships, type InternshipRecord } from '@/services/internships'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
+const router = useRouter()
 
 const internships = ref<Array<InternshipRecord & { logo?: string; match?: number; company?: string; skills?: string[] }>>([])
 let unsub: (() => void) | null = null
 
+// Check if user is a school - schools should not see Quick Apply buttons
+const isSchoolUser = computed(() => authStore.user?.role === 'school')
+
 onMounted(() => {
+  // Redirect schools to their dashboard since they shouldn't be on this page
+  if (authStore.user?.role === 'school') {
+    router.replace('/school')
+    return
+  }
+
   unsub = subscribeActiveInternships((items) => {
     internships.value = items.map((i) => ({
       ...i,
@@ -95,8 +108,11 @@ onUnmounted(() => {
               </span>
             </div>
 
-            <div class="card-actions">
+            <div class="card-actions" v-if="!isSchoolUser">
               <button class="btn-quick-apply">Quick Apply</button>
+              <button class="btn-view-details">View Details</button>
+            </div>
+            <div class="card-actions" v-else>
               <button class="btn-view-details">View Details</button>
             </div>
           </div>

@@ -1,5 +1,6 @@
 ﻿<script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
+import type { Component } from 'vue'
 import { useRouter } from 'vue-router'
 import SchoolSidebar from '../../components/SchoolSidebar.vue'
 import SchoolSettings from '../../components/SchoolSettings.vue'
@@ -9,6 +10,7 @@ import { useAuthStore } from '@/stores/auth'
 import { subscribeSchoolStudents, addSchoolStudent, removeSchoolStudent, type SchoolStudentRecord } from '@/services/schoolStudents'
 import { subscribeSchoolContracts, createContractRequest, cancelContract, type ContractRecord } from '@/services/contracts'
 import { ensurePublicProfile, listPublicProfiles, subscribePublicProfiles, type PublicProfile } from '@/services/profilesPublic'
+import { saveSchoolPrograms, getSchoolPrograms } from '@/services/schoolPrograms'
 import Swal from 'sweetalert2'
 import {
   BellIcon,
@@ -44,6 +46,7 @@ import {
   ChatBubbleLeftIcon,
   ArrowPathRoundedSquareIcon,
   ClockIcon,
+  ChevronRightIcon,
 } from '@heroicons/vue/24/outline'
 
 const authStore = useAuthStore()
@@ -63,6 +66,13 @@ const schoolDomain = computed(() => {
 
 const currentView = ref('dashboard')
 const activeSettingsTab = ref('account')
+const contractCompanySearch = ref('')
+
+const sidebarActiveItem = computed(() => {
+  // Map sub-views back to their sidebar parent for highlighting
+  if (currentView.value === 'contracts-select') return 'contracts'
+  return currentView.value
+})
 
 const router = useRouter()
 const handleMenuClick = (item: string) => {
@@ -70,7 +80,17 @@ const handleMenuClick = (item: string) => {
     router.push('/profile')
     return
   }
+  if (item === 'contracts') {
+    resetSchoolContractForm()
+    contractCompanySearch.value = ''
+    currentView.value = 'contracts-select'
+    return
+  }
   currentView.value = item
+}
+
+function goBackToContractCompanies() {
+  currentView.value = 'contracts-select'
 }
 
 const setActiveSettingsTab = (tab: string) => {
@@ -180,6 +200,55 @@ const approvalRemarks = ref('')
 const showCompanySidebar = ref(false)
 const selectedCompany = ref<any>(null)
 const activeCompanyTab = ref('general')
+
+type ContractTypeOption = {
+  value: string
+  title: string
+  badge: string
+  description: string
+  icon: Component
+}
+
+const contractTypeOptions: ContractTypeOption[] = [
+  {
+    value: 'Memorandum of Agreement (MOA) for OJT Internship',
+    title: 'OJT Internship Contract',
+    badge: 'Standard',
+    description: 'Standard on-the-job training contract for student interns.',
+    icon: ClipboardDocumentListIcon,
+  },
+  {
+    value: 'Pre-OJT Agreement',
+    title: 'Pre-OJT Agreement',
+    badge: 'Preparation',
+    description: 'Agreement before the start of the OJT program.',
+    icon: CalendarIcon,
+  },
+  {
+    value: 'OJT Completion Contract',
+    title: 'OJT Completion Contract',
+    badge: 'Finalization',
+    description: 'Contract for completing OJT requirements.',
+    icon: CheckCircleIcon,
+  },
+  {
+    value: 'Extended OJT Contract',
+    title: 'Extended OJT Contract',
+    badge: 'Extension',
+    description: 'Extension for ongoing OJT internship period.',
+    icon: ClockIcon,
+  },
+  {
+    value: 'Partnership Agreement',
+    title: 'Partnership Agreement',
+    badge: 'Institution',
+    description: 'Company–university partnership for the OJT program.',
+    icon: HandThumbUpIcon,
+  },
+]
+
+const showContractTypeModal = ref(false)
+const selectedContractType = ref<string>('')
 
 // Submit Report Modal state
 const showSubmitReportModal = ref(false)
@@ -519,6 +588,246 @@ function setActiveCompanyTab(tab: string) {
   activeCompanyTab.value = tab
 }
 
+function openReviewModal(internshipId: string) {
+  currentReviewInternship.value = internshipId
+  // Load default values from the school's program settings
+  const programHours: Record<string, number> = {}
+  Object.keys(defaultProgramHours.value).forEach(program => {
+    // Use short form for the review modal
+    const shortForm = program.match(/\(([^)]+)\)$/)?.[1] || program
+    const hours = defaultProgramHours.value[program]
+    if (typeof hours === 'number') {
+      programHours[shortForm] = hours
+    }
+  })
+  
+  reviewFormData.value = {
+    programHours,
+    eligiblePrograms: Object.keys(programHours).slice(0, 2), // Default to first 2 programs
+    minimumGPA: '2.5',
+    yearLevels: ['3rd Year', '4th Year'],
+    requiredDocuments: ['Resume/CV', 'Transcript of Records'],
+    additionalRequirements: '',
+    approvalNotes: ''
+  }
+  showInternshipReviewModal.value = true
+}
+
+function closeReviewModal() {
+  showInternshipReviewModal.value = false
+  currentReviewInternship.value = null
+}
+
+async function approveInternshipWithRequirements() {
+  // Here you would save the requirements and approve the internship
+  console.log('Approving internship with requirements:', reviewFormData.value)
+  
+  await Swal.fire({
+    icon: 'success',
+    title: 'Internship Approved',
+    text: 'The internship has been approved with your specified requirements.',
+    confirmButtonColor: '#2563eb'
+  })
+  
+  closeReviewModal()
+}
+
+async function quickApprove(internshipId: string) {
+  const result = await Swal.fire({
+    icon: 'question',
+    title: 'Quick Approve',
+    text: 'This will approve the internship with default requirements. Continue?',
+    showCancelButton: true,
+    confirmButtonText: 'Yes, Approve',
+    confirmButtonColor: '#059669'
+  })
+  
+  if (result.isConfirmed) {
+    await Swal.fire({
+      icon: 'success',
+      title: 'Approved',
+      text: 'Internship approved with default requirements.',
+      confirmButtonColor: '#2563eb'
+    })
+  }
+}
+
+async function saveProgramHours() {
+  savingProgramHours.value = true
+  
+  try {
+    const uid = authStore.user?.uid
+    
+    if (!uid) {
+      throw new Error('User not authenticated - no UID available')
+    }
+    
+    if (!schoolName.value) {
+      throw new Error('School name is required but not available')
+    }
+    
+    if (!defaultProgramHours.value || Object.keys(defaultProgramHours.value).length === 0) {
+      throw new Error('No programs to save')
+    }
+    
+    // Save to the backend
+    await saveSchoolPrograms(uid, schoolName.value, defaultProgramHours.value)
+    
+    await Swal.fire({
+      icon: 'success',
+      title: 'Program Hours Saved',
+      text: 'Default program hours have been updated successfully.',
+      confirmButtonColor: '#2563eb'
+    })
+  } catch (error) {
+    console.error('Error saving program hours:', error)
+    
+    await Swal.fire({
+      icon: 'error',
+      title: 'Save Failed',
+      text: `Could not save program hours. Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      confirmButtonColor: '#2563eb'
+    })
+  } finally {
+    savingProgramHours.value = false
+  }
+}
+
+function openAddProgramModal() {
+  newProgramName.value = ''
+  newProgramHours.value = 400
+  showAddProgramModal.value = true
+}
+
+function closeAddProgramModal() {
+  showAddProgramModal.value = false
+  newProgramName.value = ''
+  newProgramHours.value = 400
+}
+
+async function addNewProgram() {
+  const programName = newProgramName.value.trim()
+  
+  if (!programName) {
+    await Swal.fire({
+      icon: 'warning',
+      title: 'Program Name Required',
+      text: 'Please enter a program name.',
+      confirmButtonColor: '#2563eb'
+    })
+    return
+  }
+  
+  if (defaultProgramHours.value[programName]) {
+    await Swal.fire({
+      icon: 'warning',
+      title: 'Program Already Exists',
+      text: 'This program already exists in the list.',
+      confirmButtonColor: '#2563eb'
+    })
+    return
+  }
+  
+  if (newProgramHours.value < 1) {
+    await Swal.fire({
+      icon: 'warning',
+      title: 'Invalid Hours',
+      text: 'Program hours must be at least 1.',
+      confirmButtonColor: '#2563eb'
+    })
+    return
+  }
+  
+  // Add the new program
+  defaultProgramHours.value[programName] = newProgramHours.value
+  
+  // Automatically save after adding
+  try {
+    const uid = authStore.user?.uid
+    if (uid) {
+      await saveSchoolPrograms(uid, schoolName.value, defaultProgramHours.value)
+    }
+    
+    await Swal.fire({
+      icon: 'success',
+      title: 'Program Added',
+      text: `${programName} has been added with ${newProgramHours.value} hours and saved.`,
+      confirmButtonColor: '#2563eb'
+    })
+  } catch (error) {
+    console.error('Error saving after adding program:', error)
+    await Swal.fire({
+      icon: 'warning',
+      title: 'Program Added',
+      text: `${programName} has been added but not saved. Please click "Save Program Hours" to persist changes.`,
+      confirmButtonColor: '#2563eb'
+    })
+  }
+  
+  closeAddProgramModal()
+}
+
+async function removeProgram(programName: string) {
+  const result = await Swal.fire({
+    icon: 'warning',
+    title: 'Remove Program?',
+    text: `Are you sure you want to remove "${programName}" from the list?`,
+    showCancelButton: true,
+    confirmButtonText: 'Yes, Remove',
+    confirmButtonColor: '#dc2626',
+    cancelButtonText: 'Cancel'
+  })
+  
+  if (result.isConfirmed) {
+    delete defaultProgramHours.value[programName]
+    
+    // Automatically save after removing
+    try {
+      const uid = authStore.user?.uid
+      if (uid) {
+        await saveSchoolPrograms(uid, schoolName.value, defaultProgramHours.value)
+      }
+      
+      await Swal.fire({
+        icon: 'success',
+        title: 'Program Removed',
+        text: `${programName} has been removed and changes saved.`,
+        confirmButtonColor: '#2563eb'
+      })
+    } catch (error) {
+      console.error('Error saving after removing program:', error)
+      await Swal.fire({
+        icon: 'warning',
+        title: 'Program Removed',
+        text: `${programName} has been removed but changes not saved. Please click "Save Program Hours".`,
+        confirmButtonColor: '#2563eb'
+      })
+    }
+  }
+}
+
+async function loadExistingPrograms() {
+  const uid = authStore.user?.uid
+  if (!uid) {
+    console.log('No user ID available for loading programs')
+    return
+  }
+  
+  try {
+    console.log('Loading existing programs for user:', uid)
+    const schoolPrograms = await getSchoolPrograms(uid)
+    if (schoolPrograms && schoolPrograms.programs) {
+      console.log('Loaded programs:', schoolPrograms.programs)
+      defaultProgramHours.value = { ...schoolPrograms.programs }
+    } else {
+      console.log('No existing programs found, using defaults')
+      // Keep the default programs if no saved programs exist
+    }
+  } catch (error) {
+    console.error('Error loading existing programs:', error)
+  }
+}
+
 // Dashboard stats
 const dashboardStats = ref({
   ojtHours: { current: 245, total: 400, remaining: 155 },
@@ -792,11 +1101,82 @@ const newStudentId = ref('')
 const newStudentCourse = ref('')
 const newStudentYearLevel = ref('')
 const addingStudentEmail = ref(false)
+const yearLevelOptions = ['1st Year', '2nd Year', '3rd Year', '4th Year', '5th Year']
 
-// Initialize the domain field with the school's domain
-watch(schoolDomain, (newDomain) => {
-  newStudentEmailDomain.value = newDomain
-}, { immediate: true })
+// Internship review modal state
+const showInternshipReviewModal = ref(false)
+const currentReviewInternship = ref<string | null>(null)
+const reviewFormData = ref({
+  programHours: {} as Record<string, number>,
+  eligiblePrograms: [] as string[],
+  minimumGPA: '',
+  yearLevels: [] as string[],
+  requiredDocuments: [] as string[],
+  additionalRequirements: '',
+  approvalNotes: ''
+})
+
+// Default program hours management
+const defaultProgramHours = ref<Record<string, number>>({
+  'BS Information Technology (BSIT)': 400,
+  'BS Computer Science (BSCS)': 400,
+  'BS Electronics and Communications Engineering (BSECE)': 300,
+  'BS Education (BSED)': 200
+})
+
+// Add new program state
+const showAddProgramModal = ref(false)
+const newProgramName = ref('')
+const newProgramHours = ref(400)
+const savingProgramHours = ref(false)
+
+// Watch for authentication changes to load programs
+watch(
+  () => [authStore.initializing, authStore.user?.uid] as const,
+  () => {
+    if (!authStore.initializing && authStore.user?.uid) {
+      loadExistingPrograms()
+    }
+  },
+  { immediate: true }
+)
+const availablePrograms = ref([
+  'BS Computer Science',
+  'BS Information Technology',
+  'BS Computer Engineering',
+  'BS Electronics Engineering',
+  'BS Electrical Engineering',
+  'BS Mechanical Engineering',
+  'BS Civil Engineering',
+  'BS Industrial Engineering',
+  'BS Business Administration',
+  'BS Accountancy',
+  'BS Marketing',
+  'BS Psychology',
+  'BS Education',
+  'BS Nursing',
+  'BS Architecture',
+  'BS Mathematics',
+  'BS Physics',
+  'BS Chemistry',
+  'BS Biology',
+  'Other'
+])
+
+function normalizeEmailDomain(value: string): string {
+  const trimmed = value.trim().replace(/\s+/g, '')
+  if (!trimmed) return ''
+  return trimmed.startsWith('@') ? trimmed : `@${trimmed}`
+}
+
+// Initialize the domain field with the school's domain (but don't override manual edits)
+watch(
+  schoolDomain,
+  (newDomain) => {
+    if (!newStudentEmailDomain.value) newStudentEmailDomain.value = newDomain
+  },
+  { immediate: true }
+)
 const importingStudentEmails = ref(false)
 const bulkStudentFileInput = ref<HTMLInputElement | null>(null)
 
@@ -811,7 +1191,7 @@ function sanitizeNamePart(value: string) {
 const generatedStudentEmail = computed(() => {
   const first = sanitizeNamePart(newStudentFirstName.value)
   const last = sanitizeNamePart(newStudentLastName.value)
-  const domain = schoolDomain.value
+  const domain = normalizeEmailDomain(newStudentEmailDomain.value)
   
   if (!first || !last || !domain || domain === '@') return ''
   return `${last}.${first}${domain}`
@@ -823,12 +1203,6 @@ const generatedStudentFullName = computed(() => {
   if (!first || !last) return ''
   return `${first} ${last}`
 })
-
-function generateDefaultStudentPassword(studentName?: string) {
-  const base = sanitizeNamePart(studentName || '').slice(0, 8) || 'student'
-  const suffix = Math.floor(1000 + Math.random() * 9000)
-  return `${base}@${suffix}`
-}
 
 async function copyToClipboard(text: string, label: string) {
   if (!text) return
@@ -1034,12 +1408,10 @@ async function importStudentsFromFile(event: Event) {
       }
 
       const studentName = `${firstName} ${lastName}`.trim()
-      const defaultPassword = generateDefaultStudentPassword(studentName)
 
       await addSchoolStudent(uid, email, {
         studentName,
         studentNumber: studentNumberIdx >= 0 ? (row[studentNumberIdx] || '').trim() || undefined : undefined,
-        defaultPassword,
         course: courseIdx >= 0 ? (row[courseIdx] || '').trim() || undefined : undefined,
         yearLevel: yearLevelIdx >= 0 ? (row[yearLevelIdx] || '').trim() || undefined : undefined,
       })
@@ -1140,16 +1512,110 @@ function removeContractCourse(course: string) {
   delete contractCourseSlots.value[course]
 }
 
+function companyDisplayLabel(company: PublicProfile): string {
+  return String(company.orgName || company.displayName || company.email || company.uid || 'Company')
+}
+
+function companyInitials(company: PublicProfile): string {
+  const base = String(company.orgName || company.displayName || company.email || company.uid || '').trim()
+  if (!base) return 'CO'
+  const parts = base
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+  const first = parts[0] || ''
+  const second = parts[1] || ''
+  if (!second) return first.slice(0, 2).toUpperCase() || 'CO'
+  return ((first[0] || '') + (second[0] || '')).toUpperCase() || 'CO'
+}
+
+function hashToHue(input: string): number {
+  let hash = 0
+  for (let i = 0; i < input.length; i++) {
+    hash = (hash * 31 + input.charCodeAt(i)) | 0
+  }
+  return Math.abs(hash) % 360
+}
+
+function companyLogoStyle(company: PublicProfile): Record<string, string> {
+  // Use curated brand-aligned palettes (keeps the look consistent with the system UI).
+  const palettes = [
+    { a: '#2563eb', b: '#1e40af', c: '#93c5fd' }, // blue
+    { a: '#1d4ed8', b: '#1e3a8a', c: '#60a5fa' }, // deep blue
+    { a: '#4f46e5', b: '#312e81', c: '#a5b4fc' }, // indigo
+    { a: '#0ea5e9', b: '#0369a1', c: '#67e8f9' }, // sky
+    { a: '#10b981', b: '#047857', c: '#6ee7b7' }, // emerald
+  ]
+
+  const seed = String(company.uid || company.email || company.orgName || company.displayName || 'company')
+  const idx = hashToHue(seed) % palettes.length
+  const p = palettes[idx]!
+  return {
+    '--logo-a': p.a,
+    '--logo-b': p.b,
+    '--logo-c': p.c,
+    background: `linear-gradient(135deg, ${p.a}, ${p.b})`,
+  }
+}
+
+const filteredContractCompanies = computed(() => {
+  const query = contractCompanySearch.value.trim().toLowerCase()
+  const list = companiesForContract.value.slice()
+
+  const filtered = query
+    ? list.filter((c) => {
+        const label = companyDisplayLabel(c).toLowerCase()
+        const email = (c.email || '').toLowerCase()
+        return label.includes(query) || email.includes(query)
+      })
+    : list
+
+  return filtered.sort((a, b) => companyDisplayLabel(a).localeCompare(companyDisplayLabel(b)))
+})
+
+function applySelectedCompanyForContract(company: PublicProfile) {
+  schoolContractForm.value.companyId = company.uid
+  const label = companyDisplayLabel(company)
+  schoolContractForm.value.companyName = label
+  schoolContractForm.value.companyContactName = label
+  schoolContractForm.value.companyContactEmail = company.email || ''
+}
+
 function onSchoolContractCompanySelect(e: Event) {
   const target = e.target as HTMLSelectElement
   const id = target.value
   const company = companiesForContract.value.find((c) => c.uid === id)
   if (!company) return
-  schoolContractForm.value.companyId = company.uid
-  const label = company.orgName || company.displayName || company.email || 'Company'
-  schoolContractForm.value.companyName = label
-  schoolContractForm.value.companyContactName = label
-  schoolContractForm.value.companyContactEmail = company.email || ''
+  applySelectedCompanyForContract(company)
+  selectedContractType.value = schoolContractForm.value.contractType || contractTypeOptions[0]!.value
+  showContractTypeModal.value = true
+}
+
+function selectContractCompany(company: PublicProfile) {
+  applySelectedCompanyForContract(company)
+  currentView.value = 'contracts'
+  selectedContractType.value = schoolContractForm.value.contractType || contractTypeOptions[0]!.value
+  showContractTypeModal.value = true
+}
+
+function openContractTypeModal() {
+  selectedContractType.value = schoolContractForm.value.contractType || contractTypeOptions[0]!.value
+  showContractTypeModal.value = true
+}
+
+function cancelContractTypeModal() {
+  showContractTypeModal.value = false
+}
+
+function confirmContractTypeModal() {
+  const chosen = selectedContractType.value || contractTypeOptions[0]!.value
+  schoolContractForm.value.contractType = chosen
+  showContractTypeModal.value = false
+}
+
+function changeCompanyFromContractTypeModal() {
+  resetSchoolContractForm()
+  currentView.value = 'contracts-select'
 }
 
 function triggerContractFileInput() {
@@ -1197,6 +1663,8 @@ function resetSchoolContractForm() {
   contractFiles.value = []
   selectedContractCourses.value = []
   contractCourseSlots.value = {}
+  showContractTypeModal.value = false
+  selectedContractType.value = ''
 }
 
 const selectedCompanyHasPendingContract = computed(() => {
@@ -1491,11 +1959,9 @@ async function addStudentEmail() {
   if (!uid || !email) return
   addingStudentEmail.value = true
   try {
-    const defaultPassword = generateDefaultStudentPassword(generatedStudentFullName.value || email)
     await addSchoolStudent(uid, email, {
       studentName: generatedStudentFullName.value || undefined,
       studentNumber: newStudentId.value.trim() || undefined,
-      defaultPassword,
       course: newStudentCourse.value.trim() || undefined,
       yearLevel: newStudentYearLevel.value.trim() || undefined,
     })
@@ -1504,8 +1970,7 @@ async function addStudentEmail() {
       title: 'Student Email Added',
       html: `<div style="text-align:left">` +
         `<p><strong>Email:</strong> ${email}</p>` +
-        `<p><strong>Default Password:</strong> ${defaultPassword}</p>` +
-        `<p style="margin-top:8px">Share these credentials with the student.</p>` +
+        `<p style="margin-top:8px">Student can now register with this email address.</p>` +
       `</div>`,
       confirmButtonColor: '#2563eb',
     })
@@ -1555,7 +2020,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
 <template>
   <div class="dashboard">
     <!-- School Sidebar Component -->
-    <SchoolSidebar :activeItem="currentView" @menuClick="handleMenuClick" />
+    <SchoolSidebar :activeItem="sidebarActiveItem" @menuClick="handleMenuClick" />
 
     <!-- Main Content Area -->
     <div class="main-wrapper">
@@ -1735,6 +2200,186 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
         </main>
       </div>
 
+      <!-- Internship Requirements Management -->
+      <div v-else-if="currentView === 'internship-requirements'">
+        <header class="top-header">
+          <div class="header-left">
+            <img src="/icons/icon-internship.png" alt="Internship Requirements" class="header-icon-img" />
+            <h1>Internship Requirements</h1>
+          </div>
+          <div class="header-right">
+            <BellIcon class="notification-icon-bell" />
+            <span class="school-name">{{ schoolName }}</span>
+            <div class="avatar">AC</div>
+          </div>
+        </header>
+        <main class="main-content">
+          <div class="requirements-layout">
+            <!-- Default Requirements Settings -->
+            <div class="requirements-main">
+              <div class="section-header">
+                <h2>Default Internship Requirements</h2>
+                <p class="section-subtitle">Set default hours and program requirements that will be applied to approved internships</p>
+              </div>
+
+              <!-- Program Hours Configuration -->
+              <div class="requirements-card">
+                <div class="card-header">
+                  <h3>Required Completion Hours by Program</h3>
+                  <p class="card-description">Set the minimum hours students from each program must complete</p>
+                </div>
+                <div class="card-content">
+                  <div class="program-hours-list">
+                    <div v-for="(hours, program) in defaultProgramHours" :key="program" class="program-hours-row">
+                      <div class="program-name">{{ program }}</div>
+                      <div class="hours-input-group">
+                        <input 
+                          type="number" 
+                          min="1" 
+                          step="1" 
+                          v-model.number="defaultProgramHours[program]" 
+                          class="form-input" 
+                        />
+                        <span class="input-suffix">hours</span>
+                        <button 
+                          class="btn-remove-program" 
+                          @click="removeProgram(program)"
+                          title="Remove Program"
+                        >
+                          <TrashIcon class="remove-icon" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="card-actions">
+                    <button 
+                      class="btn-primary" 
+                      @click="saveProgramHours"
+                      :disabled="savingProgramHours"
+                    >
+                      <span v-if="savingProgramHours">Saving...</span>
+                      <span v-else>Save Program Hours</span>
+                    </button>
+                    <button class="btn-secondary" @click="openAddProgramModal">Add New Program</button>
+                    <button class="btn-secondary" @click="loadExistingPrograms">Reload Programs</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Program Eligibility Settings -->
+              
+              <!-- Additional Requirements -->
+              <div class="requirements-card">
+                <div class="card-header">
+                  <h3>Additional Requirements</h3>
+                  <p class="card-description">Set additional requirements that apply to all internships</p>
+                </div>
+                <div class="card-content">
+
+                  <div class="form-group">
+                    <label class="form-label">Year Level Requirements</label>
+                    <div class="checkbox-group">
+                      <label class="checkbox-label">
+                        <input type="checkbox" />
+                        <span>1st Year</span>
+                      </label>
+                      <label class="checkbox-label">
+                        <input type="checkbox" />
+                        <span>2nd Year</span>
+                      </label>
+                      <label class="checkbox-label">
+                        <input type="checkbox" checked />
+                        <span>3rd Year</span>
+                      </label>
+                      <label class="checkbox-label">
+                        <input type="checkbox" checked />
+                        <span>4th Year</span>
+                      </label>
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Required Documents</label>
+                    <div class="checkbox-group">
+                      <label class="checkbox-label">
+                        <input type="checkbox" checked />
+                        <span>Resume/CV</span>
+                      </label>
+                      <label class="checkbox-label">
+                        <input type="checkbox" checked />
+                        <span>Transcript of Records</span>
+                      </label>
+                      <label class="checkbox-label">
+                        <input type="checkbox" />
+                        <span>Portfolio (for design/creative roles)</span>
+                      </label>
+                      <label class="checkbox-label">
+                        <input type="checkbox" />
+                        <span>Recommendation Letter</span>
+                      </label>
+                    </div>
+                  </div>
+                  <div class="card-actions">
+                    <button class="btn-primary">Save Additional Requirements</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right Sidebar -->
+            <div class="requirements-sidebar">
+              <!-- Quick Stats -->
+              <div class="sidebar-section">
+                <h3>Current Statistics</h3>
+                <div class="stats-list">
+                  <div class="stat-item">
+                    <span class="stat-label">Active Internships</span>
+                    <span class="stat-value">24</span>
+                  </div>
+                  <div class="stat-item">
+                    <span class="stat-label">Programs Covered</span>
+                    <span class="stat-value">{{ Object.keys(defaultProgramHours).length }}</span>
+                  </div>
+                  <div class="stat-item">
+                    <span class="stat-label">Average Hours</span>
+                    <span class="stat-value">{{ Object.keys(defaultProgramHours).length > 0 ? Math.round(Object.values(defaultProgramHours).reduce((a, b) => a + b, 0) / Object.keys(defaultProgramHours).length) : 0 }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Recent Changes -->
+              <div class="sidebar-section">
+                <h3>Recent Changes</h3>
+                <div class="activity-feed">
+                  <div class="activity-item">
+                    <span class="activity-text">Updated BSIT hours to 400</span>
+                    <span class="activity-time">2 days ago</span>
+                  </div>
+                  <div class="activity-item">
+                    <span class="activity-text">Added portfolio requirement</span>
+                    <span class="activity-time">1 week ago</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Help & Guidelines -->
+              <div class="sidebar-section">
+                <h3>Guidelines</h3>
+                <div class="help-content">
+                  <p class="help-text">
+                    <InformationCircleIcon class="help-icon" />
+                    Set realistic hour requirements based on your curriculum and industry standards.
+                  </p>
+                  <p class="help-text">
+                    <InformationCircleIcon class="help-icon" />
+                    Program eligibility helps companies understand which students are suitable for their internships.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+
       <!-- Other Views (Placeholder) -->
       <div v-else-if="currentView === 'internship-post'">
         <header class="top-header">
@@ -1832,8 +2477,8 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                   </div>
 
                   <div class="post-actions">
-                    <button class="btn-approve">Review Posting</button>
-                    <button class="btn-secondary-action">Quick Approve</button>
+                    <button class="btn-approve" @click="openReviewModal('techstart-fullstack')">Review Posting</button>
+                    <button class="btn-secondary-action" @click="quickApprove('techstart-fullstack')">Quick Approve</button>
                   </div>
                 </div>
 
@@ -2533,9 +3178,71 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           </div>
       </div>
 
+      <div v-else-if="currentView === 'contracts-select'">
+        <header class="top-header">
+          <div class="header-left">
+            <img src="/icons/icon-docs.png" alt="Contracts" class="header-icon-img" />
+            <h1>Select a Company</h1>
+          </div>
+          <div class="header-right">
+            <BellIcon class="notification-icon-bell" />
+            <span class="school-name">{{ schoolName }}</span>
+            <div class="avatar">AC</div>
+          </div>
+        </header>
+        <main class="main-content">
+          <div class="student-emails-section">
+            <h2 class="section-title">Choose a Company</h2>
+            <p class="section-subtitle">Pick a company logo to continue to the contract request form.</p>
+
+            <div class="section-card">
+              <div class="contracts-select-search">
+                <input
+                  v-model="contractCompanySearch"
+                  type="text"
+                  class="form-input"
+                  placeholder="Search company name or email..."
+                />
+              </div>
+
+              <div v-if="filteredContractCompanies.length === 0" class="empty-state" style="margin-top: 16px;">
+                No companies found.
+              </div>
+
+              <div v-else class="contracts-company-list">
+                <button
+                  v-for="c in filteredContractCompanies"
+                  :key="c.uid"
+                  type="button"
+                  class="contracts-company-row"
+                  @click="selectContractCompany(c)"
+                >
+                  <div class="contracts-company-icon" :style="companyLogoStyle(c)">
+                    <span class="contracts-company-initials">{{ companyInitials(c) }}</span>
+                  </div>
+                  <div class="contracts-company-meta">
+                    <div class="contracts-company-name">{{ companyDisplayLabel(c) }}</div>
+                    <div v-if="c.email" class="contracts-company-sub">{{ c.email }}</div>
+                  </div>
+                  <ChevronRightIcon class="contracts-company-chevron" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+
       <div v-else-if="currentView === 'contracts'">
         <header class="top-header">
           <div class="header-left">
+            <button
+              type="button"
+              class="contracts-back-btn"
+              aria-label="Back to company selection"
+              @click="goBackToContractCompanies"
+            >
+              <span class="contracts-back-arrow" aria-hidden="true">←</span>
+            </button>
             <img src="/icons/icon-docs.png" alt="Contracts" class="header-icon-img" />
             <h1>School Contract Requests</h1>
           </div>
@@ -2555,7 +3262,12 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                 <div class="form-row">
                   <div class="form-group">
                     <label>Select Company <span class="required">*</span></label>
-                    <select v-model="schoolContractForm.companyId" class="form-input" @change="onSchoolContractCompanySelect">
+                    <select
+                      v-model="schoolContractForm.companyId"
+                      class="form-input"
+                      :disabled="!!schoolContractForm.companyId"
+                      @change="onSchoolContractCompanySelect"
+                    >
                       <option value="">-- Select Company --</option>
                       <option v-for="c in companiesForContract" :key="c.uid" :value="c.uid">{{ c.orgName || c.displayName || c.email || c.uid }}</option>
                     </select>
@@ -2565,7 +3277,10 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                   </div>
                   <div class="form-group">
                     <label>Contract Type</label>
-                    <input v-model="schoolContractForm.contractType" type="text" class="form-input" />
+                    <div class="contract-type-input-row">
+                      <input v-model="schoolContractForm.contractType" type="text" class="form-input" readonly />
+                      <button type="button" class="contract-type-change-btn" @click="openContractTypeModal">Change</button>
+                    </div>
                   </div>
                   <div class="form-group">
                     <label>MOA Reference No.</label>
@@ -3555,21 +4270,21 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <div class="student-emails-section">
             <div class="section-card">
               <h2 class="section-title">Generate Student School Email</h2>
-              <p class="section-subtitle">Enter first name, last name, and school domain. The system will auto-generate the student email using the format lastname.firstname@domain.</p>
+              <p class="section-subtitle">Enter student details manually. The system will auto-generate the student email using the format lastname.firstname@domain.</p>
               <div class="add-student-form">
                 <div class="form-row">
                   <div class="form-group">
                     <label>First Name</label>
-                    <input v-model="newStudentFirstName" type="text" placeholder="Airhon King" class="form-input" />
+                    <input v-model="newStudentFirstName" type="text" placeholder="Enter first name" class="form-input" />
                   </div>
                   <div class="form-group">
                     <label>Last Name</label>
-                    <input v-model="newStudentLastName" type="text" placeholder="Beron" class="form-input" />
+                    <input v-model="newStudentLastName" type="text" placeholder="Enter last name" class="form-input" />
                   </div>
                   <div class="form-group">
                     <label>School Email Domain</label>
-                    <input :value="schoolDomain" type="text" class="form-input" readonly title="Auto-populated from your school account" />
-                    <small class="field-note">Auto-populated from your school account</small>
+                    <input v-model="newStudentEmailDomain" type="text" class="form-input" placeholder="@cvsu.edu.ph" />
+                    <small class="field-note">Enter your school email domain (with or without @)</small>
                   </div>
                 </div>
                 <div class="form-row">
@@ -3582,12 +4297,20 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                     <input v-model="newStudentId" type="text" placeholder="e.g. 2026-0001" class="form-input" />
                   </div>
                   <div class="form-group">
-                    <label>Course (optional)</label>
-                    <input v-model="newStudentCourse" type="text" placeholder="BS Computer Science" class="form-input" />
+                    <label>Program (optional)</label>
+                    <select v-model="newStudentCourse" class="form-select">
+                      <option value="">Select a program</option>
+                      <option v-for="program in availablePrograms" :key="program" :value="program">
+                        {{ program }}
+                      </option>
+                    </select>
                   </div>
                   <div class="form-group">
                     <label>Year Level (optional)</label>
-                    <input v-model="newStudentYearLevel" type="text" placeholder="4th Year" class="form-input" />
+                    <select v-model="newStudentYearLevel" class="form-select">
+                      <option value="">Select year level</option>
+                      <option v-for="y in yearLevelOptions" :key="y" :value="y">{{ y }}</option>
+                    </select>
                   </div>
                 </div>
                 <button @click="addStudentEmail" class="btn-add-email" :disabled="!generatedStudentEmail || addingStudentEmail">
@@ -3649,7 +4372,6 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                         <th>STUDENT NO</th>
                         <th>COURSE</th>
                         <th>YEAR LEVEL</th>
-                        <th>DEFAULT PASSWORD</th>
                         <th>STATUS</th>
                         <th>ACTIONS</th>
                       </tr>
@@ -3661,17 +4383,6 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                         <td>{{ s.studentNumber || '—' }}</td>
                         <td>{{ s.course || '—' }}</td>
                         <td>{{ s.yearLevel || '—' }}</td>
-                        <td class="password-cell">
-                          <span class="password-text">{{ s.defaultPassword || '-' }}</span>
-                          <button
-                            v-if="s.defaultPassword"
-                            type="button"
-                            class="btn-copy-password"
-                            @click="copyToClipboard(s.defaultPassword, 'Default password')"
-                          >
-                            Copy
-                          </button>
-                        </td>
                         <td><span class="status-badge" :class="s.status">{{ s.status }}</span></td>
                         <td>
                           <button @click="removeStudentEmail(s)" class="btn-remove" title="Remove">
@@ -3793,6 +4504,240 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
       </div>
     </div>
 
+    <!-- Add New Program Modal -->
+    <div v-if="showAddProgramModal" class="modal-overlay" @click="closeAddProgramModal">
+      <div class="modal-content add-program-modal" @click.stop>
+        <div class="modal-header">
+          <h2>Add New Program</h2>
+          <button class="modal-close" @click="closeAddProgramModal">
+            <XMarkIcon class="close-icon" />
+          </button>
+        </div>
+        
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">Program Name <span class="required">*</span></label>
+            <input 
+              type="text" 
+              v-model="newProgramName"
+              placeholder="e.g. BS Business Administration (BSBA)"
+              class="form-input"
+              @keyup.enter="addNewProgram"
+            />
+            <p class="form-hint">Enter the full program name with abbreviation in parentheses</p>
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label">Required Hours <span class="required">*</span></label>
+            <div class="hours-input-wrapper">
+              <input 
+                type="number" 
+                min="1" 
+                step="1" 
+                v-model.number="newProgramHours"
+                class="form-input hours-input"
+              />
+              <span class="hours-suffix">hours</span>
+            </div>
+            <p class="form-hint">Set the minimum completion hours for this program</p>
+          </div>
+        </div>
+        
+        <div class="modal-footer">
+          <button class="btn-secondary" @click="closeAddProgramModal">Cancel</button>
+          <button class="btn-primary" @click="addNewProgram">Add Program</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Internship Review Modal -->
+    <div v-if="showInternshipReviewModal" class="modal-overlay" @click="closeReviewModal">
+      <div class="modal-content review-modal" @click.stop>
+        <div class="modal-header">
+          <h2>Review Internship Posting</h2>
+          <button class="modal-close" @click="closeReviewModal">
+            <XMarkIcon class="close-icon" />
+          </button>
+        </div>
+        
+        <div class="modal-body">
+          <div class="review-sections">
+            <!-- Program Hours Section -->
+            <div class="review-section">
+              <h3>Required Completion Hours by Program</h3>
+              <p class="section-description">Set the minimum hours students from each program must complete</p>
+              <div class="program-hours-grid">
+                <div v-for="(hours, program) in reviewFormData.programHours" :key="program" class="program-hours-item">
+                  <label class="program-label">{{ program }}</label>
+                  <div class="hours-input-wrapper">
+                    <input 
+                      type="number" 
+                      min="1" 
+                      step="1" 
+                      v-model.number="reviewFormData.programHours[program]"
+                      class="form-input hours-input"
+                    />
+                    <span class="hours-suffix">hours</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Eligible Programs Section -->
+            <div class="review-section">
+              <h3>Eligible Programs</h3>
+              <p class="section-description">Select which programs are eligible for this internship</p>
+              <div class="programs-grid">
+                <label v-for="program in Object.keys(reviewFormData.programHours)" :key="program" class="program-checkbox">
+                  <input 
+                    type="checkbox" 
+                    :value="program"
+                    v-model="reviewFormData.eligiblePrograms"
+                  />
+                  <span>{{ program }}</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Additional Requirements Section -->
+            <div class="review-section">
+              <h3>Additional Requirements</h3>
+              <div class="requirements-grid">
+                <div class="requirement-group">
+                  <label class="form-label">Minimum GPA</label>
+                  <select v-model="reviewFormData.minimumGPA" class="form-select">
+                    <option value="">No minimum</option>
+                    <option value="2.0">2.0 (Satisfactory)</option>
+                    <option value="2.5">2.5 (Good)</option>
+                    <option value="3.0">3.0 (Very Good)</option>
+                    <option value="3.5">3.5 (Excellent)</option>
+                  </select>
+                </div>
+                
+                <div class="requirement-group">
+                  <label class="form-label">Year Levels</label>
+                  <div class="checkbox-group">
+                    <label v-for="year in ['2nd Year', '3rd Year', '4th Year']" :key="year" class="checkbox-label">
+                      <input 
+                        type="checkbox" 
+                        :value="year"
+                        v-model="reviewFormData.yearLevels"
+                      />
+                      <span>{{ year }}</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Required Documents Section -->
+            <div class="review-section">
+              <h3>Required Documents</h3>
+              <div class="documents-grid">
+                <label v-for="doc in ['Resume/CV', 'Transcript of Records', 'Portfolio', 'Recommendation Letter']" :key="doc" class="document-checkbox">
+                  <input 
+                    type="checkbox" 
+                    :value="doc"
+                    v-model="reviewFormData.requiredDocuments"
+                  />
+                  <span>{{ doc }}</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Additional Notes Section -->
+            <div class="review-section">
+              <h3>Additional Requirements & Notes</h3>
+              <textarea 
+                v-model="reviewFormData.additionalRequirements"
+                placeholder="Add any additional requirements or special instructions..."
+                class="form-textarea"
+                rows="3"
+              ></textarea>
+            </div>
+
+            <!-- Approval Notes Section -->
+            <div class="review-section">
+              <h3>Approval Notes (Internal)</h3>
+              <textarea 
+                v-model="reviewFormData.approvalNotes"
+                placeholder="Add internal notes about this approval..."
+                class="form-textarea"
+                rows="2"
+              ></textarea>
+            </div>
+          </div>
+        </div>
+        
+        <div class="modal-footer">
+          <button class="btn-secondary" @click="closeReviewModal">Cancel</button>
+          <button class="btn-primary" @click="approveInternshipWithRequirements">Approve with Requirements</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Contract Type Modal (shown after selecting a company icon) -->
+    <div
+      v-if="showContractTypeModal"
+      class="contract-type-modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      @click.self="cancelContractTypeModal"
+    >
+      <div class="contract-type-modal">
+        <div class="contract-type-modal-header">
+          <button type="button" class="contract-type-modal-close" aria-label="Close" @click="cancelContractTypeModal">
+            <XMarkIcon class="contract-type-modal-close-icon" />
+          </button>
+          <div class="contract-type-modal-title-wrap">
+            <div class="contract-type-modal-title">Select Contract Type</div>
+            <div class="contract-type-modal-subtitle">Choose the type of OJT contract you want to create.</div>
+          </div>
+        </div>
+
+        <div v-if="selectedCompanyPublic" class="contract-type-company">
+          <div class="contracts-company-icon" :style="companyLogoStyle(selectedCompanyPublic)">
+            <span class="contracts-company-initials">{{ companyInitials(selectedCompanyPublic) }}</span>
+          </div>
+          <div class="contract-type-company-meta">
+            <div class="contract-type-company-name">{{ companyDisplayLabel(selectedCompanyPublic) }}</div>
+            <div v-if="selectedCompanyPublic.email" class="contract-type-company-sub">{{ selectedCompanyPublic.email }}</div>
+          </div>
+          <button type="button" class="contract-type-company-change" @click="changeCompanyFromContractTypeModal">
+            Change Company
+          </button>
+        </div>
+
+        <div class="contract-type-grid">
+          <button
+            v-for="opt in contractTypeOptions"
+            :key="opt.value"
+            type="button"
+            class="contract-type-card"
+            :class="{ selected: selectedContractType === opt.value }"
+            @click="selectedContractType = opt.value"
+          >
+            <div class="contract-type-card-top">
+              <div class="contract-type-card-icon-wrap">
+                <component :is="opt.icon" class="contract-type-card-icon" aria-hidden="true" />
+              </div>
+              <div v-if="selectedContractType === opt.value" class="contract-type-card-check" aria-hidden="true">
+                <CheckIcon class="contract-type-card-check-icon" />
+              </div>
+            </div>
+            <div class="contract-type-card-title">{{ opt.title }}</div>
+            <div class="contract-type-card-badge">{{ opt.badge }}</div>
+            <div class="contract-type-card-desc">{{ opt.description }}</div>
+          </button>
+        </div>
+
+        <div class="contract-type-modal-actions">
+          <button type="button" class="contract-type-btn secondary" @click="changeCompanyFromContractTypeModal">Back</button>
+          <button type="button" class="contract-type-btn primary" @click="confirmContractTypeModal">Continue</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Floating Chat Widget -->
     <FloatingChatWidget userType="school" />
   </div>
@@ -3847,6 +4792,245 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
 .details-panel { padding: 12px 10px; }
 .details-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 12px; margin-bottom: 10px; color: #334155; font-size: 0.9rem; }
 
+.contracts-select-search { margin-top: 8px; }
+.contracts-company-list { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+.contracts-company-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #f8fafc;
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease, background-color 0.12s ease;
+}
+.contracts-company-row:hover { transform: translateY(-1px); box-shadow: 0 10px 25px rgba(15, 23, 42, 0.08); border-color: #c7d2fe; background: #fff; }
+.contracts-company-row:active { transform: translateY(0px); box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08); }
+.contracts-company-row:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.22), 0 10px 25px rgba(15, 23, 42, 0.08); border-color: rgba(37, 99, 235, 0.6); }
+
+.contracts-company-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 999px;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.10);
+  flex: 0 0 auto;
+}
+.contracts-company-icon::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(70% 70% at 24% 20%, rgba(255, 255, 255, 0.35), transparent 58%),
+    radial-gradient(75% 75% at 85% 80%, rgba(15, 23, 42, 0.20), transparent 60%);
+  opacity: 1;
+}
+.contracts-company-icon::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0) 55%);
+  mix-blend-mode: overlay;
+  opacity: 0.38;
+}
+.contracts-company-initials {
+  position: relative;
+  z-index: 1;
+  color: #fff;
+  font-weight: 900;
+  letter-spacing: 0.6px;
+  font-size: 0.95rem;
+  text-shadow: 0 2px 12px rgba(15, 23, 42, 0.35);
+}
+.contracts-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #0f172a;
+  font-weight: 800;
+  cursor: pointer;
+}
+.contracts-back-btn:hover { background: #f8fafc; border-color: #cbd5e1; }
+.contracts-back-arrow { font-size: 1.1rem; line-height: 1; }
+.contracts-company-meta { min-width: 0; }
+.contracts-company-name { font-weight: 800; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.contracts-company-sub { font-size: 0.85rem; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.contracts-company-chevron {
+  width: 20px;
+  height: 20px;
+  color: #94a3b8;
+  flex: 0 0 auto;
+  margin-left: auto;
+  transition: transform 0.12s ease, color 0.12s ease;
+}
+.contracts-company-row:hover .contracts-company-chevron { transform: translateX(2px); color: #2563eb; }
+
+.contract-type-input-row { display: flex; gap: 10px; align-items: center; }
+.contract-type-input-row .form-input { flex: 1; }
+.contract-type-change-btn {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  color: #0f172a;
+}
+.contract-type-change-btn:hover { background: #f8fafc; border-color: #94a3b8; }
+
+.contract-type-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 1200;
+}
+.contract-type-modal {
+  width: min(980px, 100%);
+  background: #fff;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  box-shadow: 0 35px 80px rgba(15, 23, 42, 0.28);
+  padding: 18px;
+}
+.contract-type-modal-header { display: flex; gap: 12px; align-items: flex-start; }
+.contract-type-modal-close {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  cursor: pointer;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.contract-type-modal-close:hover { background: #f8fafc; border-color: #cbd5e1; }
+.contract-type-modal-close-icon { width: 18px; height: 18px; color: #334155; }
+.contract-type-modal-title { font-weight: 900; font-size: 1.15rem; color: #0f172a; }
+.contract-type-modal-subtitle { margin-top: 2px; color: #64748b; font-size: 0.92rem; }
+
+.contract-type-company {
+  margin-top: 12px;
+  padding: 12px 12px;
+  border-radius: 14px;
+  border: 1px solid #e5e7eb;
+  background: #f8fafc;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.contract-type-company-meta { min-width: 0; }
+.contract-type-company-name { font-weight: 900; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.contract-type-company-sub { font-size: 0.85rem; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.contract-type-company-change {
+  margin-left: auto;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 800;
+  color: #1d4ed8;
+  white-space: nowrap;
+}
+.contract-type-company-change:hover { background: #eff6ff; border-color: rgba(37, 99, 235, 0.35); }
+
+.contract-type-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.contract-type-card {
+  width: 100%;
+  text-align: left;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+  position: relative;
+}
+.contract-type-card:hover { transform: translateY(-1px); box-shadow: 0 12px 28px rgba(15, 23, 42, 0.10); border-color: #c7d2fe; }
+.contract-type-card.selected { border-color: rgba(37, 99, 235, 0.6); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16), 0 12px 28px rgba(15, 23, 42, 0.10); }
+.contract-type-card-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.contract-type-card-icon-wrap {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: #eff6ff;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.contract-type-card-icon { width: 20px; height: 20px; color: #2563eb; }
+.contract-type-card-check {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: #2563eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.18);
+}
+.contract-type-card-check-icon { width: 16px; height: 16px; color: #fff; }
+.contract-type-card-title { font-weight: 900; color: #0f172a; }
+.contract-type-card-badge {
+  display: inline-flex;
+  margin-top: 6px;
+  font-size: 0.72rem;
+  font-weight: 900;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #334155;
+  border: 1px solid #e2e8f0;
+}
+.contract-type-card-desc { margin-top: 8px; color: #64748b; font-size: 0.88rem; line-height: 1.35; }
+
+.contract-type-modal-actions {
+  margin-top: 14px;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  align-items: center;
+}
+.contract-type-btn {
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 900;
+}
+.contract-type-btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.contract-type-btn.primary:hover { background: #1d4ed8; border-color: #1d4ed8; }
+.contract-type-btn.secondary:hover { background: #f8fafc; border-color: #94a3b8; }
+
 .student-emails-section { padding: 24px; }
 .student-emails-section .section-card {
   background: white;
@@ -3863,6 +5047,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
 .add-student-form .form-group label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 6px; color: #374151; }
 .add-student-form .form-input { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.9rem; }
 .add-student-form .form-input[readonly] { background-color: #f9fafb; color: #6b7280; }
+.add-student-form .form-input[disabled] { background-color: #f1f5f9; color: #0f172a; cursor: not-allowed; }
 .add-student-form .field-note { font-size: 0.75rem; color: #6b7280; margin-top: 4px; font-style: italic; }
 .course-add-row { display: flex; gap: 10px; margin-bottom: 10px; }
 .course-add-row .form-input { flex: 1; }

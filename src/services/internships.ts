@@ -22,9 +22,9 @@ export interface InternshipRecord {
   duration: string
   slotsAvailable: number
   eligibleCourses?: string[]
-  courseCompletionHours?: Record<string, number>
   requirements?: string[]
   allowance?: string
+  contactInfo?: string
   status: 'active' | 'draft' | 'closed'
   createdAt?: unknown
   updatedAt?: unknown

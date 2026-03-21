@@ -19,7 +19,6 @@ export interface SchoolStudentRecord {
   email: string
   studentName?: string
   studentNumber?: string
-  defaultPassword?: string
   course?: string
   yearLevel?: string
   status: 'pending' | 'registered'
@@ -60,7 +59,6 @@ export async function addSchoolStudent(
   options?: {
     studentName?: string
     studentNumber?: string
-    defaultPassword?: string
     course?: string
     yearLevel?: string
   }
@@ -74,7 +72,6 @@ export async function addSchoolStudent(
     email: normalizedEmail,
     studentName: options?.studentName || null,
     studentNumber: options?.studentNumber || null,
-    defaultPassword: options?.defaultPassword || null,
     course: options?.course || null,
     yearLevel: options?.yearLevel || null,
     status: 'pending',

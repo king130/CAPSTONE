@@ -548,12 +548,12 @@ function handleImageError(event: Event) {
           <!-- Courses Card -->
           <div class="settings-card full-width">
             <div class="card-header">
-              <h3 class="card-title">Courses Accepted</h3>
-              <p class="card-subtitle">Courses your company accepts for internships (visible to schools for contract alignment)</p>
+              <h3 class="card-title">Programs Accepted</h3>
+              <p class="card-subtitle">Programs your company accepts for internships (visible to schools for contract alignment)</p>
             </div>
             <div class="card-body">
               <div class="form-group">
-                <label class="form-label">Add Course</label>
+                <label class="form-label">Add Program</label>
                 <div class="course-entry">
                   <input
                     v-model="newCourse"

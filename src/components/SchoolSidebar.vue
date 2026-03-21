@@ -27,6 +27,16 @@
         <img src="/icons/company-icon.png" alt="Companies" class="nav-icon-img" />
         <span>Companies</span>
       </div>
+      
+      <div
+        class="nav-item"
+        :class="{ active: activeItem === 'internship-requirements' }"
+        @click="setActiveItem('internship-requirements')"
+      >
+        <img src="/icons/icon-internship.png" alt="Internship Requirements" class="nav-icon-img" />
+        <span>Internship Requirements</span>
+      </div>
+      
       <div
         class="nav-item"
         :class="{ active: activeItem === 'contracts' }"

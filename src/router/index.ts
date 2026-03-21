@@ -64,7 +64,7 @@ const router = createRouter({
     { path: '/login', name: 'login', component: Login },
     { path: '/register', name: 'register', component: RegisterSimple },
     { path: '/change-password', name: 'change-password', component: ChangePassword, meta: { requiresAuth: true, allowGuest: true } },
-    { path: '/find-internships', name: 'find-internships', component: FindInternships },
+    { path: '/find-internships', name: 'find-internships', component: FindInternships, meta: { excludeRoles: ['school'] } },
     { path: '/account-disabled', name: 'account-disabled', component: AccountDisabled },
     
     // Guest routes (logged in but no role)
@@ -146,6 +146,15 @@ router.beforeEach((to) => {
         return { path: '/guest' }
       }
       return { path: getRoleDashboard(userRole) }
+    }
+
+    // Check if route excludes certain roles
+    if (to.meta.excludeRoles && userRole) {
+      const excludedRoles = to.meta.excludeRoles as string[]
+      if (excludedRoles.includes(userRole)) {
+        console.log(`🚫 Access denied: ${userRole} is excluded from this route`)
+        return { path: getRoleDashboard(userRole) }
+      }
     }
 
     // Check if route requires specific role
