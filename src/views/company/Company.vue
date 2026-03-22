@@ -17,13 +17,14 @@ import {
   cancelContract,
   type ContractRecord,
 } from '@/services/contracts'
-import { createInternship, subscribeCompanyInternships, updateInternship, type InternshipRecord } from '@/services/internships'
+import { createInternship, subscribeCompanyInternships, updateInternship, deleteInternship, type InternshipRecord } from '@/services/internships'
 import {
   subscribeCompanyApplications,
   subscribeCompanyApplicationsByInternships,
   updateApplicationStatus,
   type ApplicationRecord,
 } from '@/services/applications'
+import { createEvaluation, subscribeCompanyEvaluations, type EvaluationRecord, type EvaluationStatus } from '@/services/evaluations'
 import { subscribeAllSchoolPrograms, type ProgramOption } from '@/services/schoolPrograms'
 import { 
   DocumentIcon, 
@@ -49,6 +50,7 @@ import {
   EnvelopeIcon,
   PhoneIcon,
   PencilIcon,
+  TrashIcon,
   CloudIcon,
   InformationCircleIcon,
   EllipsisVerticalIcon,
@@ -215,6 +217,52 @@ const searchQuery = ref('')
 const internshipsList = ref<Array<InternshipRecord & { logo?: string; company?: string; match?: number; recommended?: boolean; skills?: string[] }>>([])
 let unsubCompanyInternships: (() => void) | null = null
 
+type ApprovalState = 'draft' | 'pending' | 'approved' | 'declined'
+
+const editingInternshipRecord = computed(() => {
+  if (!isEditMode.value || !editingInternshipId.value) return null
+  return internshipsList.value.find((i) => i.id === editingInternshipId.value) || null
+})
+
+const internshipApprovalState = computed<ApprovalState>(() => {
+  const record = editingInternshipRecord.value
+  if (!record) return 'draft'
+
+  if (record?.approvalStatus === 'approved') return 'approved'
+  if (record?.approvalStatus === 'declined') return 'declined'
+  if (record?.approvalStatus === 'pending') return 'pending'
+
+  if (record?.status === 'draft') return 'draft'
+  if (record?.status === 'active') return 'pending'
+  return 'pending'
+})
+
+const internshipApprovalLabel = computed(() => {
+  switch (internshipApprovalState.value) {
+    case 'approved':
+      return 'Approved'
+    case 'declined':
+      return 'Declined'
+    case 'draft':
+      return 'Draft'
+    default:
+      return 'Pending Review'
+  }
+})
+
+const internshipApprovalHint = computed(() => {
+  switch (internshipApprovalState.value) {
+    case 'approved':
+      return 'Your internship post is approved and visible to students.'
+    case 'declined':
+      return 'Your internship post was declined. Review notes and resubmit.'
+    case 'draft':
+      return 'This post is saved as a draft and not submitted for review yet.'
+    default:
+      return 'Your internship post is awaiting review.'
+  }
+})
+
 // Company's applications (Quick Apply from students) - from Firebase
 const applications = ref<ApplicationRecord[]>([])
 let unsubCompanyApplications: (() => void) | null = null
@@ -258,6 +306,7 @@ function setupSubscriptions(uid: string) {
   if (unsubCompanyApplications) unsubCompanyApplications()
   if (unsubByInternships) unsubByInternships()
   if (unsubCompanyContracts) unsubCompanyContracts()
+  if (unsubCompanyEvaluations) unsubCompanyEvaluations()
 
   ensurePublicProfile(uid, {
     displayName: companyName.value,
@@ -292,6 +341,10 @@ function setupSubscriptions(uid: string) {
 
   unsubCompanyApplications = subscribeCompanyApplications(uid, (items) => {
     applicationsByCompanyId.value = items
+  })
+
+  unsubCompanyEvaluations = subscribeCompanyEvaluations(uid, (items) => {
+    evaluations.value = items
   })
 }
 
@@ -329,6 +382,7 @@ onUnmounted(() => {
   if (unsubByInternships) unsubByInternships()
   if (unsubCompanyContracts) unsubCompanyContracts()
   if (unsubSchoolPrograms) unsubSchoolPrograms()
+  if (unsubCompanyEvaluations) unsubCompanyEvaluations()
 })
 
 function removeSkill(skill: string) {
@@ -819,7 +873,10 @@ async function submitInternship(status: 'active' | 'draft') {
       })
     } else {
       // Create new internship
-      await createInternship(internshipData)
+      await createInternship({
+        ...internshipData,
+        approvalStatus: status === 'active' ? 'pending' : undefined,
+      })
       
       await Swal.fire({
         icon: 'success',
@@ -950,6 +1007,42 @@ function editInternship(internshipId: string) {
     showCreateForm.value = true
     currentView.value = 'create-internship'
     currentFormStep.value = 1
+  }
+}
+
+async function deleteInternshipPosting(internshipId: string) {
+  const internship = internshipsList.value.find((i) => i.id === internshipId)
+  const title = internship?.title || 'this internship'
+
+  const res = await Swal.fire({
+    icon: 'warning',
+    title: 'Delete internship posting?',
+    text: `This will permanently delete "${title}".`,
+    showCancelButton: true,
+    confirmButtonText: 'Delete',
+    confirmButtonColor: '#dc2626',
+    cancelButtonText: 'Cancel',
+    cancelButtonColor: '#64748b',
+  })
+
+  if (!res.isConfirmed) return
+
+  try {
+    await deleteInternship(internshipId)
+    await Swal.fire({
+      icon: 'success',
+      title: 'Deleted',
+      text: 'Internship posting deleted successfully.',
+      timer: 1400,
+      showConfirmButton: false,
+    })
+  } catch (err: any) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Delete failed',
+      text: err?.message || 'Could not delete internship posting.',
+      confirmButtonColor: '#2563eb',
+    })
   }
 }
 
@@ -1305,17 +1398,238 @@ function editProfile() {
   router.push('/profile')
 }
 
-// TEMPORARY DATA: Time tracking date state - UI state variable
-const timeTrackingDate = ref('Today - Jan 17, 2026')
-const timeTrackingStatus = ref('All')
-const timeTrackingInterns = ref('All interns')
-const timeTrackingView = ref('daily') // 'daily' or 'weekly'
+// TEMPORARY DATA: Time tracking state - UI state variables
+const timeTrackingStatus = ref<'All' | 'PRESENT' | 'LATE' | 'ONGOING' | 'INCOMPLETE'>('All')
+const timeTrackingSearch = ref('')
+const timeTrackingSelectedDate = ref(new Date())
+const selectedTimeTrackingRecordId = ref<number | null>(null)
+
+const timeTrackingDayLabel = computed(() => {
+  return new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(timeTrackingSelectedDate.value)
+})
+
+const timeTrackingDateLabel = computed(() => {
+  return new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric' }).format(timeTrackingSelectedDate.value)
+})
+
+type TimeLogStatus = 'PRESENT' | 'LATE' | 'ONGOING' | 'INCOMPLETE'
+
+const TIME_LOG_DASH = '—'
+const showAdjustTimeModal = ref(false)
+const adjustTimeError = ref<string | null>(null)
+const adjustTimeForm = ref<{ timeIn: string; timeOut: string; status: TimeLogStatus }>({
+  timeIn: '',
+  timeOut: '',
+  status: 'PRESENT',
+})
+
+const adjustTimeClockOutDisabled = computed(() => {
+  return adjustTimeForm.value.status === 'ONGOING' || adjustTimeForm.value.status === 'INCOMPLETE'
+})
+
+function minutesFromTimeInput(value: string) {
+  const [hh, mm] = value.split(':')
+  const hours = Number(hh)
+  const minutes = Number(mm)
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null
+  return hours * 60 + minutes
+}
+
+function computeDurationHours(timeIn: string, timeOut: string) {
+  const start = minutesFromTimeInput(timeIn)
+  const end = minutesFromTimeInput(timeOut)
+  if (start == null || end == null) return null
+  const diff = end - start
+  if (diff < 0) return null
+  return diff / 60
+}
+
+function parseDisplayTimeToInput(displayValue: string) {
+  if (!displayValue) return ''
+  if (displayValue.trim() === TIME_LOG_DASH) return ''
+  const match = displayValue.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i)
+  if (!match) return ''
+
+  let hours = Number(match[1])
+  const minutes = Number(match[2])
+  const period = match[3].toUpperCase()
+
+  if (period === 'AM') {
+    if (hours === 12) hours = 0
+  } else {
+    if (hours !== 12) hours += 12
+  }
+
+  const hh = String(hours).padStart(2, '0')
+  const mm = String(minutes).padStart(2, '0')
+  return `${hh}:${mm}`
+}
+
+function formatInputTimeToDisplay(inputValue: string) {
+  if (!inputValue) return TIME_LOG_DASH
+  const [hh, mm] = inputValue.split(':')
+  let hours = Number(hh)
+  const minutes = Number(mm)
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return TIME_LOG_DASH
+
+  const period = hours >= 12 ? 'PM' : 'AM'
+  hours = hours % 12
+  if (hours === 0) hours = 12
+  return `${hours}:${String(minutes).padStart(2, '0')} ${period}`
+}
+
+function statusToColor(status: TimeLogStatus) {
+  switch (status) {
+    case 'PRESENT':
+      return 'present'
+    case 'ONGOING':
+      return 'ongoing'
+    case 'LATE':
+      return 'late'
+    case 'INCOMPLETE':
+      return 'incomplete'
+    default:
+      return 'present'
+  }
+}
+
+const adjustTimeTotalPreview = computed(() => {
+  if (adjustTimeForm.value.status === 'ONGOING') return 'Ongoing'
+  if (adjustTimeForm.value.status === 'INCOMPLETE') return TIME_LOG_DASH
+  if (!adjustTimeForm.value.timeIn || !adjustTimeForm.value.timeOut) return TIME_LOG_DASH
+  const hours = computeDurationHours(adjustTimeForm.value.timeIn, adjustTimeForm.value.timeOut)
+  if (hours == null) return TIME_LOG_DASH
+  return `${hours.toFixed(2)} hrs`
+})
+
+function openAdjustTimeModal() {
+  const record = selectedTimeTrackingRecord.value
+  if (!record) return
+
+  adjustTimeError.value = null
+  adjustTimeForm.value = {
+    timeIn: parseDisplayTimeToInput(record.timeIn),
+    timeOut: parseDisplayTimeToInput(record.timeOut),
+    status: record.status as TimeLogStatus,
+  }
+
+  // Keep clock-out empty for ongoing/incomplete to avoid confusion
+  if (adjustTimeForm.value.status === 'ONGOING' || adjustTimeForm.value.status === 'INCOMPLETE') {
+    adjustTimeForm.value.timeOut = ''
+  }
+
+  showAdjustTimeModal.value = true
+}
+
+function closeAdjustTimeModal() {
+  showAdjustTimeModal.value = false
+  adjustTimeError.value = null
+}
+
+function saveAdjustTime() {
+  const record = selectedTimeTrackingRecord.value
+  if (!record) return
+
+  adjustTimeError.value = null
+
+  if (!adjustTimeForm.value.timeIn) {
+    adjustTimeError.value = 'Clock in is required.'
+    return
+  }
+
+  const nextStatus = adjustTimeForm.value.status
+  const nextTimeIn = formatInputTimeToDisplay(adjustTimeForm.value.timeIn)
+
+  let nextTimeOut = TIME_LOG_DASH
+  let nextTotal = TIME_LOG_DASH
+
+  if (nextStatus === 'ONGOING') {
+    nextTimeOut = TIME_LOG_DASH
+    nextTotal = 'Ongoing'
+  } else if (nextStatus === 'INCOMPLETE') {
+    nextTimeOut = TIME_LOG_DASH
+    nextTotal = TIME_LOG_DASH
+  } else {
+    if (!adjustTimeForm.value.timeOut) {
+      adjustTimeError.value = 'Clock out is required for Present/Late.'
+      return
+    }
+
+    const hours = computeDurationHours(adjustTimeForm.value.timeIn, adjustTimeForm.value.timeOut)
+    if (hours == null) {
+      adjustTimeError.value = 'Clock out must be after clock in.'
+      return
+    }
+
+    nextTimeOut = formatInputTimeToDisplay(adjustTimeForm.value.timeOut)
+    nextTotal = `${hours.toFixed(2)} hrs`
+  }
+
+  const target = timeTrackingRecords.value.find((r) => r.id === record.id)
+  if (!target) return
+
+  target.timeIn = nextTimeIn
+  target.timeOut = nextTimeOut
+  target.totalHours = nextTotal
+  target.status = nextStatus
+  target.statusColor = statusToColor(nextStatus)
+
+  closeAdjustTimeModal()
+  void Swal.fire({
+    icon: 'success',
+    title: 'Time log updated',
+    text: `Saved changes for ${record.name}.`,
+    timer: 1600,
+    showConfirmButton: false,
+  })
+}
+
+async function sendTimeReminder() {
+  const record = selectedTimeTrackingRecord.value
+  if (!record) return
+
+  const result = await Swal.fire({
+    icon: 'question',
+    title: 'Send reminder?',
+    text: `Send a time log reminder to ${record.name}?`,
+    showCancelButton: true,
+    confirmButtonText: 'Send',
+    cancelButtonText: 'Cancel',
+    confirmButtonColor: '#2563eb',
+  })
+
+  if (!result.isConfirmed) return
+
+  // TODO: wire to real notification/email/SMS service
+  await Swal.fire({
+    icon: 'success',
+    title: 'Reminder sent',
+    text: `Reminder sent to ${record.name}.`,
+    timer: 1600,
+    showConfirmButton: false,
+  })
+}
+
+function handleAdjustTimeKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && showAdjustTimeModal.value) {
+    closeAdjustTimeModal()
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleAdjustTimeKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleAdjustTimeKeydown)
+})
 
 const timeTrackingRecords = ref([
   {
     id: 1,
     name: 'Sarah Chen',
     internId: 'ID: 2024-001',
+    role: 'Software Intern',
     date: 'Oct 24, 2024',
     timeIn: '8:05 AM',
     timeOut: '5:00 PM',
@@ -1327,6 +1641,7 @@ const timeTrackingRecords = ref([
     id: 2,
     name: 'Miguel Santos',
     internId: 'ID: 2024-002',
+    role: 'Data Intern',
     date: 'Oct 24, 2024',
     timeIn: '9:12 AM',
     timeOut: '—',
@@ -1338,6 +1653,7 @@ const timeTrackingRecords = ref([
     id: 3,
     name: 'Anna Reyes',
     internId: 'ID: 2024-003',
+    role: 'UI/UX Intern',
     date: 'Oct 24, 2024',
     timeIn: '8:45 AM',
     timeOut: '5:15 PM',
@@ -1349,6 +1665,7 @@ const timeTrackingRecords = ref([
     id: 4,
     name: 'Carlos Torres',
     internId: 'ID: 2024-004',
+    role: 'IT Support Intern',
     date: 'Oct 24, 2024',
     timeIn: '8:00 AM',
     timeOut: '—',
@@ -1360,6 +1677,7 @@ const timeTrackingRecords = ref([
     id: 5,
     name: 'Maria Garcia',
     internId: 'ID: 2024-005',
+    role: 'Marketing Intern',
     date: 'Oct 24, 2024',
     timeIn: '7:55 AM',
     timeOut: '5:10 PM',
@@ -1371,6 +1689,7 @@ const timeTrackingRecords = ref([
     id: 6,
     name: 'James Rivera',
     internId: 'ID: 2024-006',
+    role: 'QA Intern',
     date: 'Oct 24, 2024',
     timeIn: '8:30 AM',
     timeOut: '—',
@@ -1382,6 +1701,7 @@ const timeTrackingRecords = ref([
     id: 7,
     name: 'Lisa Mendoza',
     internId: 'ID: 2024-007',
+    role: 'Finance Intern',
     date: 'Oct 24, 2024',
     timeIn: '9:20 AM',
     timeOut: '5:05 PM',
@@ -1393,6 +1713,7 @@ const timeTrackingRecords = ref([
     id: 8,
     name: 'Roberto Cruz',
     internId: 'ID: 2024-008',
+    role: 'Business Analyst Intern',
     date: 'Oct 24, 2024',
     timeIn: '8:10 AM',
     timeOut: '4:58 PM',
@@ -1404,6 +1725,7 @@ const timeTrackingRecords = ref([
     id: 9,
     name: 'Patricia Lim',
     internId: 'ID: 2024-009',
+    role: 'Operations Intern',
     date: 'Oct 24, 2024',
     timeIn: '8:02 AM',
     timeOut: '—',
@@ -1415,6 +1737,7 @@ const timeTrackingRecords = ref([
     id: 10,
     name: 'Daniel Flores',
     internId: 'ID: 2024-010',
+    role: 'HR Intern',
     date: 'Oct 24, 2024',
     timeIn: '7:50 AM',
     timeOut: '5:20 PM',
@@ -1424,45 +1747,192 @@ const timeTrackingRecords = ref([
   }
 ])
 
-function viewDailyLog() {
-  timeTrackingView.value = 'daily'
+function shiftTimeTrackingDate(days: number) {
+  const next = new Date(timeTrackingSelectedDate.value)
+  next.setDate(next.getDate() + days)
+  timeTrackingSelectedDate.value = next
 }
 
-function viewWeeklySummary() {
-  timeTrackingView.value = 'weekly'
+function selectTimeTrackingRecord(recordId: number) {
+  selectedTimeTrackingRecordId.value = recordId
 }
 
-function viewInternDetails(internId: number) {
-  console.log('View details for intern:', internId)
+const selectedTimeTrackingRecord = computed(() => {
+  if (selectedTimeTrackingRecordId.value == null) return null
+  return timeTrackingRecords.value.find((r) => r.id === selectedTimeTrackingRecordId.value) ?? null
+})
+
+const filteredTimeTrackingRecords = computed(() => {
+  const query = timeTrackingSearch.value.trim().toLowerCase()
+
+  return timeTrackingRecords.value.filter((r) => {
+    const matchesStatus = timeTrackingStatus.value === 'All' ? true : r.status === timeTrackingStatus.value
+    if (!matchesStatus) return false
+
+    if (!query) return true
+    return (
+      r.name.toLowerCase().includes(query) ||
+      r.internId.toLowerCase().includes(query) ||
+      r.role.toLowerCase().includes(query)
+    )
+  })
+})
+
+function getNameInitials(name: string) {
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]!.toUpperCase())
+    .join('')
 }
+
+watch(
+  timeTrackingRecords,
+  (records) => {
+    if (selectedTimeTrackingRecordId.value == null && records.length > 0) {
+      selectedTimeTrackingRecordId.value = records[0]!.id
+    }
+  },
+  { immediate: true }
+)
 
 // Evaluation view data
 const evaluationMonth = ref(new Date(2026, 0, 1)) // January 2026
-const evaluationsThisWeek = ref(5)
-const pendingMyAction = ref(2)
-const totalEvaluationsCompleted = ref(42)
+const evaluationSearch = ref('')
+const evaluations = ref<EvaluationRecord[]>([])
+let unsubCompanyEvaluations: (() => void) | null = null
+
+const startOfWeek = computed(() => {
+  const d = new Date()
+  const day = d.getDay() // 0 (Sun) - 6 (Sat)
+  const diff = d.getDate() - day
+  return new Date(d.getFullYear(), d.getMonth(), diff)
+})
+
+const endOfWeek = computed(() => {
+  const s = new Date(startOfWeek.value)
+  s.setDate(s.getDate() + 7)
+  return s
+})
+
+function evaluationDueDateAsDate(value: unknown) {
+  const asTs = value as { toDate?: () => Date }
+  if (asTs?.toDate) return asTs.toDate()
+  const d = new Date(String(value))
+  return d instanceof Date && !isNaN(d.getTime()) ? d : null
+}
+
+function isOverdue(dueDate: Date) {
+  const today = new Date()
+  const startToday = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  return dueDate.getTime() < startToday.getTime()
+}
+
+function evaluationStatusColor(status: EvaluationStatus) {
+  switch (status) {
+    case 'COMPLETED':
+      return 'completed'
+    case 'OVERDUE':
+      return 'overdue'
+    case 'PENDING':
+    default:
+      return 'pending'
+  }
+}
+
+function formatDueShort(due: Date) {
+  const dd = String(due.getDate()).padStart(2, '0')
+  const mm = String(due.getMonth() + 1).padStart(2, '0')
+  const yy = String(due.getFullYear()).slice(-2)
+  return `${dd}/${mm}/${yy}`
+}
+
+const evaluationRows = computed(() => {
+  return evaluations.value.map((e) => {
+    const due = evaluationDueDateAsDate(e.dueDate)
+    const computedStatus: EvaluationStatus =
+      e.status === 'COMPLETED'
+        ? 'COMPLETED'
+        : due && isOverdue(due)
+          ? 'OVERDUE'
+          : 'PENDING'
+
+    const dueLabel = due ? formatDueShort(due) : '—'
+
+    return {
+      ...e,
+      status: computedStatus,
+      statusColor: evaluationStatusColor(computedStatus),
+      dueLabel,
+      studentLabel: e.studentName || '—',
+    }
+  })
+})
+
+const filteredEvaluationRows = computed(() => {
+  const q = evaluationSearch.value.trim().toLowerCase()
+  if (!q) return evaluationRows.value
+  return evaluationRows.value.filter((e) => {
+    return (
+      (e.studentName || '').toLowerCase().includes(q) ||
+      (e.supervisor || '').toLowerCase().includes(q) ||
+      (e.type || '').toLowerCase().includes(q)
+    )
+  })
+})
+
+const evaluationsThisWeek = computed(() => {
+  const s = startOfWeek.value.getTime()
+  const end = endOfWeek.value.getTime()
+  return evaluationRows.value.filter((e) => {
+    if (e.status === 'COMPLETED') return false
+    const due = evaluationDueDateAsDate(e.dueDate)
+    if (!due) return false
+    const t = due.getTime()
+    return t >= s && t < end
+  }).length
+})
+
+const pendingMyAction = computed(() => {
+  return evaluationRows.value.filter((e) => e.status !== 'COMPLETED').length
+})
+
+const totalEvaluationsCompleted = computed(() => {
+  return evaluationRows.value.filter((e) => e.status === 'COMPLETED').length
+})
 const showNewEvaluationModal = ref(false)
 
 // New evaluation form data
 const newEvaluationForm = ref({
-  student: '',
+  studentId: '',
   supervisor: '',
   evaluationType: '',
-  dueDate: '17/01/2026'
+  dueDate: '2026-01-17'
+})
+const schedulingEvaluation = ref(false)
+
+const acceptedInternOptions = computed(() => {
+  const map = new Map<string, { id: string; name: string }>()
+  for (const app of applications.value) {
+    if (app.status !== 'accepted') continue
+    const id = app.studentId
+    if (!id) continue
+    const name = app.studentName || app.studentEmail || id
+    if (!map.has(id)) map.set(id, { id, name })
+  }
+  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name))
 })
 
-const studentOptions = ref([
-  'Alice Johnson',
-  'Miguel Santos',
-  'Anna Reyes',
-  'Carlos Torres',
-  'Maria Garcia',
-  'James Rivera',
-  'Lisa Mendoza',
-  'Roberto Cruz',
-  'Patricia Lim',
-  'Daniel Flores'
-])
+const scheduleEvaluationDisabled = computed(() => {
+  return (
+    schedulingEvaluation.value ||
+    !newEvaluationForm.value.studentId ||
+    !newEvaluationForm.value.supervisor ||
+    !newEvaluationForm.value.evaluationType ||
+    !newEvaluationForm.value.dueDate
+  )
+})
 
 const supervisorOptions = ref([
   'Mr. Smith',
@@ -1480,44 +1950,7 @@ const evaluationTypeOptions = ref([
   'Project-based'
 ])
 
-const pendingEvaluations = ref([
-  {
-    id: 1,
-    studentName: 'Alice Johnson',
-    supervisor: 'Mr. Smith',
-    type: 'Midterm',
-    dueDate: '17/01/26',
-    status: 'PENDING',
-    statusColor: 'pending'
-  },
-  {
-    id: 2,
-    studentName: 'Alice Johnson',
-    supervisor: 'Mr. Smith',
-    type: 'Midterm',
-    dueDate: '17/01/26',
-    status: 'OVERDUE',
-    statusColor: 'overdue'
-  },
-  {
-    id: 3,
-    studentName: 'Alice Johnson',
-    supervisor: 'Mr. Smith',
-    type: 'Midterm',
-    dueDate: '17/01/26',
-    status: 'PENDING',
-    statusColor: 'pending'
-  },
-  {
-    id: 4,
-    studentName: 'Alice Johnson',
-    supervisor: 'Mr. Smith',
-    type: 'Midterm',
-    dueDate: '17/01/26',
-    status: 'COMPLETED',
-    statusColor: 'completed'
-  }
-])
+
 
 // Calendar data for evaluation view
 const evaluationCalendarData: Record<string, boolean> = {
@@ -1570,17 +2003,77 @@ function closeNewEvaluationModal() {
   showNewEvaluationModal.value = false
   // Reset form
   newEvaluationForm.value = {
-    student: '',
+    studentId: '',
     supervisor: '',
     evaluationType: '',
-    dueDate: '17/01/2026'
+    dueDate: '2026-01-17'
   }
 }
 
-function scheduleEvaluation() {
-  // TODO: Handle form submission
-  console.log('Schedule evaluation:', newEvaluationForm.value)
-  closeNewEvaluationModal()
+async function scheduleEvaluation() {
+  const companyId = authStore.user?.uid
+  if (!companyId) return
+
+  if (scheduleEvaluationDisabled.value) {
+    await Swal.fire({
+      icon: 'warning',
+      title: 'Missing info',
+      text: 'Please select a student, supervisor, type, and due date.',
+      confirmButtonColor: '#2563eb',
+    })
+    return
+  }
+
+  const selected = acceptedInternOptions.value.find((s) => s.id === newEvaluationForm.value.studentId)
+  if (!selected) {
+    await Swal.fire({
+      icon: 'warning',
+      title: 'Student not found',
+      text: 'Please re-select a student.',
+      confirmButtonColor: '#2563eb',
+    })
+    return
+  }
+
+  const due = new Date(`${newEvaluationForm.value.dueDate}T00:00:00`)
+  if (isNaN(due.getTime())) {
+    await Swal.fire({
+      icon: 'warning',
+      title: 'Invalid date',
+      text: 'Please choose a valid due date.',
+      confirmButtonColor: '#2563eb',
+    })
+    return
+  }
+
+  try {
+    schedulingEvaluation.value = true
+    await createEvaluation({
+      companyId,
+      studentId: selected.id,
+      studentName: selected.name,
+      supervisor: newEvaluationForm.value.supervisor,
+      type: newEvaluationForm.value.evaluationType,
+      dueDate: due,
+      status: 'PENDING',
+    })
+    closeNewEvaluationModal()
+    await Swal.fire({
+      icon: 'success',
+      title: 'Scheduled',
+      text: `Evaluation scheduled for ${selected.name}.`,
+      confirmButtonColor: '#2563eb',
+    })
+  } catch (err) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Failed to schedule',
+      text: err instanceof Error ? err.message : 'Could not schedule evaluation.',
+      confirmButtonColor: '#2563eb',
+    })
+  } finally {
+    schedulingEvaluation.value = false
+  }
 }
 
 function startEvaluation(evaluationId: number) {
@@ -1819,71 +2312,7 @@ function saveSettings() {
         </header>
         <main class="main-content">
           <div class="internships-layout">
-            <!-- Left Column: Filters -->
-            <aside class="filters-column">
-              <h2 class="filters-title">Filter Your Postings</h2>
-              
-              <div class="filter-group">
-                <label class="filter-label">Status</label>
-                <div class="checkbox-group">
-                  <label>
-                    <input type="checkbox" value="active" />
-                    <span>Active</span>
-                  </label>
-                  <label>
-                    <input type="checkbox" value="draft" />
-                    <span>Draft</span>
-                  </label>
-                  <label>
-                    <input type="checkbox" value="closed" />
-                    <span>Closed</span>
-                  </label>
-                </div>
-              </div>
-
-              <div class="filter-group">
-                <label class="filter-label">Location</label>
-                <input
-                  type="text"
-                  v-model="locationFilter"
-                  placeholder="Filter by location..."
-                  class="filter-input"
-                />
-              </div>
-
-              <div class="filter-group">
-                <label class="filter-label">Posted Date</label>
-                <div class="date-inputs">
-                  <input
-                    type="date"
-                    v-model="startDate"
-                    class="filter-input date-input"
-                  />
-                  <input
-                    type="date"
-                    v-model="endDate"
-                    class="filter-input date-input"
-                  />
-                </div>
-              </div>
-
-              <div class="filter-group">
-                <label class="filter-label">Duration</label>
-                <input
-                  type="text"
-                  v-model="duration"
-                  placeholder="e.g. 3-6 Months"
-                  class="filter-input"
-                />
-              </div>
-
-              <div class="filter-buttons">
-                <button class="btn-apply-filters">Apply filters</button>
-                <button class="btn-clear-all" @click="clearAllFilters">Clear All</button>
-              </div>
-            </aside>
-
-            <!-- Right Column: Available Internships -->
+            <!-- Internships Table -->
             <div class="internships-column">
               <div class="internships-header">
                 <h2 class="internships-title">Your Posted Internships</h2>
@@ -1903,90 +2332,66 @@ function saveSettings() {
                 </div>
               </div>
 
-              <div class="internships-grid">
-                <div
-                  v-for="internship in internshipsList"
-                  :key="internship.id"
-                  class="company-internship-card"
-                >
-                  <div class="internship-header">
-                    <div class="internship-title-section">
-                      <h3 class="internship-title">{{ internship.title }}</h3>
-                      <div class="internship-meta">
-                        <span class="posted-date">Posted {{ formatApplicationDate(internship.createdAt) }}</span>
-                        <span class="status-indicator" :class="internship.status">{{ internship.status.charAt(0).toUpperCase() + internship.status.slice(1) }}</span>
-                      </div>
-                    </div>
-                    <div class="internship-actions-menu">
-                      <button class="action-menu-btn">
-                        <EllipsisVerticalIcon class="menu-icon" />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div v-if="internship.status === 'draft'" class="draft-notice">
-                    <ExclamationTriangleIcon class="draft-icon" />
-                    <span>Draft - Not visible to students</span>
-                  </div>
-
-                  <div class="internship-details">
-                    <div class="detail-row">
-                      <div class="detail-item">
-                        <MapPinIcon class="detail-icon" />
-                        <span>{{ internship.location }}</span>
-                      </div>
-                      <div class="detail-item">
-                        <ClockIcon class="detail-icon" />
-                        <span>{{ internship.duration }}</span>
-                      </div>
-                      <div class="detail-item">
-                        <UsersIcon class="detail-icon" />
-                        <span>{{ internship.slotsAvailable }} slots</span>
-                      </div>
-                    </div>
-                    
-                    <div class="internship-description">
-                      {{ internship.description || 'No description provided' }}
-                    </div>
-
-                    <div class="requirements-section" v-if="internship.requirements && internship.requirements.length > 0">
-                      <span class="requirements-label">Required Skills:</span>
-                      <div class="skills-list">
-                        <span
-                          v-for="skill in internship.requirements.slice(0, 3)"
-                          :key="skill"
-                          class="skill-chip"
-                        >
-                          {{ skill }}
-                        </span>
-                        <span v-if="internship.requirements.length > 3" class="more-skills">
-                          +{{ internship.requirements.length - 3 }} more
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="internship-stats">
-                    <div class="stat-item">
-                      <span class="stat-number">0</span>
-                      <span class="stat-label">Applications</span>
-                    </div>
-                    <div class="stat-item">
-                      <span class="stat-number">0</span>
-                      <span class="stat-label">Interviews</span>
-                    </div>
-                    <div class="stat-item">
-                      <span class="stat-number">0</span>
-                      <span class="stat-label">Hired</span>
-                    </div>
-                  </div>
-
-                  <div class="internship-footer">
-                    <div class="footer-actions">
-                      <button class="btn-secondary-small" @click="editInternship(internship.id)">Edit Posting</button>
-                      <button class="btn-primary-small" @click="openInternshipDetails(internship)">View Applications</button>
-                    </div>
-                  </div>
+              <div class="internships-table-card">
+                <div class="internships-table-wrap">
+                  <table class="internships-table">
+                    <colgroup>
+                      <col class="col-internship" />
+                      <col class="col-location" />
+                      <col class="col-duration" />
+                      <col class="col-slots" />
+                      <col class="col-status" />
+                      <col class="col-posted" />
+                      <col class="col-actions" />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th>Internship</th>
+                        <th>Location</th>
+                        <th>Duration</th>
+                        <th>Slots</th>
+                        <th>Status</th>
+                        <th>Posted</th>
+                        <th class="internships-actions-col">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="internship in internshipsList" :key="internship.id" class="internships-row">
+                        <td class="internship-main-cell">
+                          <div class="internship-main-title">{{ internship.title }}</div>
+                          <div class="internship-main-sub">{{ internship.description || '—' }}</div>
+                        </td>
+                        <td class="internship-cell">{{ internship.location }}</td>
+                        <td class="internship-cell nowrap">{{ internship.duration }}</td>
+                        <td class="internship-cell nowrap">{{ internship.slotsAvailable }}</td>
+                        <td class="internship-cell">
+                          <span class="internship-status" :class="internship.status">
+                            {{ internship.status.charAt(0).toUpperCase() + internship.status.slice(1) }}
+                          </span>
+                        </td>
+                        <td class="internship-cell nowrap">{{ formatApplicationDate(internship.createdAt) }}</td>
+                        <td class="internship-actions-cell">
+                          <div class="internship-action-buttons">
+                            <button type="button" class="internship-action-btn view" @click="openInternshipDetails(internship)">
+                              <EyeIcon class="internship-action-icon" />
+                              <span class="internship-action-text">View</span>
+                            </button>
+                            <button type="button" class="internship-action-btn edit" @click="editInternship(internship.id)">
+                              <PencilIcon class="internship-action-icon" />
+                              <span class="internship-action-text">Edit</span>
+                            </button>
+                            <button type="button" class="internship-action-btn delete" @click="deleteInternshipPosting(internship.id)">
+                              <TrashIcon class="internship-action-icon" />
+                              <span class="internship-action-text">Delete</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      <tr v-if="internshipsList.length === 0">
+                        <td colspan="7" class="internships-empty">No internship postings found.</td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>
@@ -3205,6 +3610,23 @@ function saveSettings() {
                   {{ isEditMode ? 'Save Changes' : 'Save as Draft' }}
                 </button>
               </div>
+
+              <div class="approval-status-card">
+                <div class="approval-status-header">
+                  <h4 class="approval-status-title">Post Approval</h4>
+                  <span class="approval-status-badge" :class="internshipApprovalState">
+                    <CheckIcon v-if="internshipApprovalState === 'approved'" class="approval-status-icon" />
+                    <XMarkIcon v-else-if="internshipApprovalState === 'declined'" class="approval-status-icon" />
+                    <ClockIcon v-else class="approval-status-icon" />
+                    {{ internshipApprovalLabel }}
+                  </span>
+                </div>
+
+                <p class="approval-status-hint">{{ internshipApprovalHint }}</p>
+                <p v-if="editingInternshipRecord?.approvalNotes" class="approval-status-notes">
+                  {{ editingInternshipRecord.approvalNotes }}
+                </p>
+              </div>
             </div>
           </div>
         </main>
@@ -3369,12 +3791,12 @@ function saveSettings() {
         </main>
       </div>
 
-      <!-- Time Tracking View -->
+      <!-- Intern Time Ins View -->
       <div v-if="currentView === 'time-tracking'">
         <header class="top-header">
           <div class="header-left">
-            <img src="/icons/icon-timetracking.png" alt="Time Tracking" class="header-icon-img" />
-            <h1>Time Tracking</h1>
+            <img src="/icons/icon-timetracking.png" alt="Intern Time Ins" class="header-icon-img" />
+            <h1>Intern Time Ins</h1>
           </div>
           <div class="header-right">
             <div class="notification-wrapper">
@@ -3384,108 +3806,178 @@ function saveSettings() {
           </div>
         </header>
         <main class="main-content">
-          <!-- Time Tracking Controls -->
-          <div class="time-tracking-controls">
-            <div class="tracking-filters">
-              <div class="filter-item">
-                <span class="filter-icon">
-                  <CalendarIcon class="icon-size" />
-                </span>
-                <span class="filter-text">{{ timeTrackingDate }}</span>
+          <div class="time-tracking-board">
+            <div class="time-tracking-board-top">
+              <div class="time-tracking-board-title">
+                <span class="board-day">{{ timeTrackingDayLabel }}</span>
+                <span class="board-sep">|</span>
+                <span class="board-context">Intern Time Logs</span>
               </div>
-              <div class="filter-item">
-                <span class="filter-label">Status:</span>
-                <select v-model="timeTrackingStatus" class="filter-select">
+
+              <div class="time-tracking-board-tools">
+                <button type="button" class="board-nav-btn" @click="shiftTimeTrackingDate(-1)" aria-label="Previous day">&lsaquo;</button>
+                <div class="board-date">
+                  <span class="board-date-main">{{ timeTrackingDateLabel }}</span>
+                </div>
+                <button type="button" class="board-nav-btn" @click="shiftTimeTrackingDate(1)" aria-label="Next day">&rsaquo;</button>
+
+                <select v-model="timeTrackingStatus" class="board-select" aria-label="Status filter">
                   <option value="All">All</option>
-                  <option value="Present">Present</option>
-                  <option value="Late">Late</option>
-                  <option value="Ongoing">Ongoing</option>
-                  <option value="Incomplete">Incomplete</option>
+                  <option value="PRESENT">Present</option>
+                  <option value="LATE">Late</option>
+                  <option value="ONGOING">Ongoing</option>
+                  <option value="INCOMPLETE">Incomplete</option>
                 </select>
-              </div>
-              <div class="filter-item">
-                <span class="filter-icon">
-                  <MagnifyingGlassIcon class="icon-size" />
-                </span>
-                <select v-model="timeTrackingInterns" class="filter-select">
-                  <option value="All interns">All interns</option>
-                  <option value="Present">Present Only</option>
-                  <option value="Late">Late Only</option>
-                </select>
+
+                <div class="board-search">
+                  <MagnifyingGlassIcon class="board-search-icon" />
+                  <input v-model="timeTrackingSearch" type="text" placeholder="Search interns..." />
+                </div>
               </div>
             </div>
-            <div class="tracking-actions">
-              <button 
-                class="tracking-btn"
-                :class="{ active: timeTrackingView === 'daily' }"
-                @click="viewDailyLog"
-              >
-                <span class="btn-icon">
-                  <ChartBarIcon class="icon-size" />
-                </span>
-                View Daily Log
-              </button>
-              <button 
-                class="tracking-btn"
-                :class="{ active: timeTrackingView === 'weekly' }"
-                @click="viewWeeklySummary"
-              >
-                <span class="btn-icon">
-                  <ChartBarSquareIcon class="icon-size" />
-                </span>
-                View Weekly Summary
-              </button>
+
+            <div class="time-tracking-board-body">
+              <div class="time-tracking-list" role="region" aria-label="Intern time logs">
+                <table class="time-tracking-table-desktop">
+                  <thead>
+                    <tr>
+                      <th class="col-intern">Intern</th>
+                      <th class="col-role">Role</th>
+                      <th class="col-time">Clock In</th>
+                      <th class="col-time">Clock Out</th>
+                      <th class="col-total">Total Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="record in filteredTimeTrackingRecords"
+                      :key="record.id"
+                      class="time-row"
+                      :class="{ selected: record.id === selectedTimeTrackingRecordId }"
+                      @click="selectTimeTrackingRecord(record.id)"
+                    >
+                      <td class="cell-intern">
+                        <div class="intern-cell">
+                          <div class="intern-avatar" aria-hidden="true">{{ getNameInitials(record.name) }}</div>
+                          <div class="intern-meta">
+                            <div class="tt-intern-name">{{ record.name }}</div>
+                            <div class="tt-intern-id">{{ record.internId }}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td class="cell-role">{{ record.role }}</td>
+                      <td class="cell-time">{{ record.timeIn }}</td>
+                      <td class="cell-time">{{ record.timeOut }}</td>
+                      <td class="cell-total">
+                        <div class="total-cell">
+                          <span class="total-text">{{ record.totalHours }}</span>
+                          <span class="status-dot" :class="record.statusColor" :title="record.status"></span>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <aside class="time-tracking-details" aria-label="Selected intern details">
+                <div class="details-card">
+                  <div class="details-header">Details</div>
+                  <div class="details-subtitle">{{ timeTrackingDayLabel }} | {{ timeTrackingDateLabel }}</div>
+
+                  <div v-if="selectedTimeTrackingRecord" class="details-body">
+                    <div class="details-person">
+                      <div class="details-avatar" aria-hidden="true">{{ getNameInitials(selectedTimeTrackingRecord.name) }}</div>
+                      <div class="details-person-meta">
+                        <div class="details-name">{{ selectedTimeTrackingRecord.name }}</div>
+                        <div class="details-id">{{ selectedTimeTrackingRecord.internId }} &bull; {{ selectedTimeTrackingRecord.role }}</div>
+                      </div>
+                    </div>
+
+                    <div class="details-grid">
+                      <div class="details-item">
+                        <div class="details-label">Clock In</div>
+                        <div class="details-value">{{ selectedTimeTrackingRecord.timeIn }}</div>
+                      </div>
+                      <div class="details-item">
+                        <div class="details-label">Clock Out</div>
+                        <div class="details-value">{{ selectedTimeTrackingRecord.timeOut }}</div>
+                      </div>
+                      <div class="details-item">
+                        <div class="details-label">Total Time</div>
+                        <div class="details-value">{{ selectedTimeTrackingRecord.totalHours }}</div>
+                      </div>
+                      <div class="details-item">
+                        <div class="details-label">Status</div>
+                        <div class="details-value">
+                          <span class="status-badge-tracking" :class="selectedTimeTrackingRecord.statusColor">
+                            {{ selectedTimeTrackingRecord.status }}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="details-actions">
+                      <button type="button" class="details-btn primary" @click="openAdjustTimeModal">Adjust time</button>
+                      <button type="button" class="details-btn" @click="sendTimeReminder">Send reminder</button>
+                    </div>
+                  </div>
+
+                  <div v-else class="details-empty">
+                    Select an intern to view their time log.
+                  </div>
+                </div>
+              </aside>
             </div>
           </div>
 
-          <!-- Time Tracking Table -->
-          <div class="time-tracking-table-container">
-            <table class="time-tracking-table">
-              <thead>
-                <tr>
-                  <th class="th-intern">INTERN NAME / ID</th>
-                  <th class="th-date">DATE</th>
-                  <th class="th-time">TIME IN</th>
-                  <th class="th-time">TIME OUT</th>
-                  <th class="th-hours">TOTAL HOURS</th>
-                  <th class="th-status">STATUS</th>
-                  <th class="th-actions">ACTIONS</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="record in timeTrackingRecords" :key="record.id" class="tracking-row">
-                  <td class="td-intern">
-                    <div class="intern-info">
-                      <div class="intern-name">{{ record.name }}</div>
-                      <div class="intern-id">{{ record.internId }}</div>
-                    </div>
-                  </td>
-                  <td class="td-date">{{ record.date }}</td>
-                  <td class="td-time">
-                    <div class="time-entry" :class="{ 'has-indicator': record.status === 'ONGOING' }">
-                      {{ record.timeIn }}
-                    </div>
-                  </td>
-                  <td class="td-time">{{ record.timeOut }}</td>
-                  <td class="td-hours">{{ record.totalHours }}</td>
-                  <td class="td-status">
-                    <span class="status-badge-tracking" :class="record.statusColor">
-                      {{ record.status }}
-                    </span>
-                  </td>
-                  <td class="td-actions">
-                    <button 
-                      class="action-btn-tracking" 
-                      @click="viewInternDetails(record.id)"
-                      disabled
-                      title="View Details"
-                    >
-                      <EyeIcon class="icon-size" />
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+          <div v-if="showAdjustTimeModal" class="tt-modal-overlay" @click.self="closeAdjustTimeModal">
+            <div class="tt-modal" role="dialog" aria-modal="true" aria-label="Adjust intern time log">
+              <div class="tt-modal-header">
+                <div>
+                  <div class="tt-modal-title">Adjust Time</div>
+                  <div v-if="selectedTimeTrackingRecord" class="tt-modal-subtitle">
+                    {{ selectedTimeTrackingRecord.name }} &bull; {{ timeTrackingDayLabel }} | {{ timeTrackingDateLabel }}
+                  </div>
+                </div>
+                <button type="button" class="tt-modal-close" @click="closeAdjustTimeModal" aria-label="Close">&times;</button>
+              </div>
+
+              <div class="tt-modal-body">
+                <div class="tt-modal-grid">
+                  <label class="tt-field">
+                    <span class="tt-field-label">Clock In</span>
+                    <input v-model="adjustTimeForm.timeIn" type="time" />
+                  </label>
+
+                  <label class="tt-field">
+                    <span class="tt-field-label">Clock Out</span>
+                    <input v-model="adjustTimeForm.timeOut" type="time" :disabled="adjustTimeClockOutDisabled" />
+                  </label>
+
+                  <label class="tt-field">
+                    <span class="tt-field-label">Status</span>
+                    <select v-model="adjustTimeForm.status">
+                      <option value="PRESENT">Present</option>
+                      <option value="LATE">Late</option>
+                      <option value="ONGOING">Ongoing</option>
+                      <option value="INCOMPLETE">Incomplete</option>
+                    </select>
+                  </label>
+
+                  <div class="tt-field tt-preview">
+                    <span class="tt-field-label">Total Time</span>
+                    <div class="tt-preview-value">{{ adjustTimeTotalPreview }}</div>
+                  </div>
+                </div>
+
+                <div v-if="adjustTimeError" class="tt-modal-error">{{ adjustTimeError }}</div>
+              </div>
+
+              <div class="tt-modal-footer">
+                <button type="button" class="tt-modal-btn" @click="closeAdjustTimeModal">Cancel</button>
+                <button type="button" class="tt-modal-btn primary" @click="saveAdjustTime">Save changes</button>
+              </div>
+            </div>
           </div>
         </main>
       </div>
@@ -3582,6 +4074,7 @@ function saveSettings() {
                   <MagnifyingGlassIcon class="icon-size" />
                 </span>
                 <input
+                  v-model="evaluationSearch"
                   type="text"
                   placeholder="Search Student, Supervisor..."
                   class="search-input-eval"
@@ -3602,11 +4095,11 @@ function saveSettings() {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="evaluation in pendingEvaluations" :key="evaluation.id" class="evaluation-row">
-                    <td class="td-student">{{ evaluation.studentName }}</td>
+                  <tr v-for="evaluation in filteredEvaluationRows" :key="evaluation.id" class="evaluation-row">
+                    <td class="td-student">{{ evaluation.studentLabel }}</td>
                     <td class="td-supervisor">{{ evaluation.supervisor }}</td>
                     <td class="td-type">{{ evaluation.type }}</td>
-                    <td class="td-date">{{ evaluation.dueDate }}</td>
+                    <td class="td-date">{{ evaluation.dueLabel }}</td>
                     <td class="td-status">
                       <span class="status-badge-eval" :class="evaluation.statusColor">
                         {{ evaluation.status }}
@@ -3644,10 +4137,10 @@ function saveSettings() {
                 
                 <div class="form-group">
                   <label class="form-label">Select Student:</label>
-                  <select v-model="newEvaluationForm.student" class="form-select">
+                  <select v-model="newEvaluationForm.studentId" class="form-select">
                     <option value="">---Choose a student---</option>
-                    <option v-for="student in studentOptions" :key="student" :value="student">
-                      {{ student }}
+                    <option v-for="student in acceptedInternOptions" :key="student.id" :value="student.id">
+                      {{ student.name }}
                     </option>
                   </select>
                 </div>
@@ -3677,9 +4170,8 @@ function saveSettings() {
                   <div class="date-input-wrapper">
                     <input 
                       v-model="newEvaluationForm.dueDate" 
-                      type="text" 
+                      type="date" 
                       class="form-input date-input"
-                      placeholder="DD/MM/YYYY"
                     />
                     <span class="date-icon">
                       <CalendarIcon class="icon-size" />
@@ -3689,8 +4181,12 @@ function saveSettings() {
               </div>
 
               <div class="modal-footer">
-                <button class="btn-schedule-evaluation" @click="scheduleEvaluation" disabled title="Coming soon">
-                  Schedule Evaluation
+                <button
+                  class="btn-schedule-evaluation"
+                  @click="scheduleEvaluation"
+                  :disabled="scheduleEvaluationDisabled"
+                >
+                  {{ schedulingEvaluation ? 'Scheduling...' : 'Schedule Evaluation' }}
                 </button>
               </div>
             </div>
@@ -4717,7 +5213,7 @@ function saveSettings() {
 /* Internships View Styles */
 .internships-layout {
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: 1fr;
   gap: 24px;
 }
 
@@ -4966,6 +5462,162 @@ function saveSettings() {
 
 .btn-post-internship:hover {
   background: #1d4ed8;
+}
+
+.internships-table-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.internships-table-wrap { overflow-x: auto; position: relative; }
+
+.internships-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 760px;
+  table-layout: fixed;
+}
+
+.internships-table .col-internship { width: 34%; }
+.internships-table .col-location { width: 20%; }
+.internships-table .col-duration { width: 10%; }
+.internships-table .col-slots { width: 7%; }
+.internships-table .col-status { width: 10%; }
+.internships-table .col-posted { width: 9%; }
+.internships-table .col-actions { width: 10%; }
+
+.internships-table thead th {
+  background: #f8fafc;
+  color: #334155;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 12px 14px;
+  text-align: left;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.internships-row td {
+  padding: 12px 14px;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: top;
+  color: #0f172a;
+  font-size: 0.9rem;
+}
+
+.internships-row:hover td { background: #fafcff; }
+
+.internship-main-cell { min-width: 260px; }
+.internship-main-title { font-weight: 900; color: #0f172a; }
+.internship-main-sub {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 0.85rem;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.internship-cell { color: #0f172a; overflow: hidden; text-overflow: ellipsis; }
+.internship-cell.nowrap { white-space: nowrap; }
+
+/* Keep the main "Internship" column visible at 100% scaling. */
+.internships-table thead th:first-child,
+.internships-row td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  background: #fff;
+}
+.internships-table thead th:first-child {
+  background: #f8fafc;
+  z-index: 5;
+}
+.internships-row:hover td:first-child { background: #fafcff; }
+.internships-row td:first-child { box-shadow: 10px 0 18px rgba(15, 23, 42, 0.04); }
+
+/* Optional: keep Actions visible too. */
+.internships-table thead th:last-child,
+.internships-row td:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 4;
+  background: #fff;
+}
+.internships-table thead th:last-child {
+  background: #f8fafc;
+  z-index: 6;
+}
+.internships-row:hover td:last-child { background: #fafcff; }
+.internships-row td:last-child { box-shadow: -10px 0 18px rgba(15, 23, 42, 0.04); }
+
+.internship-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+.internship-status.active { background: #dcfce7; color: #166534; border-color: rgba(22, 101, 52, 0.15); }
+.internship-status.draft { background: #fef3c7; color: #92400e; border-color: rgba(146, 64, 14, 0.18); }
+.internship-status.closed { background: #fee2e2; color: #991b1b; border-color: rgba(153, 27, 27, 0.18); }
+
+.internships-actions-col { width: 1%; white-space: nowrap; }
+.internship-actions-cell { white-space: nowrap; vertical-align: middle; }
+.internship-action-buttons { display: inline-flex; gap: 8px; flex-wrap: nowrap; }
+.internship-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 900;
+  font-size: 0.82rem;
+  color: #0f172a;
+}
+.internship-action-btn:hover { background: #f8fafc; border-color: #94a3b8; }
+.internship-action-btn.view { background: #f8fafc; }
+.internship-action-btn.edit { color: #1d4ed8; border-color: rgba(37, 99, 235, 0.25); background: rgba(37, 99, 235, 0.06); }
+.internship-action-btn.edit:hover { background: rgba(37, 99, 235, 0.10); }
+.internship-action-btn.delete { color: #991b1b; border-color: rgba(220, 38, 38, 0.25); background: rgba(220, 38, 38, 0.06); }
+.internship-action-btn.delete:hover { background: rgba(220, 38, 38, 0.10); }
+.internship-action-icon { width: 16px; height: 16px; }
+.internship-action-text { display: inline; }
+
+.internships-empty { padding: 22px 14px; color: #64748b; text-align: center; }
+
+@media (max-width: 1280px) {
+  /* Free up space: hide Posted column, make actions icon-only. */
+  .internships-table thead th:nth-child(6),
+  .internships-row td:nth-child(6) {
+    display: none;
+  }
+
+  .internship-action-text { display: none; }
+  .internship-action-btn { padding: 7px 8px; }
+}
+
+@media (max-width: 1100px) {
+  /* Further compress on smaller widths. */
+  .internships-table thead th:nth-child(3),
+  .internships-row td:nth-child(3) {
+    display: none;
+  }
+
+  .internships-table { min-width: 640px; }
 }
 
 .internships-grid {
@@ -5229,18 +5881,6 @@ function saveSettings() {
 
 @media (max-width: 1200px) {
   .internships-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .filters-column {
-    order: 2;
-  }
-
-  .internships-column {
-    order: 1;
-  }
-
-  .internships-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -7961,9 +8601,21 @@ function saveSettings() {
   }
 }
 
-/* Progress Column - Remove sticky behavior */
+/* Progress Column - Sticky sidebar */
 .progress-column {
-  position: relative;
+  position: sticky;
+  top: 100px;
+  align-self: start;
+  z-index: 0;
+}
+
+@media (max-width: 1200px) {
+  .progress-column {
+    position: static;
+    top: auto;
+    max-height: none;
+    overflow: visible;
+  }
 }
 
 .progress-card {
@@ -7972,6 +8624,48 @@ function saveSettings() {
   border-radius: 12px;
   padding: 24px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  position: static;
+  top: auto;
+}
+
+.approval-status-card {
+  margin-top: 16px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.approval-status-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.approval-status-title { margin: 0; font-size: 14px; font-weight: 800; color: #111827; }
+.approval-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.approval-status-icon { width: 14px; height: 14px; }
+.approval-status-badge.approved { background: #dcfce7; color: #166534; border-color: rgba(22, 101, 52, 0.18); }
+.approval-status-badge.declined { background: #fee2e2; color: #991b1b; border-color: rgba(153, 27, 27, 0.18); }
+.approval-status-badge.pending { background: #fef3c7; color: #92400e; border-color: rgba(146, 64, 14, 0.18); }
+.approval-status-badge.draft { background: #e2e8f0; color: #334155; border-color: rgba(51, 65, 85, 0.15); }
+
+.approval-status-hint { margin: 10px 0 0 0; color: #64748b; font-size: 13px; line-height: 1.35; }
+.approval-status-notes {
+  margin: 10px 0 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .progress-title {

@@ -51,8 +51,8 @@
         :class="{ active: activeNav === 'time-tracking' }"
         @click="setActiveNav('time-tracking')"
       >
-        <img src="/icons/icon-timetracking.png" alt="Time tracking" class="nav-icon-img" />
-        <span>Time tracking</span>
+        <img src="/icons/icon-timetracking.png" alt="Intern Time Ins" class="nav-icon-img" />
+        <span>Intern Time Ins</span>
       </div>
       <div
         class="nav-item"

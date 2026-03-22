@@ -239,6 +239,13 @@ const contractTypeOptions: ContractTypeOption[] = [
     icon: ClockIcon,
   },
   {
+    value: 'Contract Amendment / Addendum',
+    title: 'Contract Amendment',
+    badge: 'Amendment',
+    description: 'Propose changes or add an addendum to an existing OJT contract.',
+    icon: PencilSquareIcon,
+  },
+  {
     value: 'Partnership Agreement',
     title: 'Partnership Agreement',
     badge: 'Institution',
@@ -1673,6 +1680,10 @@ const selectedCompanyHasPendingContract = computed(() => {
   return schoolContracts.value.some((c) => c.companyId === companyId && (c.status || 'pending') === 'pending')
 })
 
+const isContractAmendment = computed(() => {
+  return schoolContractForm.value.contractType === 'Contract Amendment / Addendum'
+})
+
 const schoolCourses = computed(() => {
   const p = authStore.user?.profile as Record<string, unknown> | undefined
   const courses = (p?.courses as string[] | undefined) || []
@@ -1779,7 +1790,7 @@ async function submitSchoolContractRequest() {
 
     const programsFromAllocations = courseAllocations.map((item) => item.course).join(', ')
 
-    if (alignedContractCourses.value.length === 0) {
+    if (!isContractAmendment.value && alignedContractCourses.value.length === 0) {
       await Swal.fire({
         icon: 'warning',
         title: 'No Aligned Courses',
@@ -1789,7 +1800,7 @@ async function submitSchoolContractRequest() {
       return
     }
 
-    if (courseAllocations.length === 0) {
+    if (!isContractAmendment.value && courseAllocations.length === 0) {
       await Swal.fire({
         icon: 'warning',
         title: 'Missing Course Slots',
@@ -3319,6 +3330,9 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                 <div class="form-row">
                   <div class="form-group full-width">
                     <label>Aligned Courses (select and set slots)</label>
+                    <p v-if="isContractAmendment" class="bulk-import-hint">
+                      Optional for amendments: only set course slots if you are changing allocations in this addendum.
+                    </p>
                     <p v-if="!schoolContractForm.companyId" class="bulk-import-hint">Select a company to see aligned courses.</p>
                     <p v-else-if="alignedContractCourses.length === 0" class="bulk-import-hint">
                       No aligned courses found. Add your school courses in Settings, and make sure the company adds the courses they accept.

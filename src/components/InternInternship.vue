@@ -182,30 +182,6 @@ const filteredInternships = computed(() => {
     )
   }
 
-  if (locationFilter.value.trim()) {
-    const loc = locationFilter.value.toLowerCase().trim()
-    result = result.filter((i) => (i.location || '').toLowerCase().includes(loc))
-  }
-
-  if (skillsFilter.value.length > 0) {
-    result = result.filter((i) =>
-      skillsFilter.value.some((s) =>
-        (i.requirements || []).some((r) => r.toLowerCase().includes(s.toLowerCase()))
-      )
-    )
-  }
-
-  if (selectedCompanyTypes.value.length > 0) {
-    result = result.filter((i) => {
-      const cn = (i.companyName || '').toLowerCase()
-      return selectedCompanyTypes.value.some((t) => cn.includes(t.toLowerCase()))
-    })
-  }
-
-  if (duration.value) {
-    result = result.filter((i) => (i.duration || '').toLowerCase().includes(duration.value.toLowerCase()))
-  }
-
   return result
 })
 
@@ -529,6 +505,10 @@ function getInitials(company: string | undefined): string {
               </button>
             </div>
           </div>
+        </div>
+
+        <div v-if="filteredInternships.length === 0" class="internships-empty">
+          No internships found.
         </div>
       </div>
     </div>
@@ -1188,12 +1168,13 @@ function getInitials(company: string | undefined): string {
 /* Main Layout */
 .main-layout {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 1fr;
   gap: 24px;
 }
 
 /* Filters Sidebar */
 .filters-sidebar {
+  display: none;
   background: white;
   border-radius: 12px;
   padding: 24px;
@@ -1631,6 +1612,16 @@ function getInitials(company: string | undefined): string {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
   gap: 20px;
+}
+
+.internships-empty {
+  margin-top: 14px;
+  padding: 18px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  color: #64748b;
+  font-weight: 600;
+  text-align: center;
 }
 
 .internship-card {
@@ -2471,10 +2462,14 @@ function getInitials(company: string | undefined): string {
 .sidebar-section {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 0;
   position: sticky;
   top: 20px;
   height: fit-content;
+}
+
+.sidebar-section > * + * {
+  margin-top: 20px;
 }
 
 .progress-card,
@@ -3051,10 +3046,14 @@ function getInitials(company: string | undefined): string {
 .right-section {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 0;
   position: sticky;
   top: 20px;
   height: fit-content;
+}
+
+.right-section > * + * {
+  margin-top: 20px;
 }
 
 .progress-card,

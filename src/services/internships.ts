@@ -1,6 +1,7 @@
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   onSnapshot,
@@ -25,6 +26,9 @@ export interface InternshipRecord {
   requirements?: string[]
   allowance?: string
   contactInfo?: string
+  /** Review decision made by the school/admin. */
+  approvalStatus?: 'pending' | 'approved' | 'declined'
+  approvalNotes?: string
   status: 'active' | 'draft' | 'closed'
   createdAt?: unknown
   updatedAt?: unknown
@@ -84,4 +88,9 @@ export async function createInternship(payload: CreateInternshipPayload) {
 export async function updateInternship(internshipId: string, payload: Partial<InternshipRecord>) {
   const internshipRef = doc(db, 'internships', internshipId)
   await updateDoc(internshipRef, { ...payload, updatedAt: serverTimestamp() })
+}
+
+export async function deleteInternship(internshipId: string) {
+  const internshipRef = doc(db, 'internships', internshipId)
+  await deleteDoc(internshipRef)
 }
