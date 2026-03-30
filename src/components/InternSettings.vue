@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { doc, updateDoc } from 'firebase/firestore'
-import { db } from '@/services/firebase'
+import { apiFetch } from '@/services/http'
+import { mapApiUserToProfile, updateCurrentUserPassword } from '@/services/auth'
+import { buildProfileAvatarUrl, uploadProfileAvatar } from '@/services/profileMedia'
 import Swal from 'sweetalert2'
 import { BellIcon } from '@heroicons/vue/24/outline'
 
@@ -17,6 +18,15 @@ const userInitials = computed(() => {
     .join('')
     .toUpperCase()
     .slice(0, 2)
+})
+
+const headerAvatarUrl = computed(() => {
+  const currentUser = authStore.user
+  const profile = currentUser?.profile as Record<string, unknown> | undefined
+  if (currentUser?.uid && profile?.avatarPath) {
+    return buildProfileAvatarUrl(currentUser.uid, currentUser.updatedAt)
+  }
+  return ''
 })
 
 // TEMPORARY DATA: Notification dropdown state - this is a UI state variable
@@ -65,6 +75,7 @@ const organizationName = computed(() => {
 
 const loading = ref(true)
 const saving = ref(false)
+const hydrated = ref(false)
 
 // Form data - Initialize with empty values
 const personalInfo = ref({
@@ -74,21 +85,44 @@ const personalInfo = ref({
 })
 
 const security = ref({
-  oldPassword: '',
   newPassword: '',
+  confirmPassword: '',
   twoFactorAuth: false,
   loginAlerts: true
 })
 
-const profilePicture = ref('/icons/profiles/alex-doe.jpg')
+const fileInput = ref<HTMLInputElement | null>(null)
+const uploadingPhoto = ref(false)
+const localProfilePreview = ref('')
 
-// Load user data on mount
-onMounted(() => {
-  if (authStore.user) {
-    const profile = authStore.user.profile as Record<string, unknown> | undefined
+const profilePicture = computed(() => {
+  if (localProfilePreview.value) {
+    return localProfilePreview.value
+  }
+
+  const currentUser = authStore.user
+  const profile = currentUser?.profile as Record<string, unknown> | undefined
+  if (currentUser?.uid && profile?.avatarPath) {
+    return buildProfileAvatarUrl(currentUser.uid, currentUser.updatedAt)
+  }
+
+  return '/icons/profiles/alex-doe.jpg'
+})
+
+watch(
+  () => authStore.user,
+  (user) => {
+    if (!user) {
+      loading.value = false
+      hydrated.value = false
+      return
+    }
+    if (hydrated.value) return
+
+    const profile = user.profile as Record<string, unknown> | undefined
     personalInfo.value = {
-      name: authStore.user.displayName || '',
-      email: authStore.user.email || '',
+      name: user.displayName || '',
+      email: user.email || '',
       phoneNumber: (profile?.contactNumber as string) || (profile?.companyContactNumber as string) || (profile?.schoolContactNumber as string) || ''
     }
     
@@ -99,19 +133,66 @@ onMounted(() => {
     if (profile?.loginAlerts !== undefined) {
       security.value.loginAlerts = profile.loginAlerts as boolean
     }
-  }
-  loading.value = false
-})
+
+    hydrated.value = true
+    loading.value = false
+  },
+  { immediate: true }
+)
 
 // Functions
 function updateProfilePicture() {
-  Swal.fire({
-    icon: 'info',
-    title: 'Feature Under Development',
-    text: 'Profile picture upload will be available soon.',
-    confirmButtonText: 'OK',
-    confirmButtonColor: '#3b82f6'
-  })
+  fileInput.value?.click()
+}
+
+async function onProfilePictureSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+
+  if (!file.type.startsWith('image/')) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Invalid File',
+      text: 'Please choose an image file.',
+      confirmButtonColor: '#3b82f6'
+    })
+    input.value = ''
+    return
+  }
+
+  if (localProfilePreview.value.startsWith('blob:')) {
+    URL.revokeObjectURL(localProfilePreview.value)
+  }
+  localProfilePreview.value = URL.createObjectURL(file)
+  uploadingPhoto.value = true
+
+  try {
+    const updatedUser = await uploadProfileAvatar(file)
+    authStore.setUserProfile(updatedUser)
+    await Swal.fire({
+      icon: 'success',
+      title: 'Photo Updated',
+      text: 'Your profile picture has been uploaded successfully.',
+      confirmButtonColor: '#3b82f6',
+      timer: 1800,
+      showConfirmButton: false
+    })
+  } catch (error) {
+    if (localProfilePreview.value.startsWith('blob:')) {
+      URL.revokeObjectURL(localProfilePreview.value)
+    }
+    localProfilePreview.value = ''
+    await Swal.fire({
+      icon: 'error',
+      title: 'Upload Failed',
+      text: error instanceof Error ? error.message : 'Unable to upload your profile picture.',
+      confirmButtonColor: '#3b82f6'
+    })
+  } finally {
+    uploadingPhoto.value = false
+    input.value = ''
+  }
 }
 
 async function saveChanges() {
@@ -146,21 +227,50 @@ async function saveChanges() {
     return
   }
 
+  if (security.value.newPassword || security.value.confirmPassword) {
+    if (security.value.newPassword.length < 8) {
+      await Swal.fire({
+        icon: 'error',
+        title: 'Validation Error',
+        text: 'New password must be at least 8 characters.',
+        confirmButtonColor: '#3b82f6'
+      })
+      return
+    }
+
+    if (security.value.newPassword !== security.value.confirmPassword) {
+      await Swal.fire({
+        icon: 'error',
+        title: 'Validation Error',
+        text: 'New password and confirmation do not match.',
+        confirmButtonColor: '#3b82f6'
+      })
+      return
+    }
+  }
+
   saving.value = true
   
   try {
-    const userRef = doc(db, 'users', authStore.user.uid)
-    const profile = authStore.user.profile as Record<string, unknown>
-    
-    // Update Firestore with new profile data
-    await updateDoc(userRef, {
-      displayName: personalInfo.value.name,
-      email: personalInfo.value.email,
-      'profile.contactNumber': personalInfo.value.phoneNumber,
-      'profile.twoFactorAuth': security.value.twoFactorAuth,
-      'profile.loginAlerts': security.value.loginAlerts,
-      updatedAt: new Date()
+    const raw = await apiFetch<Record<string, unknown>>('/profile', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        displayName: personalInfo.value.name,
+        profile: {
+          contactNumber: personalInfo.value.phoneNumber,
+          twoFactorAuth: security.value.twoFactorAuth,
+          loginAlerts: security.value.loginAlerts,
+        },
+      }),
     })
+    authStore.setUserProfile(mapApiUserToProfile(raw))
+
+    if (security.value.newPassword) {
+      await updateCurrentUserPassword(security.value.newPassword)
+      await authStore.refreshUser()
+      security.value.newPassword = ''
+      security.value.confirmPassword = ''
+    }
 
     await Swal.fire({
       icon: 'success',
@@ -184,6 +294,10 @@ async function saveChanges() {
 }
 
 function handleImageError(event: Event) {
+  if (localProfilePreview.value) {
+    return
+  }
+
   const img = event.target as HTMLImageElement
   const name = personalInfo.value.name || 'User'
   const initials = name.split(' ').map(n => n[0]).join('').toUpperCase()
@@ -218,7 +332,8 @@ function handleImageError(event: Event) {
           <BellIcon class="notification-bell" />
         </div>
         <button class="user-avatar" type="button" @click="() => {}" :title="`View Profile`">
-          {{ userInitials }}
+          <img v-if="headerAvatarUrl" :src="headerAvatarUrl" alt="Profile" class="user-avatar-image" />
+          <span v-else>{{ userInitials }}</span>
         </button>
       </div>
     </header>
@@ -233,13 +348,22 @@ function handleImageError(event: Event) {
         <!-- Profile Card -->
         <div class="profile-card">
           <div class="profile-picture-section">
+            <input
+              ref="fileInput"
+              type="file"
+              accept="image/*"
+              class="hidden-file-input"
+              @change="onProfilePictureSelected"
+            />
             <img 
               :src="profilePicture" 
               :alt="personalInfo.name" 
               class="profile-picture"
               @error="handleImageError"
             />
-            <button @click="updateProfilePicture" class="update-picture-btn">Change Photo</button>
+            <button @click="updateProfilePicture" class="update-picture-btn" :disabled="uploadingPhoto">
+              {{ uploadingPhoto ? 'Uploading...' : 'Change Photo' }}
+            </button>
           </div>
           <div class="profile-info">
             <h2 class="profile-name">{{ personalInfo.name || 'User' }}</h2>
@@ -275,8 +399,9 @@ function handleImageError(event: Event) {
                   v-model="personalInfo.email"
                   type="email" 
                   class="form-input"
-                  placeholder="Enter your email"
+                  readonly
                 />
+                <p class="form-help">Email is managed from your account record and is not editable here yet.</p>
               </div>
 
               <div class="form-group">
@@ -299,16 +424,6 @@ function handleImageError(event: Event) {
             </div>
             <div class="card-body">
               <div class="form-group">
-                <label class="form-label">Current Password</label>
-                <input 
-                  v-model="security.oldPassword"
-                  type="password" 
-                  class="form-input"
-                  placeholder="Enter current password"
-                />
-              </div>
-
-              <div class="form-group">
                 <label class="form-label">New Password</label>
                 <input 
                   v-model="security.newPassword"
@@ -316,11 +431,21 @@ function handleImageError(event: Event) {
                   class="form-input"
                   placeholder="Enter new password"
                 />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Confirm New Password</label>
+                <input 
+                  v-model="security.confirmPassword"
+                  type="password" 
+                  class="form-input"
+                  placeholder="Confirm new password"
+                />
                 <div v-if="security.newPassword" class="password-strength">
                   <div class="strength-bar">
                     <div class="strength-fill weak"></div>
                   </div>
-                  <span class="strength-text">Weak - Add numbers and symbols</span>
+                  <span class="strength-text">Use at least 8 characters for a stronger password</span>
                 </div>
               </div>
             </div>
@@ -441,6 +566,7 @@ function handleImageError(event: Event) {
   background: #3b82f6;
   color: #fff;
   border-radius: 50%;
+  overflow: hidden;
   border: none;
   display: flex;
   align-items: center;
@@ -456,6 +582,13 @@ function handleImageError(event: Event) {
   background: #2563eb;
   transform: scale(1.05);
   box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.user-avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
 }
 
 /* Body */
@@ -517,6 +650,10 @@ function handleImageError(event: Event) {
   border-radius: 50%;
   object-fit: cover;
   border: 4px solid #e5e7eb;
+}
+
+.hidden-file-input {
+  display: none;
 }
 
 .update-picture-btn {
@@ -656,6 +793,12 @@ function handleImageError(event: Event) {
 
 .form-input::placeholder {
   color: #9ca3af;
+}
+
+.form-help {
+  margin: 0;
+  font-size: 12px;
+  color: #6b7280;
 }
 
 /* Password Strength */

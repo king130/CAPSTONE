@@ -1,6 +1,10 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import { buildProfileAvatarUrl } from '@/services/profileMedia'
+import { subscribeApplications, type ApplicationRecord } from '@/services/applications'
+import { listDocuments, type DocumentRecord } from '@/services/documents'
+import { subscribeInternships, type InternshipRecord } from '@/services/internships'
 import { 
   BellIcon, 
   PencilSquareIcon, 
@@ -28,6 +32,15 @@ const userInitials = computed(() => {
     .join('')
     .toUpperCase()
     .slice(0, 2)
+})
+
+const userAvatarUrl = computed(() => {
+  const currentUser = authStore.user
+  const profile = currentUser?.profile as Record<string, unknown> | undefined
+  if (currentUser?.uid && profile?.avatarPath) {
+    return buildProfileAvatarUrl(currentUser.uid, currentUser.updatedAt)
+  }
+  return ''
 })
 
 // TEMPORARY DATA: Notification dropdown state - this is a UI state variable
@@ -72,64 +85,216 @@ function toggleNotifications() {
 // Emit event to parent
 const emit = defineEmits<{
   navigateToProfile: []
+  navigateToSection: [section: string]
 }>()
 
 function handleAvatarClick() {
   emit('navigateToProfile')
 }
 
-// Dashboard data
-const user = ref({
-  name: 'Alex',
-  internshipProgress: 92,
-  totalHours: 240,
-  maxHours: 400,
-  hoursPercentage: 60
+function navigateToSection(section: string) {
+  emit('navigateToSection', section)
+}
+
+const studentApplications = ref<ApplicationRecord[]>([])
+const studentDocuments = ref<DocumentRecord[]>([])
+const internships = ref<InternshipRecord[]>([])
+let unsubApplications: (() => void) | null = null
+let unsubInternships: (() => void) | null = null
+
+function formatDateLabel(value?: string) {
+  if (!value) return 'Recently updated'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Recently updated'
+  return `Applied: ${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+}
+
+function normalizeApplicationStatus(status?: string) {
+  const normalized = String(status || 'pending').trim().toLowerCase()
+  if (normalized === 'approved' || normalized === 'accepted') return 'Accepted'
+  if (normalized === 'rejected' || normalized === 'declined') return 'Rejected'
+  if (normalized === 'reviewed' || normalized === 'under_review') return 'Under Review'
+  return 'Application Sent'
+}
+
+const profileCompleteness = computed(() => {
+  const profile = authStore.user?.profile as Record<string, unknown> | undefined
+  const checks = [
+    !!authStore.user?.displayName,
+    !!authStore.user?.email,
+    !!(profile?.contactNumber as string),
+    !!(profile?.studentNumber as string) || !!(profile?.studentId as string),
+    !!(profile?.schoolName as string),
+    !!(profile?.course as string),
+    !!(profile?.yearLevel as string),
+  ]
+  const completed = checks.filter(Boolean).length
+  return Math.round((completed / checks.length) * 100)
 })
 
-const internshipReadiness = ref([
-  { task: 'Resume Complete', completed: true },
-  { task: 'Skills Assessment Done', completed: true },
-  { task: 'Profile Complete', completed: true }
+const documentReadiness = computed(() => {
+  if (studentDocuments.value.length === 0) return 0
+  const approvedCount = studentDocuments.value.filter((doc) => doc.status === 'approved').length
+  return Math.round((approvedCount / studentDocuments.value.length) * 100)
+})
+
+const readinessScore = computed(() => {
+  const documentsScore = studentDocuments.value.length === 0 ? 0 : documentReadiness.value
+  const applicationScore = studentApplications.value.length === 0 ? 0 : 100
+  return Math.round((profileCompleteness.value * 0.45) + (documentsScore * 0.35) + (applicationScore * 0.2))
+})
+
+const user = computed(() => ({
+  name: authStore.user?.displayName || authStore.user?.email?.split('@')[0] || 'Student',
+  internshipProgress: readinessScore.value,
+}))
+
+const internshipReadiness = computed(() => [
+  { task: 'Profile Complete', completed: profileCompleteness.value >= 85 },
+  { task: 'Documents Uploaded', completed: studentDocuments.value.length > 0 },
+  { task: 'Applications Started', completed: studentApplications.value.length > 0 },
 ])
 
-const topSkills = ref([
-  { name: 'React.js', percentage: 90 },
-  { name: 'JavaScript', percentage: 85 },
-  { name: 'Git', percentage: 82 },
-  { name: 'UI Design', percentage: 78 },
-  { name: 'Communication', percentage: 75 }
-])
-
-const skillsToImprove = ref([
-  { name: 'Testing', gap: '62%', color: '#fecaca' },
-  { name: 'System Design', gap: '50%', color: '#fed7aa' },
-  { name: 'TypeScript', gap: '25%', color: '#fef3c7' }
-])
-
-const recentApplications = ref([
-  {
-    company: 'TechCorp',
-    position: 'Software Engineering Intern',
-    status: 'Interview Scheduled',
-    statusColor: '#10b981',
-    appliedDate: 'Applied: May 15, 2024'
-  },
-  {
-    company: 'DataSystems Inc',
-    position: 'Data Analyst Intern',
-    status: 'Under Review',
-    statusColor: '#f59e0b',
-    appliedDate: 'Applied: May 8, 2024'
-  },
-  {
-    company: 'CloudTech Solutions',
-    position: 'DevOps Intern',
-    status: 'Application Sent',
-    statusColor: '#ef4444',
-    appliedDate: 'Applied: May 6, 2024'
+const topSkills = computed(() => {
+  const profile = authStore.user?.profile as Record<string, unknown> | undefined
+  const course = String(profile?.course || '')
+  const courseMap: Record<string, Array<{ name: string; percentage: number }>> = {
+    bsit: [
+      { name: 'Technical Support', percentage: 88 },
+      { name: 'Web Development', percentage: 84 },
+      { name: 'Database Basics', percentage: 79 },
+      { name: 'Networking', percentage: 76 },
+      { name: 'Documentation', percentage: 72 },
+    ],
+    bscs: [
+      { name: 'Programming', percentage: 90 },
+      { name: 'Problem Solving', percentage: 87 },
+      { name: 'Algorithms', percentage: 82 },
+      { name: 'Database Design', percentage: 76 },
+      { name: 'Software Testing', percentage: 71 },
+    ],
   }
-])
+  const key = course.toLowerCase().replace(/[^a-z]/g, '')
+  return courseMap[key] ?? [
+    { name: 'Communication', percentage: 82 },
+    { name: 'Teamwork', percentage: 80 },
+    { name: 'Documentation', percentage: 76 },
+    { name: 'Problem Solving', percentage: 74 },
+    { name: 'Adaptability', percentage: 72 },
+  ]
+})
+
+const internshipsById = computed(() => {
+  const map = new Map<string, InternshipRecord>()
+  for (const internship of internships.value) {
+    map.set(String(internship.id), internship)
+  }
+  return map
+})
+
+const skillsToImprove = computed(() => {
+  const missingDocuments = studentDocuments.value.length === 0
+  const noApplications = studentApplications.value.length === 0
+  const items = [
+    { name: 'Profile Completion', gap: `${Math.max(0, 100 - profileCompleteness.value)}%`, color: '#dbeafe' },
+    { name: 'Document Readiness', gap: `${Math.max(0, 100 - documentReadiness.value)}%`, color: '#fef3c7' },
+    { name: 'Application Activity', gap: noApplications ? '100%' : '25%', color: missingDocuments ? '#fee2e2' : '#dcfce7' },
+  ]
+  return items
+})
+
+const recentApplications = computed(() =>
+  studentApplications.value
+    .slice()
+    .sort((a, b) => new Date(b.createdAt || '').getTime() - new Date(a.createdAt || '').getTime())
+    .slice(0, 5)
+    .map((app) => {
+      const internship = internshipsById.value.get(String(app.internshipId))
+      return {
+        company: internship?.hostName || internship?.companyName || 'Host Organization',
+        position: app.internshipTitle || internship?.title || 'Internship Application',
+        status: normalizeApplicationStatus(app.status),
+        appliedDate: formatDateLabel(app.createdAt),
+      }
+    })
+)
+
+const readinessTitle = computed(() =>
+  profileCompleteness.value >= 85 ? "You're ready to apply!" : 'Complete your profile to apply faster'
+)
+
+const readinessDescription = computed(() => {
+  if (studentDocuments.value.length === 0) {
+    return 'Upload your internship documents so companies and schools can review your application faster.'
+  }
+  if (studentApplications.value.length === 0) {
+    return 'Your profile is almost ready. Start applying to internships to build momentum.'
+  }
+  return 'Your profile and documents are in place. Keep tracking applications and updates here.'
+})
+
+const bestMatchTitle = computed(() => {
+  const profile = authStore.user?.profile as Record<string, unknown> | undefined
+  return String(profile?.preferredField || profile?.course || 'Internship Opportunities')
+})
+
+const bestMatchSubtitle = computed(() =>
+  studentApplications.value.length > 0 ? 'Based on your current applications and profile' : 'Based on your student profile'
+)
+
+async function loadStudentDocuments() {
+  try {
+    studentDocuments.value = await listDocuments()
+  } catch {
+    studentDocuments.value = []
+  }
+}
+
+function setupDashboardSubscriptions() {
+  if (unsubApplications) {
+    unsubApplications()
+    unsubApplications = null
+  }
+  if (unsubInternships) {
+    unsubInternships()
+    unsubInternships = null
+  }
+
+  const uid = authStore.user?.uid
+  if (!uid || authStore.user?.role !== 'student') {
+    studentApplications.value = []
+    studentDocuments.value = []
+    internships.value = []
+    return
+  }
+
+  unsubApplications = subscribeApplications(uid, (items) => {
+    studentApplications.value = items
+  })
+  unsubInternships = subscribeInternships((items) => {
+    internships.value = items
+  })
+  loadStudentDocuments()
+}
+
+onMounted(() => {
+  setupDashboardSubscriptions()
+})
+
+watch(
+  () => [authStore.initializing, authStore.user?.uid, authStore.user?.role] as const,
+  () => {
+    if (!authStore.initializing) {
+      setupDashboardSubscriptions()
+    }
+  },
+  { immediate: true }
+)
+
+onUnmounted(() => {
+  if (unsubApplications) unsubApplications()
+  if (unsubInternships) unsubInternships()
+})
 </script>
 
 <template>
@@ -144,7 +309,7 @@ const recentApplications = ref([
         <div class="notification-wrapper">
           <BellIcon class="notification-icon-bell" />
         </div>
-        <div class="avatar" @click="handleAvatarClick" title="View Profile">{{ userInitials }}</div>
+        <div class="avatar" @click="handleAvatarClick" title="View Profile"><img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="avatar-image" /><span v-else>{{ userInitials }}</span></div>
       </div>
     </div>
 
@@ -160,22 +325,22 @@ const recentApplications = ref([
             </h2>
             <p class="welcome-subtitle">Here's what's happening with your internship journey today</p>
           </div>
-          <div class="quick-stats">
-            <div class="quick-stat-item">
-              <div class="stat-value">{{ user.internshipProgress }}%</div>
-              <div class="stat-label">Profile Complete</div>
-            </div>
+            <div class="quick-stats">
+              <div class="quick-stat-item">
+                <div class="stat-value">{{ user.internshipProgress }}%</div>
+                <div class="stat-label">Readiness Score</div>
+              </div>
             <div class="quick-stat-divider"></div>
             <div class="quick-stat-item">
-              <div class="stat-value">{{ user.totalHours }}h</div>
-              <div class="stat-label">Hours Logged</div>
+              <div class="stat-value">{{ studentDocuments.length }}</div>
+              <div class="stat-label">Documents</div>
             </div>
             <div class="quick-stat-divider"></div>
-            <div class="quick-stat-item">
-              <div class="stat-value">3</div>
-              <div class="stat-label">Active Applications</div>
+              <div class="quick-stat-item">
+                <div class="stat-value">{{ studentApplications.length }}</div>
+                <div class="stat-label">Applications</div>
+              </div>
             </div>
-          </div>
         </div>
       </div>
 
@@ -187,8 +352,8 @@ const recentApplications = ref([
           <div class="progress-card">
             <div class="card-header-row">
               <div>
-                <h3 class="card-title">Internship Progress</h3>
-                <p class="card-subtitle">{{ user.totalHours }} of {{ user.maxHours }} hours completed</p>
+                <h3 class="card-title">Readiness Progress</h3>
+                <p class="card-subtitle">Built from your profile, documents, and application activity</p>
               </div>
             </div>
             
@@ -207,34 +372,34 @@ const recentApplications = ref([
                   r="60"
                   :style="{ 
                     strokeDasharray: `${2 * Math.PI * 60}`,
-                    strokeDashoffset: `${2 * Math.PI * 60 * (1 - user.hoursPercentage / 100)}`
+                    strokeDashoffset: `${2 * Math.PI * 60 * (1 - user.internshipProgress / 100)}`
                   }"
                 />
               </svg>
               <div class="progress-center">
-                <div class="progress-percentage">{{ user.hoursPercentage }}%</div>
+                <div class="progress-percentage">{{ user.internshipProgress }}%</div>
                 <div class="progress-label">Complete</div>
               </div>
             </div>
 
             <div class="progress-details">
               <div class="detail-row">
-                <span class="detail-label">Hours this week</span>
-                <span class="detail-value">32h</span>
+                <span class="detail-label">Documents uploaded</span>
+                <span class="detail-value">{{ studentDocuments.length }}</span>
               </div>
               <div class="detail-row">
-                <span class="detail-label">Remaining hours</span>
-                <span class="detail-value">{{ user.maxHours - user.totalHours }}h</span>
+                <span class="detail-label">Approved documents</span>
+                <span class="detail-value">{{ studentDocuments.filter((doc) => doc.status === 'approved').length }}</span>
               </div>
               <div class="detail-row">
-                <span class="detail-label">Expected completion</span>
-                <span class="detail-value">Aug 2024</span>
+                <span class="detail-label">Applications submitted</span>
+                <span class="detail-value">{{ studentApplications.length }}</span>
               </div>
             </div>
 
-            <button class="card-button primary">
+            <button class="card-button primary" @click="handleAvatarClick">
               <ChartBarIcon class="btn-icon" />
-              Log Hours
+              Update Profile
             </button>
           </div>
 
@@ -286,14 +451,16 @@ const recentApplications = ref([
 
             <div class="recommendations-section">
               <h4 class="recommendations-title">Recommendations:</h4>
-              <p class="recommendations-subtitle">Complete 2 courses to improve your match score:</p>
+              <p class="recommendations-subtitle">Focus on the next gaps to improve your internship readiness:</p>
               <ul class="recommendations-list">
-                <li class="recommendation-item">Jest Testing Fundamentals</li>
-                <li class="recommendation-item">TypeScript for Beginners</li>
+                <li class="recommendation-item" v-if="profileCompleteness < 100">Complete your student profile details.</li>
+                <li class="recommendation-item" v-if="studentDocuments.length === 0">Upload your internship requirements.</li>
+                <li class="recommendation-item" v-if="studentApplications.length === 0">Submit your first internship application.</li>
+                <li class="recommendation-item" v-if="profileCompleteness === 100 && studentDocuments.length > 0 && studentApplications.length > 0">Keep monitoring application updates and feedback.</li>
               </ul>
             </div>
 
-            <button class="card-button primary">View Full Analysis</button>
+            <button class="card-button primary" @click="navigateToSection('readiness-check')">View Full Analysis</button>
           </div>
         </div>
 
@@ -306,10 +473,10 @@ const recentApplications = ref([
               <div class="score-label">Readiness Score</div>
             </div>
             <h3 class="readiness-title">
-              You're ready to apply! 
+              {{ readinessTitle }}
               <SparklesIcon class="readiness-icon" />
             </h3>
-            <p class="readiness-description">Your profile is complete and optimized for internship applications</p>
+            <p class="readiness-description">{{ readinessDescription }}</p>
             
             <div class="readiness-checklist">
               <div v-for="item in internshipReadiness" :key="item.task" class="checklist-item">
@@ -320,7 +487,7 @@ const recentApplications = ref([
               </div>
             </div>
 
-            <button class="card-button secondary">
+            <button class="card-button secondary" @click="handleAvatarClick">
               <PencilSquareIcon class="btn-icon" />
               Update Profile
             </button>
@@ -329,8 +496,8 @@ const recentApplications = ref([
           <!-- Best Match Card -->
           <div class="best-match-card">
             <div class="match-badge">88% Match</div>
-            <h3 class="match-title">Software Development</h3>
-            <p class="match-subtitle">Best-fit department for you</p>
+            <h3 class="match-title">{{ bestMatchTitle }}</h3>
+            <p class="match-subtitle">{{ bestMatchSubtitle }}</p>
 
             <div class="match-reasons">
               <div class="reason-item">
@@ -353,32 +520,32 @@ const recentApplications = ref([
               </div>
             </div>
 
-            <button class="card-button outline">View All Matches</button>
+            <button class="card-button outline" @click="navigateToSection('internship')">View Internships</button>
           </div>
 
           <!-- Quick Actions Card -->
           <div class="quick-actions-card">
             <h3 class="card-title">Quick Actions</h3>
             <div class="action-buttons">
-              <button class="action-btn">
+              <button class="action-btn" @click="navigateToSection('documents')">
                 <div class="action-icon">
                   <DocumentTextIcon class="action-icon-svg" />
                 </div>
                 <span class="action-text">Upload Document</span>
               </button>
-              <button class="action-btn">
+              <button class="action-btn" @click="navigateToSection('internship')">
                 <div class="action-icon">
                   <MagnifyingGlassIcon class="action-icon-svg" />
                 </div>
                 <span class="action-text">Find Internships</span>
               </button>
-              <button class="action-btn">
+              <button class="action-btn" @click="navigateToSection('readiness-check')">
                 <div class="action-icon">
                   <ChartPieIcon class="action-icon-svg" />
                 </div>
                 <span class="action-text">View Analytics</span>
               </button>
-              <button class="action-btn">
+              <button class="action-btn" @click="navigateToSection('messages')">
                 <div class="action-icon">
                   <ChatBubbleLeftRightIcon class="action-icon-svg" />
                 </div>
@@ -397,6 +564,9 @@ const recentApplications = ref([
         </div>
         
         <div class="applications-list">
+          <div v-if="recentApplications.length === 0" class="empty-applications-state">
+            <p>No internship applications yet. Start exploring companies and submit your first application.</p>
+          </div>
           <div v-for="app in recentApplications" :key="app.company" class="application-item-modern">
             <div class="app-left">
               <div class="company-avatar">{{ app.company.charAt(0) }}</div>
@@ -410,14 +580,15 @@ const recentApplications = ref([
               <div 
                 class="status-pill" 
                 :class="{
-                  'status-success': app.status === 'Interview Scheduled',
+                  'status-success': app.status === 'Interview Scheduled' || app.status === 'Accepted',
                   'status-warning': app.status === 'Under Review',
-                  'status-info': app.status === 'Application Sent'
+                  'status-info': app.status === 'Application Sent',
+                  'status-danger': app.status === 'Rejected'
                 }"
               >
                 {{ app.status }}
               </div>
-              <button class="view-btn">View →</button>
+              <button class="view-btn" @click="navigateToSection('internship')">View →</button>
             </div>
           </div>
         </div>
@@ -520,6 +691,7 @@ const recentApplications = ref([
   background: #3b82f6;
   color: #fff;
   border-radius: 50%;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -533,6 +705,13 @@ const recentApplications = ref([
   background: #2563eb;
   transform: scale(1.05);
   box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
 }
 
 .message-icon-btn {
@@ -1498,6 +1677,15 @@ const recentApplications = ref([
   gap: 12px;
 }
 
+.empty-applications-state {
+  padding: 18px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 14px;
+}
+
 .application-item-modern {
   display: flex;
   justify-content: space-between;
@@ -1586,6 +1774,11 @@ const recentApplications = ref([
 .status-info {
   background: #dbeafe;
   color: #2563eb;
+}
+
+.status-danger {
+  background: #fee2e2;
+  color: #dc2626;
 }
 
 .view-btn {

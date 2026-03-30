@@ -10,6 +10,7 @@ class Company extends Model
     protected $fillable = [
         'user_id',
         'subscription_id',
+        'organization_id',
         'company_name',
         'company_type',
         'industry_type',
@@ -29,5 +30,10 @@ class Company extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function organization(): BelongsTo
+    {
+        return $this->belongsTo(Organization::class);
     }
 }

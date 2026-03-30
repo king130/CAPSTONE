@@ -19,9 +19,7 @@
   },
   "dependencies": {
     "@heroicons/vue": "^2.2.0",
-    "firebase": "^12.9.0",
-    "firebase-admin": "^13.7.0",
-    "griddy-icons": "^0.1.2",
+    "axios": "^1.13.6",
     "pinia": "^3.0.4",
     "sweetalert2": "^11.26.17",
     "tom-select": "^2.5.2",

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import { buildProfileAvatarUrl } from '@/services/profileMedia'
 import { 
   BellIcon,
   CheckCircleIcon,
@@ -25,6 +26,15 @@ const userInitials = computed(() => {
     .join('')
     .toUpperCase()
     .slice(0, 2)
+})
+
+const userAvatarUrl = computed(() => {
+  const currentUser = authStore.user
+  const profile = currentUser?.profile as Record<string, unknown> | undefined
+  if (currentUser?.uid && profile?.avatarPath) {
+    return buildProfileAvatarUrl(currentUser.uid, currentUser.updatedAt)
+  }
+  return ''
 })
 
 // TEMPORARY DATA: Notification dropdown state - this is a UI state variable
@@ -173,7 +183,8 @@ function viewDetails(section: string) {
           <BellIcon class="notification-bell" />
         </div>
         <button class="user-avatar" type="button" @click="handleAvatarClick" :title="`View Profile - ${userInitials}`">
-          {{ userInitials }}
+          <img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="user-avatar-image" />
+          <span v-else>{{ userInitials }}</span>
         </button>
       </div>
     </header>
@@ -478,6 +489,7 @@ function viewDetails(section: string) {
   background: #3b82f6;
   color: #fff;
   border-radius: 50%;
+  overflow: hidden;
   border: none;
   display: flex;
   align-items: center;
@@ -493,6 +505,13 @@ function viewDetails(section: string) {
   background: #2563eb;
   transform: scale(1.05);
   box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.user-avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
 }
 
 /* Main Content */

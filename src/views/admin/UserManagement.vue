@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import Swal from 'sweetalert2'
-import { collection, doc, onSnapshot, orderBy, query, setDoc, updateDoc } from 'firebase/firestore'
-import { db } from '@/services/firebase'
+import { apiFetch } from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
 
 type UserRow = {
@@ -24,28 +23,24 @@ const filterRole = ref('all')
 const filterTemporary = ref('all')
 const filterStatus = ref('all')
 
-let unsubscribe: null | (() => void) = null
+let refreshTimer: ReturnType<typeof setInterval> | null = null
+
+async function loadUsers() {
+  try {
+    const res = await apiFetch<{ data: UserRow[] }>('/admin/users')
+    users.value = res.data ?? []
+  } catch {
+    users.value = []
+  }
+}
 
 onMounted(() => {
-  const usersRef = collection(db, 'users')
-  const usersQuery = query(usersRef, orderBy('createdAt', 'desc'))
-  unsubscribe = onSnapshot(
-    usersQuery,
-    (snapshot) => {
-      users.value = snapshot.docs.map((docSnap) => ({
-        uid: docSnap.id,
-        ...(docSnap.data() as Omit<UserRow, 'uid'>),
-      }))
-    },
-    (err) => {
-      console.warn('Admin users subscription error:', err?.message || err)
-      users.value = []
-    }
-  )
+  loadUsers()
+  refreshTimer = setInterval(loadUsers, 30000)
 })
 
 onUnmounted(() => {
-  if (unsubscribe) unsubscribe()
+  if (refreshTimer) clearInterval(refreshTimer)
 })
 
 const filteredUsers = computed(() => {
@@ -100,11 +95,14 @@ async function updateUserRole(user: UserRow, newRole: string) {
   if (!result.isConfirmed) return
 
   try {
-    await updateDoc(doc(db, 'users', user.uid), {
-      role: newRole,
-      profileSetupComplete: newRole !== 'guest' && newRole !== null,
-      updatedAt: new Date()
+    await apiFetch(`/admin/users/${user.uid}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        role: newRole,
+        profileSetupComplete: newRole !== 'guest' && newRole !== null,
+      }),
     })
+    await loadUsers()
     await Swal.fire({
       icon: 'success',
       title: 'Role Updated',
@@ -163,56 +161,22 @@ async function setUserStatus(user: UserRow, enabled: boolean) {
 
   if (!result.isConfirmed) return
 
-  await updateDoc(doc(db, 'users', user.uid), { isActive: enabled })
+  await apiFetch(`/admin/users/${user.uid}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ isActive: enabled }),
+  })
+  await loadUsers()
 }
 
 const syncingProfiles = ref(false)
 
 async function syncPublicProfiles() {
-  const toSync = users.value.filter((u) => u.role === 'school' || u.role === 'company')
-  if (toSync.length === 0) {
-    await Swal.fire({
-      icon: 'info',
-      title: 'Nothing to Sync',
-      text: 'No school or company accounts found.',
-      confirmButtonColor: '#3b4cb8',
-    })
-    return
-  }
-  syncingProfiles.value = true
-  try {
-    for (const u of toSync) {
-      const p = (u.profile || {}) as Record<string, unknown>
-      const orgName =
-        (u.role === 'school' ? p.institutionName : p.companyName) as string | undefined
-      await setDoc(
-        doc(db, 'profiles_public', u.uid),
-        {
-          uid: u.uid,
-          displayName: u.displayName || 'User',
-          role: u.role,
-          orgName: orgName || u.displayName || u.email?.split('@')[0] || null,
-          email: u.email || null,
-        },
-        { merge: true }
-      )
-    }
-    await Swal.fire({
-      icon: 'success',
-      title: 'Profiles Synced',
-      text: `Synced ${toSync.length} school/company profile(s) to search. They will now appear when adding contracts or starting chats.`,
-      confirmButtonColor: '#3b4cb8',
-    })
-  } catch (err) {
-    await Swal.fire({
-      icon: 'error',
-      title: 'Sync Failed',
-      text: err instanceof Error ? err.message : 'Could not sync profiles.',
-      confirmButtonColor: '#3b4cb8',
-    })
-  } finally {
-    syncingProfiles.value = false
-  }
+  await Swal.fire({
+    icon: 'info',
+    title: 'Directory',
+    text: 'School and company listings are served from the MySQL database. No Firestore sync is required.',
+    confirmButtonColor: '#3b4cb8',
+  })
 }
 </script>
 

@@ -48,15 +48,6 @@
 
       <div
         class="nav-item"
-        :class="{ active: activeItem === 'community' }"
-        @click="setActiveItem('community')"
-      >
-        <img src="/icons/icon-community.png" alt="Community" class="nav-icon-img" />
-        <span>Community</span>
-      </div>
-
-      <div
-        class="nav-item"
         :class="{ active: activeItem === 'documents' }"
         @click="setActiveItem('documents')"
       >
@@ -98,6 +89,15 @@
       >
         <img src="/icons/icon-student.png" alt="Student Interns" class="nav-icon-img" />
         <span>Student Interns</span>
+      </div>
+
+      <div
+        class="nav-item"
+        :class="{ active: activeItem === 'team-access' }"
+        @click="setActiveItem('team-access')"
+      >
+        <img src="/icons/icon-settings.png" alt="Team Access" class="nav-icon-img" />
+        <span>Team Access</span>
       </div>
 
 

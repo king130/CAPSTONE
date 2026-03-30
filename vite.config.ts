@@ -13,6 +13,12 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [vue(), ...(enableVueDevTools ? [vueDevTools()] : [])],
     server: {
+      proxy: {
+        '/api': {
+          target: 'http://127.0.0.1:8000',
+          changeOrigin: true,
+        },
+      },
       watch: {
         // Avoid transient EBUSY on Windows when files are momentarily locked during save.
         usePolling: true,

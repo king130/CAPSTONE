@@ -1,17 +1,3 @@
-import {
-  addDoc,
-  collection,
-  doc,
-  onSnapshot,
-  orderBy,
-  query,
-  serverTimestamp,
-  Timestamp,
-  updateDoc,
-  where,
-} from 'firebase/firestore'
-import { db } from './firebase'
-
 export type EvaluationStatus = 'PENDING' | 'OVERDUE' | 'COMPLETED'
 
 export interface EvaluationRecord {
@@ -21,10 +7,10 @@ export interface EvaluationRecord {
   studentName?: string
   supervisor: string
   type: string
-  dueDate: Timestamp
+  dueDate: unknown
   status: EvaluationStatus
-  createdAt?: Timestamp
-  updatedAt?: Timestamp
+  createdAt?: unknown
+  updatedAt?: unknown
 }
 
 export interface CreateEvaluationPayload {
@@ -37,48 +23,15 @@ export interface CreateEvaluationPayload {
   status?: EvaluationStatus
 }
 
+export async function createEvaluation(_payload: CreateEvaluationPayload): Promise<string> {
+  return ''
+}
+
 export function subscribeCompanyEvaluations(
-  companyId: string,
+  _companyId: string,
   callback: (items: EvaluationRecord[]) => void,
-  onError?: (err: Error) => void
-) {
-  const evaluationsRef = collection(db, 'evaluations')
-  const q = query(evaluationsRef, where('companyId', '==', companyId), orderBy('dueDate', 'asc'))
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const items = snapshot.docs.map((docSnap) => ({
-        id: docSnap.id,
-        ...(docSnap.data() as Omit<EvaluationRecord, 'id'>),
-      }))
-      callback(items)
-    },
-    (err) => {
-      console.warn('subscribeCompanyEvaluations error:', err?.message || err)
-      onError?.(err)
-      callback([])
-    }
-  )
+  _onError?: (err: Error) => void
+): () => void {
+  callback([])
+  return () => {}
 }
-
-export async function createEvaluation(payload: CreateEvaluationPayload) {
-  const evaluationsRef = collection(db, 'evaluations')
-  const docRef = await addDoc(evaluationsRef, {
-    companyId: payload.companyId,
-    studentId: payload.studentId,
-    studentName: payload.studentName ?? null,
-    supervisor: payload.supervisor,
-    type: payload.type,
-    dueDate: Timestamp.fromDate(payload.dueDate),
-    status: payload.status ?? 'PENDING',
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  })
-  return docRef.id
-}
-
-export async function updateEvaluationStatus(evaluationId: string, status: EvaluationStatus) {
-  const evaluationRef = doc(db, 'evaluations', evaluationId)
-  await updateDoc(evaluationRef, { status, updatedAt: serverTimestamp() })
-}
-

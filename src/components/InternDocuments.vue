@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import Swal from 'sweetalert2'
 import { useAuthStore } from '@/stores/auth'
+import { buildProfileAvatarUrl } from '@/services/profileMedia'
+import { listDocuments, uploadDocuments, type DocumentRecord } from '@/services/documents'
 import { 
   BellIcon,
   MagnifyingGlassIcon,
@@ -28,6 +30,15 @@ const userInitials = computed(() => {
     .join('')
     .toUpperCase()
     .slice(0, 2)
+})
+
+const userAvatarUrl = computed(() => {
+  const currentUser = authStore.user
+  const profile = currentUser?.profile as Record<string, unknown> | undefined
+  if (currentUser?.uid && profile?.avatarPath) {
+    return buildProfileAvatarUrl(currentUser.uid, currentUser.updatedAt)
+  }
+  return ''
 })
 
 // TEMPORARY DATA: Notification dropdown state - this is a UI state variable
@@ -84,101 +95,39 @@ function handleAvatarClick() {
 }
 
 const searchQuery = ref('')
+const loadingDocuments = ref(false)
+const uploadingDocument = ref(false)
+const documentsError = ref('')
+const seedingTemporaryDocuments = ref(false)
 
 const filteredDocuments = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
   if (!query) return documents.value
-  return documents.value.filter((doc) => doc.name.toLowerCase().includes(query))
+  return documents.value.filter((doc) =>
+    [doc.name, doc.type, doc.status, doc.category]
+      .filter(Boolean)
+      .some((value) => value.toLowerCase().includes(query))
+  )
 })
 
-// Documents data matching the screenshot
-const documents = ref([
-  {
-    id: 1,
-    name: 'Internship Application Form',
-    type: 'PDF',
-    size: '245 KB',
-    daysAgo: '2 days ago',
-    status: 'Verified',
-    statusColor: '#10b981',
-    icon: '/icons/icon-pdf.png',
-    bgColor: '#dbeafe',
-    usedIn: '5 applications',
-    viewedTimes: '6 times',
-    needsUpdate: false
-  },
-  {
-    id: 2,
-    name: 'Enrollment',
-    type: 'DOCX',
-    size: '178 KB',
-    daysAgo: '5 days ago',
-    status: 'Pending Review',
-    statusColor: '#f59e0b',
-    icon: '/icons/icon-word.png',
-    bgColor: '#dbeafe',
-    usedIn: '2 applications',
-    viewedTimes: '5 times',
-    needsUpdate: false
-  },
-  {
-    id: 3,
-    name: 'Registration Form',
-    type: 'PDF',
-    size: '89 KB',
-    daysAgo: '1 week ago',
-    status: 'Needs Update',
-    statusColor: '#ef4444',
-    icon: '/icons/icon-pdf.png',
-    bgColor: '#dbeafe',
-    portfolioNote: 'Portfolio is outdated',
-    additionalInfo: 'Add recent projects from this semester',
-    usedIn: '5 applications',
-    viewedTimes: '24 times'
-  },
-  {
-    id: 4,
-    name: 'Internship Agreement',
-    type: 'PDF',
-    size: '101 KB',
-    daysAgo: '1 week ago',
-    status: 'Verified',
-    statusColor: '#10b981',
-    icon: '/icons/icon-docs.png',
-    bgColor: '#e0f2fe',
-    usedIn: '1 applications',
-    viewedTimes: '5 times',
-    needsUpdate: false
-  },
-  {
-    id: 5,
-    name: 'Performance Evaluation',
-    type: 'PDF',
-    size: '200 KB',
-    daysAgo: '1 month ago',
-    status: 'Verified',
-    statusColor: '#10b981',
-    icon: '/icons/icon-docs.png',
-    bgColor: '#dbeafe',
-    usedIn: '5 applications',
-    viewedTimes: '18 times',
-    needsUpdate: false
-  },
-  {
-    id: 6,
-    name: 'Certificate',
-    type: 'DOCX',
-    size: '150 KB',
-    daysAgo: '1 week ago',
-    status: 'Verified',
-    statusColor: '#10b981',
-    icon: '/icons/icon-word.png',
-    bgColor: '#dbeafe',
-    usedIn: '1 applications',
-    viewedTimes: '3 times',
-    needsUpdate: false
-  }
-])
+type DocumentCard = {
+  id: string
+  name: string
+  type: string
+  size: string
+  daysAgo: string
+  status: 'Verified' | 'Pending Review' | 'Needs Update'
+  icon: string
+  bgColor: string
+  usedIn: string
+  viewedTimes: string
+  category: string
+  portfolioNote?: string
+  additionalInfo?: string
+  fileUrl: string
+}
+
+const documents = ref<DocumentCard[]>([])
 
 // Modal state
 const showUploadModal = ref(false)
@@ -233,51 +182,124 @@ const documentTypes = ref([
   }
 ])
 
-// Document health check data
-const healthCheck = ref({
-  resumeCompleteness: 85,
-  missingReferences: true,
-  portfolioQuality: 72,
-  needsRecentProjects: true
+const categoryNameMap = computed(() =>
+  Object.fromEntries(documentTypes.value.map((type) => [type.id, type.name]))
+)
+
+const approvedDocuments = computed(() => documents.value.filter((doc) => doc.status === 'Verified').length)
+const pendingDocuments = computed(() => documents.value.filter((doc) => doc.status === 'Pending Review').length)
+
+const healthCheck = computed(() => {
+  const total = documents.value.length
+  const verified = approvedDocuments.value
+  const hasResume = documents.value.some((doc) => doc.category === 'internship-application')
+  const hasEnrollment = documents.value.some((doc) => doc.category === 'enrollment')
+  return {
+    resumeCompleteness: total === 0 ? 0 : Math.round((verified / total) * 100),
+    missingReferences: !hasResume,
+    portfolioQuality: total === 0 ? 0 : Math.min(100, 45 + verified * 15),
+    needsRecentProjects: !hasEnrollment,
+  }
 })
 
-// Recent activity data
-const recentActivity = ref([
-  {
-    id: 1,
-    action: 'Cover_Letter_TechCorp.pdf downloaded by coordinator',
-    timeAgo: '2 hours ago'
-  },
-  {
-    id: 2,
-    action: 'Resume viewed in application #2847',
-    timeAgo: '1 day ago'
-  },
-  {
-    id: 3,
-    action: 'AWS_Certification.pdf verified by system',
-    timeAgo: '3 days ago'
-  }
-])
+const recentActivity = computed(() =>
+  documents.value.slice(0, 3).map((doc) => ({
+    id: doc.id,
+    action: `${doc.name} uploaded`,
+    timeAgo: doc.daysAgo,
+  }))
+)
 
-// Recommendations data
-const recommendations = ref([
-  {
-    id: 1,
-    text: 'Update your portfolio with recent projects from this semester',
-    type: 'portfolio'
-  },
-  {
-    id: 2,
-    text: 'Add certifications earned this semester to boost your profile',
-    type: 'certification'
-  },
-  {
-    id: 3,
-    text: 'Your resume formatting could be improved for better ATS compatibility',
-    type: 'resume'
+const recommendations = computed(() => {
+  const items: Array<{ id: number; text: string; type: string }> = []
+  if (!documents.value.some((doc) => doc.category === 'internship-application')) {
+    items.push({ id: 1, text: 'Upload your internship application form or resume so companies can review you faster.', type: 'resume' })
   }
-])
+  if (!documents.value.some((doc) => doc.category === 'enrollment')) {
+    items.push({ id: 2, text: 'Add your enrollment proof so schools and companies can verify your current status.', type: 'certification' })
+  }
+  if (pendingDocuments.value > 0) {
+    items.push({ id: 3, text: 'You have documents waiting for review. Keep file names clear so reviewers can process them faster.', type: 'portfolio' })
+  }
+  if (items.length === 0) {
+    items.push({ id: 4, text: 'Your document set is in good shape. Keep recent files updated before applying to more internships.', type: 'portfolio' })
+  }
+  return items
+})
+
+function fileIconFor(document: Pick<DocumentRecord, 'fileName' | 'fileType'>) {
+  const lowerType = (document.fileType || '').toLowerCase()
+  const lowerName = document.fileName.toLowerCase()
+  if (lowerType.includes('pdf') || lowerName.endsWith('.pdf')) return '/icons/icon-pdf.png'
+  if (lowerType.includes('word') || lowerName.endsWith('.doc') || lowerName.endsWith('.docx')) return '/icons/icon-word.png'
+  return '/icons/icon-docs.png'
+}
+
+function bgColorFor(category: string) {
+  return category === 'internship-agreement' ? '#e0f2fe' : '#dbeafe'
+}
+
+function statusLabel(status: DocumentRecord['status']): DocumentCard['status'] {
+  if (status === 'approved') return 'Verified'
+  if (status === 'rejected') return 'Needs Update'
+  return 'Pending Review'
+}
+
+function formatBytes(size?: number | null) {
+  if (!size) return 'Unknown size'
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function relativeTime(value?: string) {
+  if (!value) return 'Recently'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Recently'
+  const diffMs = Date.now() - date.getTime()
+  const diffHours = Math.max(1, Math.floor(diffMs / (1000 * 60 * 60)))
+  if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`
+  const diffDays = Math.floor(diffHours / 24)
+  if (diffDays < 7) return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`
+  const diffWeeks = Math.floor(diffDays / 7)
+  if (diffWeeks < 5) return `${diffWeeks} week${diffWeeks === 1 ? '' : 's'} ago`
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function mapDocument(document: DocumentRecord): DocumentCard {
+  return {
+    id: document.id,
+    name: document.fileName,
+    type: (document.fileName.split('.').pop() || document.fileType || 'FILE').toUpperCase(),
+    size: formatBytes(document.fileSize),
+    daysAgo: relativeTime(document.createdAt),
+    status: statusLabel(document.status),
+    icon: fileIconFor(document),
+    bgColor: bgColorFor(document.category),
+    usedIn: document.category === 'internship-application' ? 'Used for applications' : 'Stored in your records',
+    viewedTimes: document.status === 'approved' ? 'Verified' : 'Awaiting review',
+    category: document.category,
+    fileUrl: document.fileUrl,
+  }
+}
+
+async function loadDocuments() {
+  loadingDocuments.value = true
+  documentsError.value = ''
+  try {
+    const items = await listDocuments()
+    documents.value = items.map(mapDocument)
+  } catch (error) {
+    documents.value = []
+    documentsError.value = error instanceof Error ? error.message : 'Could not load documents.'
+  } finally {
+    loadingDocuments.value = false
+  }
+}
+
+onMounted(() => {
+  loadDocuments()
+})
 
 function searchDocuments() {
   // No-op, v-model handles filtering
@@ -338,17 +360,22 @@ function triggerFileInput() {
   fileInput?.click()
 }
 
-async function confirmUpload() {
-  if (documentName.value.trim() && selectedFile.value) {
-    // Close modal first
-    closeModal()
-    
-    // Show success alert
+async function uploadSingleDocument(file: File, category: string, uploadedDocumentName: string, closeAfterUpload = false) {
+  uploadingDocument.value = true
+  try {
+    await uploadDocuments({
+      files: [file],
+      category,
+    })
+    if (closeAfterUpload) {
+      closeModal()
+    }
+    await loadDocuments()
     await Swal.fire({
       icon: 'success',
       iconColor: '#16a34a',
       title: 'Document Uploaded Successfully!',
-      text: `${documentName.value} has been uploaded and is now being processed.`,
+      text: `${uploadedDocumentName} has been uploaded and is now being processed.`,
       confirmButtonText: 'Continue',
       confirmButtonColor: '#3b82f6',
       customClass: {
@@ -358,25 +385,89 @@ async function confirmUpload() {
         confirmButton: 'capstone-swal-confirm',
       },
     })
-    
-    const fileExtension = selectedFile.value.name.split('.').pop()?.toUpperCase() || 'FILE'
-    documents.value.unshift({
-      id: Date.now(),
-      name: documentName.value,
-      type: fileExtension,
-      size: `${Math.ceil(selectedFile.value.size / 1024)} KB`,
-      daysAgo: 'Just now',
-      status: 'Pending Review',
-      statusColor: '#f59e0b',
-      icon: fileExtension === 'PDF' ? '/icons/icon-pdf.png' : '/icons/icon-docs.png',
-      bgColor: '#dbeafe',
-      usedIn: '0 applications',
-      viewedTimes: '0 times',
-      needsUpdate: false,
+  } catch (error) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Upload Failed',
+      text: error instanceof Error ? error.message : 'Could not upload the document.',
+      confirmButtonColor: '#3b82f6',
     })
-    documentName.value = ''
-    selectedFile.value = null
-    selectedDocumentType.value = ''
+  } finally {
+    uploadingDocument.value = false
+  }
+}
+
+function triggerQuickSubmitInput() {
+  const fileInput = document.getElementById('quick-submit-file-input') as HTMLInputElement
+  fileInput?.click()
+}
+
+async function handleQuickSubmitSelect(event: Event) {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file) return
+
+  await uploadSingleDocument(file, 'other', file.name)
+  target.value = ''
+}
+
+async function submitTemporaryDocuments() {
+  seedingTemporaryDocuments.value = true
+  try {
+    const temporaryDocuments = [
+      {
+        category: 'internship-application',
+        name: 'Temporary_Internship_Application.txt',
+        content: [
+          'Temporary internship application document',
+          `Student: ${authStore.user?.displayName || authStore.user?.email || 'Student'}`,
+          'This file was generated for temporary testing only.',
+        ].join('\n'),
+      },
+      {
+        category: 'enrollment',
+        name: 'Temporary_Enrollment_Proof.txt',
+        content: [
+          'Temporary enrollment proof',
+          `School: ${organizationName.value}`,
+          'This file was generated for temporary testing only.',
+        ].join('\n'),
+      },
+    ]
+
+    for (const document of temporaryDocuments) {
+      const file = new File([document.content], document.name, { type: 'text/plain' })
+      await uploadDocuments({
+        files: [file],
+        category: document.category,
+      })
+    }
+
+    await loadDocuments()
+    await Swal.fire({
+      icon: 'success',
+      title: 'Temporary documents submitted',
+      text: 'Test documents were added so you can continue checking the internship flow.',
+      confirmButtonColor: '#3b82f6',
+    })
+  } catch (error) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Temporary submit failed',
+      text: error instanceof Error ? error.message : 'Could not create temporary documents.',
+      confirmButtonColor: '#3b82f6',
+    })
+  } finally {
+    seedingTemporaryDocuments.value = false
+  }
+}
+
+async function confirmUpload() {
+  if (documentName.value.trim() && selectedFile.value) {
+    const fileToUpload = selectedFile.value
+    const selectedCategory = selectedDocumentType.value || 'other'
+    const uploadedDocumentName = documentName.value.trim()
+    await uploadSingleDocument(fileToUpload, selectedCategory, uploadedDocumentName, true)
   }
 }
 
@@ -397,7 +488,7 @@ function cancelUpload() {
         <div class="notification-wrapper">
           <BellIcon class="notification-icon-bell" />
         </div>
-        <div class="avatar" @click="handleAvatarClick" title="View Profile">{{ userInitials }}</div>
+        <div class="avatar" @click="handleAvatarClick" title="View Profile"><img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="avatar-image" /><span v-else>{{ userInitials }}</span></div>
       </div>
     </div>
 
@@ -416,12 +507,33 @@ function cancelUpload() {
           <DocumentTextIcon class="upload-btn-icon" />
           Document upload
         </button>
+        <button class="quick-submit-btn" :disabled="uploadingDocument" @click="triggerQuickSubmitInput">
+          {{ uploadingDocument ? 'Uploading...' : 'Quick Submit Test File' }}
+        </button>
+        <button class="temporary-docs-btn" :disabled="seedingTemporaryDocuments || uploadingDocument" @click="submitTemporaryDocuments">
+          {{ seedingTemporaryDocuments ? 'Submitting Temp Docs...' : 'Submit Temporary Documents' }}
+        </button>
+        <input
+          id="quick-submit-file-input"
+          type="file"
+          accept=".pdf,.doc,.docx"
+          style="display: none"
+          @change="handleQuickSubmitSelect"
+        />
 
       </div>
+
+    <div v-if="documentsError" class="documents-feedback error">{{ documentsError }}</div>
+    <div v-else-if="loadingDocuments" class="documents-feedback">Loading your uploaded documents...</div>
 
     <div class="main-layout">
       <!-- Documents Grid -->
       <div class="documents-grid">
+        <div v-if="!loadingDocuments && filteredDocuments.length === 0" class="empty-documents-card">
+          <DocumentTextIcon class="empty-documents-icon" />
+          <h3>No documents yet</h3>
+          <p>Upload your internship requirements here so schools and companies can review them.</p>
+        </div>
         <div v-for="doc in filteredDocuments" :key="doc.id" class="document-card">
           <div class="doc-header">
             <div class="doc-icon-container" :style="{ backgroundColor: doc.bgColor }">
@@ -469,12 +581,16 @@ function cancelUpload() {
             <div class="doc-stats">
               <div class="stat-item">
                 <ClipboardDocumentListIcon class="stat-icon-svg" />
-                <span class="stat-text">Used in {{ doc.usedIn }}</span>
+                <span class="stat-text">{{ doc.usedIn }}</span>
               </div>
               <div class="stat-item">
                 <EyeIcon class="stat-icon-svg" />
-                <span class="stat-text">Viewed {{ doc.viewedTimes }}</span>
+                <span class="stat-text">{{ doc.viewedTimes }}</span>
               </div>
+            </div>
+            <div class="document-actions-row">
+              <span class="document-category-label">{{ categoryNameMap[doc.category] || doc.category }}</span>
+              <a :href="doc.fileUrl" target="_blank" rel="noopener" class="document-open-link">Open file</a>
             </div>
           </div>
         </div>
@@ -499,9 +615,9 @@ function cancelUpload() {
             </div>
           </div>
           
-          <div class="health-item">
-            <ExclamationTriangleIcon class="health-warning-icon" />
-            <span class="health-warning">Missing References section</span>
+            <div class="health-item">
+              <ExclamationTriangleIcon class="health-warning-icon" />
+            <span class="health-warning">{{ healthCheck.missingReferences ? 'Resume or internship application form is still missing' : 'Resume requirement is covered' }}</span>
           </div>
           
           <div class="health-item">
@@ -519,7 +635,7 @@ function cancelUpload() {
           
           <div class="health-item">
             <ExclamationTriangleIcon class="health-warning-icon" />
-            <span class="health-warning">Needs Recent projects</span>
+            <span class="health-warning">{{ healthCheck.needsRecentProjects ? 'Enrollment proof is still missing' : 'Enrollment proof is uploaded' }}</span>
           </div>
         </div>
 
@@ -654,10 +770,10 @@ function cancelUpload() {
           <button 
             v-else-if="uploadStep === 2"
             class="confirm-btn" 
-            :disabled="!selectedFile || !documentName.trim()"
+            :disabled="!selectedFile || !documentName.trim() || uploadingDocument"
             @click="confirmUpload"
           >
-            Confirm Upload
+            {{ uploadingDocument ? 'Uploading...' : 'Confirm Upload' }}
           </button>
         </div>
       </div>
@@ -682,6 +798,21 @@ function cancelUpload() {
   align-items: center;
   gap: 16px;
   margin-bottom: 24px;
+}
+
+.documents-feedback {
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.documents-feedback.error {
+  background: #fef2f2;
+  color: #b91c1c;
 }
 
 /* Header */
@@ -740,6 +871,7 @@ function cancelUpload() {
   background: #3b82f6;
   color: #fff;
   border-radius: 50%;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -753,6 +885,13 @@ function cancelUpload() {
   background: #2563eb;
   transform: scale(1.05);
   box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
 }
 
 .search-container {
@@ -804,6 +943,54 @@ function cancelUpload() {
 
 .upload-btn:hover {
   background: #2563eb;
+}
+
+.quick-submit-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #e0f2fe;
+  color: #0f766e;
+  border: 1px solid #99f6e4;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.quick-submit-btn:hover:not(:disabled) {
+  background: #ccfbf1;
+}
+
+.quick-submit-btn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.temporary-docs-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.temporary-docs-btn:hover:not(:disabled) {
+  background: #fde68a;
+}
+
+.temporary-docs-btn:disabled {
+  opacity: 0.7;
+  cursor: wait;
 }
 
 .status-icon-svg {
@@ -922,6 +1109,31 @@ function cancelUpload() {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 20px;
+}
+
+.empty-documents-card {
+  grid-column: 1 / -1;
+  background: white;
+  border: 1px dashed #bfdbfe;
+  border-radius: 12px;
+  padding: 32px 24px;
+  text-align: center;
+  color: #475569;
+}
+
+.empty-documents-card h3 {
+  margin: 12px 0 8px;
+  color: #0f172a;
+}
+
+.empty-documents-card p {
+  margin: 0;
+}
+
+.empty-documents-icon {
+  width: 40px;
+  height: 40px;
+  color: #2563eb;
 }
 
 .document-card {
@@ -1058,6 +1270,36 @@ function cancelUpload() {
   justify-content: space-between;
   padding-top: 12px;
   border-top: 1px solid #f3f4f6;
+}
+
+.document-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.document-category-label {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.document-open-link {
+  color: #2563eb;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.document-open-link:hover {
+  text-decoration: underline;
 }
 
 .stat-item {

@@ -78,6 +78,14 @@
         <img src="/icons/icon-save.png" alt="Subscription" class="nav-icon-img" />
         <span>Subscription</span>
       </div>
+      <div
+        class="nav-item"
+        :class="{ active: activeNav === 'team-access' }"
+        @click="setActiveNav('team-access')"
+      >
+        <img src="/icons/icon-settings.png" alt="Team Access" class="nav-icon-img" />
+        <span>Team Access</span>
+      </div>
     </nav>
 
     <div class="sidebar-bottom">

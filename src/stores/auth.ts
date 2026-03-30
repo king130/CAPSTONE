@@ -1,17 +1,15 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import {
-  createMissingUserProfile,
   fetchUserProfile,
   loginUser,
   logoutUser,
   registerUser,
-  subscribeToAuthState,
-  subscribeToUserProfile,
   type UserProfile,
   type RegisterPayload,
 } from '@/services/auth'
 import { ensurePublicProfile } from '@/services/profilesPublic'
+import { getToken, setToken } from '@/services/http'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<UserProfile | null>(null)
@@ -19,77 +17,57 @@ export const useAuthStore = defineStore('auth', () => {
   const loading = ref(false)
   const error = ref<string | null>(null)
   const blockedReason = ref<string | null>(null)
-  const unsubscribeProfile = ref<null | (() => void)>(null)
-
-  function clearProfileSubscription() {
-    if (unsubscribeProfile.value) {
-      unsubscribeProfile.value()
-      unsubscribeProfile.value = null
-    }
-  }
 
   async function init() {
     if (initializing.value) return
-    
-    console.log('🔐 Auth store: Starting initialization...')
+
     initializing.value = true
-    
-    return new Promise<void>((resolve) => {
-      subscribeToAuthState(async (firebaseUser) => {
-        console.log('🔐 Auth state changed:', firebaseUser ? firebaseUser.email : 'null')
-        clearProfileSubscription()
-        
-        if (!firebaseUser) {
-          user.value = null
-          initializing.value = false
-          console.log('✅ Auth initialized (no user)')
-          resolve()
-          return
-        }
-        
-        unsubscribeProfile.value = subscribeToUserProfile(firebaseUser.uid, async (profile) => {
-          console.log('👤 User profile fetched:', profile ? profile.email : 'null', '| Role:', profile?.role || 'null')
-          
-          if (!profile) {
-            user.value = null
-            blockedReason.value = null
-            initializing.value = false
-            console.log('✅ Auth initialized (no profile)')
-            resolve()
-            return
-          }
-          
-          if (profile.isActive === false) {
-            blockedReason.value = 'Account Disabled'
-            user.value = null
-            clearProfileSubscription()
-            await logoutUser()
-            initializing.value = false
-            console.log('❌ Auth initialized (account disabled)')
-            resolve()
-            return
-          }
-          
-          user.value = profile
-          blockedReason.value = null
-          initializing.value = false
-          if (profile.role === 'school' || profile.role === 'company') {
-            const p = profile.profile as Record<string, unknown> | undefined
-            const orgName = (profile.role === 'school' ? p?.institutionName : p?.companyName) as string | undefined
-            const courses = (p?.courses as string[] | undefined) || []
-            ensurePublicProfile(profile.uid, {
-              displayName: profile.displayName || 'User',
-              role: profile.role,
-              orgName: orgName || profile.displayName || profile.email?.split('@')[0],
-              email: profile.email,
-              courses,
-            }).catch(() => {})
-          }
-          console.log('✅ Auth initialized (user:', profile.email, 'role:', profile.role || 'guest', ')')
-          resolve()
-        })
-      })
-    })
+    error.value = null
+    blockedReason.value = null
+
+    try {
+      if (!getToken()) {
+        user.value = null
+        return
+      }
+
+      const profile = await fetchUserProfile('')
+      if (!profile) {
+        setToken(null)
+        user.value = null
+        return
+      }
+
+      if (profile.isActive === false) {
+        blockedReason.value = 'Account Disabled'
+        user.value = null
+        await logoutUser()
+        return
+      }
+
+      user.value = profile
+      await maybeSyncPublicProfile(profile)
+    } finally {
+      initializing.value = false
+    }
+  }
+
+  async function maybeSyncPublicProfile(profile: UserProfile) {
+    if (profile.role === 'school' || profile.role === 'company') {
+      const p = profile.profile as Record<string, unknown> | undefined
+      const orgName =
+        profile.role === 'school'
+          ? (p?.institutionName as string | undefined)
+          : (p?.companyName as string | undefined)
+      const courses = (p?.courses as string[] | undefined) || []
+      await ensurePublicProfile(profile.uid, {
+        displayName: profile.displayName || 'User',
+        role: profile.role,
+        orgName: orgName || profile.displayName || profile.email?.split('@')[0],
+        email: profile.email,
+        courses,
+      }).catch(() => {})
+    }
   }
 
   async function register(payload: RegisterPayload) {
@@ -99,6 +77,7 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const profile = await registerUser(payload)
       user.value = profile
+      await maybeSyncPublicProfile(profile)
       return profile
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'Registration failed'
@@ -113,37 +92,17 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = null
     blockedReason.value = null
     try {
-      const firebaseUser = await loginUser(email, password)
-      let profile = await fetchUserProfile(firebaseUser.uid)
-      
-      if (!profile) {
-        await createMissingUserProfile(firebaseUser)
-        profile = await fetchUserProfile(firebaseUser.uid)
-      }
+      const profile = await loginUser(email, password)
 
-      if (!profile) {
-        await logoutUser()
-        throw new Error('Could not load user profile.')
-      }
-      
       if (profile?.isActive === false) {
         blockedReason.value = 'Account Disabled'
         await logoutUser()
+        user.value = null
         throw new Error('Account Disabled')
       }
+
       user.value = profile
-      if (profile.role === 'school' || profile.role === 'company') {
-        const p = profile.profile as Record<string, unknown> | undefined
-        const orgName = (profile.role === 'school' ? p?.institutionName : p?.companyName) as string | undefined
-        const courses = (p?.courses as string[] | undefined) || []
-        ensurePublicProfile(profile.uid, {
-          displayName: profile.displayName || 'User',
-          role: profile.role,
-          orgName: orgName || profile.displayName || profile.email?.split('@')[0],
-          email: profile.email,
-          courses,
-        }).catch(() => {})
-      }
+      await maybeSyncPublicProfile(profile)
       return profile
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'Login failed'
@@ -157,7 +116,24 @@ export const useAuthStore = defineStore('auth', () => {
     await logoutUser()
     user.value = null
     blockedReason.value = null
-    clearProfileSubscription()
+  }
+
+  function setUserProfile(profile: UserProfile | null) {
+    user.value = profile
+  }
+
+  async function refreshUser() {
+    if (!getToken()) {
+      user.value = null
+      return null
+    }
+
+    const profile = await fetchUserProfile('')
+    user.value = profile
+    if (profile) {
+      await maybeSyncPublicProfile(profile)
+    }
+    return profile
   }
 
   return {
@@ -170,5 +146,7 @@ export const useAuthStore = defineStore('auth', () => {
     register,
     login,
     logout,
+    refreshUser,
+    setUserProfile,
   }
 })

@@ -2,8 +2,8 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { doc, updateDoc } from 'firebase/firestore'
-import { db } from '@/services/firebase'
+import { apiFetch } from '@/services/http'
+import { mapApiUserToProfile } from '@/services/auth'
 import { ensurePublicProfile } from '@/services/profilesPublic'
 import Swal from 'sweetalert2'
 
@@ -142,12 +142,15 @@ async function saveProfile() {
   saving.value = true
   try {
     const updatedProfile = buildUpdatedProfile()
-    await updateDoc(doc(db, 'users', authStore.user.uid), {
-      displayName: displayName.value,
-      profile: updatedProfile,
-      profileSetupComplete: true,
-      updatedAt: new Date()
+    const raw = await apiFetch<Record<string, unknown>>('/profile', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        displayName: displayName.value,
+        profile: updatedProfile,
+        profileSetupComplete: true,
+      }),
     })
+    authStore.user = mapApiUserToProfile(raw)
     if (authStore.user.role === 'school' || authStore.user.role === 'company') {
       const orgName = (authStore.user.role === 'school' ? updatedProfile.institutionName : updatedProfile.companyName) as string | undefined
       await ensurePublicProfile(authStore.user.uid, {

@@ -1,16 +1,4 @@
-import {
-  addDoc,
-  collection,
-  getDocs,
-  onSnapshot,
-  orderBy,
-  query,
-  serverTimestamp,
-  updateDoc,
-  where,
-  doc,
-} from 'firebase/firestore'
-import { db } from './firebase'
+import { apiFetch } from './http'
 
 export interface ContractRecord {
   id: string
@@ -22,6 +10,7 @@ export interface ContractRecord {
   status: 'pending' | 'active' | 'rejected' | 'cancelled'
   subject?: string
   contractType?: string
+  contractTypeId?: string | null
   moaReferenceNo?: string
   purpose?: string
   startDate?: string
@@ -40,10 +29,16 @@ export interface ContractRecord {
   companyContactName?: string
   companyContactEmail?: string
   notes?: string
+  dynamicFields?: Record<string, unknown>
+  schemaSnapshot?: unknown[]
+  metadata?: Record<string, unknown>
   attachments?: Array<{
     name: string
     size: number
     type: string
+    url?: string
+    path?: string
+    disk?: string
   }>
   createdAt?: unknown
   updatedAt?: unknown
@@ -53,24 +48,16 @@ export interface ContractRecord {
   cancelledByRole?: 'school' | 'company'
 }
 
-function generateMoaReferenceNo() {
-  const now = new Date()
-  const y = now.getFullYear()
-  const m = String(now.getMonth() + 1).padStart(2, '0')
-  const d = String(now.getDate()).padStart(2, '0')
-  const rand = Math.random().toString(16).slice(2, 6).toUpperCase()
-  return `MOA-${y}${m}${d}-${rand}`
-}
-
-/** Create a contract request between school and company (MOA-style). */
-export async function createContractRequest(payload: {
-  companyId: string
-  companyName: string
-  schoolId: string
-  schoolName: string
-  requestedByRole?: 'school' | 'company'
-  subject?: string
+export interface CreateContractPayload {
+  companyId?: string
+  companyName?: string
+  schoolId?: string
+  schoolName?: string
+  requestedByRole: 'school' | 'company'
+  subject: string
   contractType?: string
+  contractTypeId?: string
+  contractTypeLabel?: string
   moaReferenceNo?: string
   purpose?: string
   startDate?: string
@@ -89,120 +76,144 @@ export async function createContractRequest(payload: {
   companyContactName?: string
   companyContactEmail?: string
   notes?: string
+  dynamicFields?: Record<string, unknown>
   attachments?: Array<{
     name: string
     size: number
     type: string
   }>
-}) {
-  const ref = collection(db, 'contracts')
-
-  // Prevent duplicate pending requests for the same school/company pair (school-side requirement).
-  if ((payload.requestedByRole || 'school') === 'school') {
-    const pendingQ = query(
-      ref,
-      where('schoolId', '==', payload.schoolId),
-      where('companyId', '==', payload.companyId),
-      where('status', '==', 'pending')
-    )
-    const pendingSnap = await getDocs(pendingQ)
-    if (!pendingSnap.empty) {
-      throw new Error('You already have a pending contract request with this company.')
-    }
-  }
-
-  const moaReferenceNo = payload.moaReferenceNo?.trim() || generateMoaReferenceNo()
-  const docRef = await addDoc(ref, {
-    ...payload,
-    moaReferenceNo,
-    status: 'pending',
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  })
-  return docRef.id
+  files?: File[]
 }
 
-/** Subscribe to contracts for a company. */
+function poll(load: () => Promise<void>, intervalMs: number): () => void {
+  let cancelled = false
+  load()
+  const id = window.setInterval(() => {
+    if (!cancelled) load()
+  }, intervalMs)
+  const refresh = () => {
+    if (!cancelled) load()
+  }
+  window.addEventListener('contracts:changed', refresh)
+  return () => {
+    cancelled = true
+    clearInterval(id)
+    window.removeEventListener('contracts:changed', refresh)
+  }
+}
+
+function emitContractsChanged() {
+  window.dispatchEvent(new CustomEvent('contracts:changed'))
+}
+
+export async function createContractRequest(payload: CreateContractPayload): Promise<ContractRecord> {
+  const form = new FormData()
+  form.append('requestedByRole', payload.requestedByRole)
+  form.append('subject', payload.subject)
+
+  if (payload.contractType) form.append('contractType', payload.contractType)
+  if (payload.contractTypeId) form.append('contract_type_id', payload.contractTypeId)
+  if (payload.contractTypeLabel) form.append('contract_type_label', payload.contractTypeLabel)
+  if (payload.companyId) form.append('companyId', payload.companyId)
+  if (payload.schoolId) form.append('schoolId', payload.schoolId)
+  if (payload.moaReferenceNo) form.append('moaReferenceNo', payload.moaReferenceNo)
+  if (payload.purpose) form.append('purpose', payload.purpose)
+  if (payload.startDate) form.append('startDate', payload.startDate)
+  if (payload.endDate) form.append('endDate', payload.endDate)
+  if (typeof payload.internshipSlots === 'number') {
+    form.append('internshipSlots', String(payload.internshipSlots))
+  }
+  if (payload.studentPrograms) form.append('studentPrograms', payload.studentPrograms)
+  if (payload.courseAllocations?.length) {
+    form.append('courseAllocations', JSON.stringify(payload.courseAllocations))
+  }
+  if (payload.companyResponsibilities) form.append('companyResponsibilities', payload.companyResponsibilities)
+  if (payload.schoolResponsibilities) form.append('schoolResponsibilities', payload.schoolResponsibilities)
+  if (payload.terms) form.append('terms', payload.terms)
+  if (payload.schoolContactName) form.append('schoolContactName', payload.schoolContactName)
+  if (payload.schoolContactEmail) form.append('schoolContactEmail', payload.schoolContactEmail)
+  if (payload.companyContactName) form.append('companyContactName', payload.companyContactName)
+  if (payload.companyContactEmail) form.append('companyContactEmail', payload.companyContactEmail)
+  if (payload.notes) form.append('notes', payload.notes)
+  if (payload.dynamicFields) {
+    form.append('dynamic_fields', JSON.stringify(payload.dynamicFields))
+  }
+
+  const attachments =
+    payload.attachments ??
+    payload.files?.map((file) => ({
+      name: file.name,
+      size: file.size,
+      type: file.type || 'application/octet-stream',
+    }))
+
+  if (attachments?.length) {
+    form.append('attachments', JSON.stringify(attachments))
+  }
+
+  for (const file of payload.files ?? []) {
+    form.append('files[]', file)
+  }
+
+  const res = await apiFetch<{ data: ContractRecord }>('/contracts', {
+    method: 'POST',
+    body: form,
+  })
+  emitContractsChanged()
+  return res.data
+}
+
 export function subscribeCompanyContracts(
   companyId: string,
   callback: (items: ContractRecord[]) => void
-) {
-  const ref = collection(db, 'contracts')
-  const q = query(
-    ref,
-    where('companyId', '==', companyId),
-    orderBy('createdAt', 'desc')
-  )
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const items = snapshot.docs.map((docSnap) => ({
-        id: docSnap.id,
-        ...(docSnap.data() as Omit<ContractRecord, 'id'>),
-      }))
-      callback(items)
-    },
-    (err) => {
-      console.warn('Company contracts subscription error:', err?.message || err)
+): () => void {
+  return poll(async () => {
+    try {
+      const res = await apiFetch<{ data: ContractRecord[] }>('/contracts')
+      callback((res.data ?? []).filter((item) => item.companyId === companyId))
+    } catch {
       callback([])
     }
-  )
+  }, 15000)
 }
 
-/** Subscribe to contracts for a school. */
 export function subscribeSchoolContracts(
   schoolId: string,
   callback: (items: ContractRecord[]) => void
-) {
-  const ref = collection(db, 'contracts')
-  const q = query(
-    ref,
-    where('schoolId', '==', schoolId),
-    orderBy('createdAt', 'desc')
-  )
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const items = snapshot.docs.map((docSnap) => ({
-        id: docSnap.id,
-        ...(docSnap.data() as Omit<ContractRecord, 'id'>),
-      }))
-      callback(items)
-    },
-    (err) => {
-      console.warn('School contracts subscription error:', err?.message || err)
+): () => void {
+  return poll(async () => {
+    try {
+      const res = await apiFetch<{ data: ContractRecord[] }>('/contracts')
+      callback((res.data ?? []).filter((item) => item.schoolId === schoolId))
+    } catch {
       callback([])
     }
-  )
+  }, 15000)
 }
 
-/** Accept a contract request. */
-export async function acceptContract(contractId: string) {
-  const ref = doc(db, 'contracts', contractId)
-  await updateDoc(ref, {
-    status: 'active',
-    updatedAt: serverTimestamp(),
+export async function acceptContract(contractId: string): Promise<void> {
+  await apiFetch(`/contracts/${contractId}/accept`, {
+    method: 'PATCH',
   })
+  emitContractsChanged()
 }
 
-/** Reject a contract request. */
-export async function rejectContract(contractId: string, reason?: string) {
-  const ref = doc(db, 'contracts', contractId)
-  await updateDoc(ref, {
-    status: 'rejected',
-    rejectedReason: reason || null,
-    updatedAt: serverTimestamp(),
+export async function rejectContract(contractId: string, reason?: string): Promise<void> {
+  await apiFetch(`/contracts/${contractId}/reject`, {
+    method: 'PATCH',
+    body: JSON.stringify({ reason }),
   })
+  emitContractsChanged()
 }
 
-/** Cancel a contract (works for pending or active). */
-export async function cancelContract(contractId: string, cancelledByRole: 'school' | 'company', reason?: string) {
-  const ref = doc(db, 'contracts', contractId)
-  await updateDoc(ref, {
-    status: 'cancelled',
-    cancelledByRole,
-    cancelledReason: reason || null,
-    cancelledAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+export async function cancelContract(
+  contractId: string,
+  cancelledByRole: 'school' | 'company',
+  reason?: string
+): Promise<void> {
+  await apiFetch(`/contracts/${contractId}/cancel`, {
+    method: 'PATCH',
+    body: JSON.stringify({ cancelledByRole, reason }),
   })
+  emitContractsChanged()
 }

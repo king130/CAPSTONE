@@ -1,16 +1,4 @@
-import {
-  addDoc,
-  collection,
-  deleteDoc,
-  doc,
-  getDoc,
-  onSnapshot,
-  orderBy,
-  query,
-  serverTimestamp,
-  updateDoc,
-} from 'firebase/firestore'
-import { db } from './firebase'
+import { apiFetch } from './http'
 
 export interface InternshipRecord {
   id: string
@@ -18,6 +6,11 @@ export interface InternshipRecord {
   description?: string
   companyId: string
   companyName: string
+  schoolId?: string
+  schoolName?: string
+  hostType?: 'company' | 'school'
+  hostId?: string
+  hostName?: string
   location: string
   type: string
   duration: string
@@ -26,7 +19,6 @@ export interface InternshipRecord {
   requirements?: string[]
   allowance?: string
   contactInfo?: string
-  /** Review decision made by the school/admin. */
   approvalStatus?: 'pending' | 'approved' | 'declined'
   approvalNotes?: string
   status: 'active' | 'draft' | 'closed'
@@ -34,63 +26,118 @@ export interface InternshipRecord {
   updatedAt?: unknown
 }
 
-export function subscribeInternships(callback: (items: InternshipRecord[]) => void) {
-  const internshipsRef = collection(db, 'internships')
-  const q = query(internshipsRef, orderBy('createdAt', 'desc'))
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const items = snapshot.docs.map((docSnap) => ({
-        id: docSnap.id,
-        ...(docSnap.data() as Omit<InternshipRecord, 'id'>),
-      }))
-      callback(items)
-    },
-    (err) => {
-      console.warn('Internships subscription error:', err?.message || err)
+function poll(
+  load: () => Promise<void>,
+  intervalMs: number
+): () => void {
+  let cancelled = false
+  load()
+  const id = window.setInterval(() => {
+    if (!cancelled) load()
+  }, intervalMs)
+  return () => {
+    cancelled = true
+    clearInterval(id)
+  }
+}
+
+export function subscribeInternships(callback: (items: InternshipRecord[]) => void): () => void {
+  return poll(async () => {
+    try {
+      const res = await apiFetch<{ data: InternshipRecord[] }>('/internships')
+      callback(res.data ?? [])
+    } catch {
       callback([])
     }
-  )
+  }, 15000)
 }
 
-export function subscribeActiveInternships(callback: (items: InternshipRecord[]) => void) {
+export function subscribeActiveInternships(callback: (items: InternshipRecord[]) => void): () => void {
   return subscribeInternships((items) => {
-    const active = items.filter((i) => i.status === 'active')
-    callback(active)
+    callback(items.filter((i) => i.status === 'active'))
   })
 }
 
-export function subscribeCompanyInternships(companyId: string, callback: (items: InternshipRecord[]) => void) {
-  return subscribeInternships((items) => {
-    const company = items.filter((i) => i.companyId === companyId)
-    callback(company)
-  })
+export function subscribeCompanyInternships(
+  companyId: string,
+  callback: (items: InternshipRecord[]) => void
+): () => void {
+  return poll(async () => {
+    try {
+      const q = new URLSearchParams({ company_user_id: companyId })
+      const res = await apiFetch<{ data: InternshipRecord[] }>(`/internships?${q.toString()}`)
+      callback(res.data ?? [])
+    } catch {
+      callback([])
+    }
+  }, 15000)
 }
 
-export async function getInternship(internshipId: string) {
-  const snapshot = await getDoc(doc(db, 'internships', internshipId))
-  return snapshot.exists() ? (snapshot.data() as InternshipRecord) : null
+export function subscribeSchoolInternships(
+  schoolId: string,
+  callback: (items: InternshipRecord[]) => void
+): () => void {
+  return poll(async () => {
+    try {
+      const q = new URLSearchParams({ school_user_id: schoolId })
+      const res = await apiFetch<{ data: InternshipRecord[] }>(`/internships?${q.toString()}`)
+      callback(res.data ?? [])
+    } catch {
+      callback([])
+    }
+  }, 15000)
+}
+
+export async function getInternship(internshipId: string): Promise<InternshipRecord | null> {
+  try {
+    const res = await apiFetch<{ data: InternshipRecord }>(`/internships/${internshipId}`)
+    return res.data ?? null
+  } catch {
+    return null
+  }
 }
 
 export type CreateInternshipPayload = Omit<InternshipRecord, 'id' | 'createdAt' | 'updatedAt'>
 
-export async function createInternship(payload: CreateInternshipPayload) {
-  const internshipsRef = collection(db, 'internships')
-  const docRef = await addDoc(internshipsRef, {
-    ...payload,
-    status: payload.status || 'active',
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+export async function createInternship(payload: CreateInternshipPayload): Promise<string> {
+  const res = await apiFetch<{ data: InternshipRecord }>('/internships', {
+    method: 'POST',
+    body: JSON.stringify({
+      title: payload.title,
+      description: payload.description,
+      location: payload.location,
+      type: payload.type,
+      duration: payload.duration,
+      slots_available: payload.slotsAvailable,
+      status: payload.status || 'active',
+      requirements: payload.requirements,
+      eligible_courses: payload.eligibleCourses,
+      allowance: payload.allowance,
+      contact_info: payload.contactInfo,
+    }),
   })
-  return docRef.id
+  return res.data?.id ?? ''
 }
 
-export async function updateInternship(internshipId: string, payload: Partial<InternshipRecord>) {
-  const internshipRef = doc(db, 'internships', internshipId)
-  await updateDoc(internshipRef, { ...payload, updatedAt: serverTimestamp() })
+export async function updateInternship(internshipId: string, payload: Partial<InternshipRecord>): Promise<void> {
+  await apiFetch(`/internships/${internshipId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      title: payload.title,
+      description: payload.description,
+      location: payload.location,
+      type: payload.type,
+      duration: payload.duration,
+      slots_available: payload.slotsAvailable,
+      status: payload.status,
+      requirements: payload.requirements,
+      eligible_courses: payload.eligibleCourses,
+      allowance: payload.allowance,
+      contact_info: payload.contactInfo,
+    }),
+  })
 }
 
-export async function deleteInternship(internshipId: string) {
-  const internshipRef = doc(db, 'internships', internshipId)
-  await deleteDoc(internshipRef)
+export async function deleteInternship(internshipId: string): Promise<void> {
+  await apiFetch(`/internships/${internshipId}`, { method: 'DELETE' })
 }

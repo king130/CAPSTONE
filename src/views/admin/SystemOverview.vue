@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { collection, getDocs, query, where } from 'firebase/firestore'
-import { db } from '@/services/firebase'
+import { apiFetch } from '@/services/http'
 import Swal from 'sweetalert2'
 
 const totalUsers = ref(0)
@@ -13,26 +12,20 @@ const isRefreshing = ref(false)
 
 async function loadMetrics() {
   isRefreshing.value = true
-  
+
   try {
-    const usersRef = collection(db, 'users')
-    const totalSnap = await getDocs(usersRef)
-    totalUsers.value = totalSnap.size
+    const usersRes = await apiFetch<{ data: { isActive?: boolean; isTemporary?: boolean }[] }>('/admin/users')
+    const list = usersRes.data ?? []
+    totalUsers.value = list.length
+    activeUsers.value = list.filter((u) => u.isActive !== false).length
+    tempUsers.value = list.filter((u) => u.isTemporary === true).length
 
-    const activeSnap = await getDocs(query(usersRef, where('isActive', '==', true)))
-    activeUsers.value = activeSnap.size
+    const intRes = await apiFetch<{ data: { status?: string }[] }>('/internships')
+    const posts = intRes.data ?? []
+    activeInternships.value = posts.filter((i) => i.status === 'active').length
 
-    const tempSnap = await getDocs(query(usersRef, where('isTemporary', '==', true)))
-    tempUsers.value = tempSnap.size
+    await new Promise((resolve) => setTimeout(resolve, 500))
 
-    const internshipsRef = collection(db, 'internships')
-    const internshipsSnap = await getDocs(internshipsRef)
-    activeInternships.value = internshipsSnap.size
-    
-    // Simulate a small delay to show loading state
-    await new Promise(resolve => setTimeout(resolve, 500))
-    
-    // Show success notification
     await Swal.fire({
       icon: 'success',
       title: 'Data Refreshed',
@@ -40,15 +33,15 @@ async function loadMetrics() {
       timer: 2000,
       showConfirmButton: false,
       toast: true,
-      position: 'top-end'
+      position: 'top-end',
     })
   } catch (error) {
     console.error('Error loading metrics:', error)
     await Swal.fire({
       icon: 'error',
       title: 'Refresh Failed',
-      text: 'Unable to refresh system metrics. Please try again.',
-      confirmButtonColor: '#3b82f6'
+      text: 'Unable to refresh system metrics. Is the API running?',
+      confirmButtonColor: '#3b82f6',
     })
   } finally {
     isRefreshing.value = false

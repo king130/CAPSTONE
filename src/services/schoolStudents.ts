@@ -1,19 +1,8 @@
-import {
-  addDoc,
-  collection,
-  deleteDoc,
-  doc,
-  getDoc,
-  getDocs,
-  onSnapshot,
-  orderBy,
-  query,
-  serverTimestamp,
-  where,
-} from 'firebase/firestore'
-import { db } from './firebase'
+import { apiBase, apiFetch, getToken } from './http'
 
-export interface SchoolStudentRecord {
+export type SchoolStudentRecord = SchoolStudentRow
+
+export interface SchoolStudentRow {
   id: string
   schoolId: string
   email: string
@@ -21,92 +10,96 @@ export interface SchoolStudentRecord {
   studentNumber?: string
   course?: string
   yearLevel?: string
-  status: 'pending' | 'registered'
+  status?: string
+  defaultPassword?: string
   createdAt?: unknown
 }
 
-/** Subscribe to student emails for a school. */
+function poll(load: () => Promise<void>, intervalMs: number): () => void {
+  let cancelled = false
+  load()
+  const id = window.setInterval(() => {
+    if (!cancelled) load()
+  }, intervalMs)
+  const refresh = () => {
+    if (!cancelled) load()
+  }
+  window.addEventListener('school-students:changed', refresh)
+  return () => {
+    cancelled = true
+    clearInterval(id)
+    window.removeEventListener('school-students:changed', refresh)
+  }
+}
+
+function emitSchoolStudentsChanged() {
+  window.dispatchEvent(new CustomEvent('school-students:changed'))
+}
+
 export function subscribeSchoolStudents(
-  schoolId: string,
-  callback: (items: SchoolStudentRecord[]) => void
-) {
-  const ref = collection(db, 'school_students')
-  const q = query(
-    ref,
-    where('schoolId', '==', schoolId),
-    orderBy('createdAt', 'desc')
-  )
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const items = snapshot.docs.map((docSnap) => ({
-        id: docSnap.id,
-        ...(docSnap.data() as Omit<SchoolStudentRecord, 'id'>),
-      }))
-      callback(items)
-    },
-    (err) => {
-      console.warn('School students subscription error:', err?.message || err)
+  _schoolId: string,
+  callback: (items: SchoolStudentRow[]) => void
+): () => void {
+  return poll(async () => {
+    try {
+      const response = await apiFetch<{ data?: SchoolStudentRow[] }>('/school-students')
+      callback(response.data ?? [])
+    } catch {
       callback([])
     }
-  )
+  }, 15000)
 }
 
-/** Add a student email (the Gmail the school distributes). */
 export async function addSchoolStudent(
-  schoolId: string,
+  _schoolId: string,
   email: string,
-  options?: {
-    studentName?: string
-    studentNumber?: string
-    course?: string
-    yearLevel?: string
-  }
-) {
-  const normalizedEmail = email.trim().toLowerCase()
-  if (!normalizedEmail) throw new Error('Email is required')
-
-  const ref = collection(db, 'school_students')
-  const docRef = await addDoc(ref, {
-    schoolId,
-    email: normalizedEmail,
-    studentName: options?.studentName || null,
-    studentNumber: options?.studentNumber || null,
-    course: options?.course || null,
-    yearLevel: options?.yearLevel || null,
-    status: 'pending',
-    createdAt: serverTimestamp(),
+  extra?: Record<string, unknown>
+): Promise<SchoolStudentRow> {
+  const response = await apiFetch<{ data: SchoolStudentRow }>('/school-students', {
+    method: 'POST',
+    body: JSON.stringify({
+      email,
+      ...extra,
+    }),
   })
-  return docRef.id
+  emitSchoolStudentsChanged()
+  return response.data
 }
 
-/** Remove a student email. */
-export async function removeSchoolStudent(id: string) {
-  await deleteDoc(doc(db, 'school_students', id))
+export async function updateSchoolStudent(id: string, patch: Record<string, unknown>): Promise<void> {
+  await apiFetch(`/school-students/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+  emitSchoolStudentsChanged()
 }
 
-/** Find school that has approved this student email. Returns schoolId and subscriptionCode if found. */
-export async function findSchoolByStudentEmail(email: string): Promise<{
-  schoolId: string
-  subscriptionCode?: string
-} | null> {
-  const normalizedEmail = email.trim().toLowerCase()
-  if (!normalizedEmail) return null
+export async function removeSchoolStudent(id: string): Promise<void> {
+  await apiFetch(`/school-students/${id}`, {
+    method: 'DELETE',
+  })
+  emitSchoolStudentsChanged()
+}
 
-  const ref = collection(db, 'school_students')
-  const q = query(ref, where('email', '==', normalizedEmail))
-  const snapshot = await getDocs(q)
-  if (snapshot.empty) return null
+export async function findSchoolStudentByEmail(email: string): Promise<SchoolStudentRow | null> {
+  const response = await apiFetch<{ data?: SchoolStudentRow[] }>('/school-students')
+  return (response.data ?? []).find((student) => student.email.toLowerCase() === email.trim().toLowerCase()) ?? null
+}
 
-  const firstDoc = snapshot.docs[0]
-  if (!firstDoc) return null
-  const record = firstDoc.data() as SchoolStudentRecord
-  const schoolDoc = await getDoc(doc(db, 'users', record.schoolId))
-  const schoolData = schoolDoc.data()
-  const subscriptionCode = schoolData?.subscription?.subscriptionCode as string | undefined
-
-  return {
-    schoolId: record.schoolId,
-    subscriptionCode,
+export async function exportSchoolStudentsCsv(_schoolId: string): Promise<Blob> {
+  const base = apiBase()
+  const url = base ? `${base}/school-students/export` : '/api/school-students/export'
+  const headers = new Headers({
+    Accept: 'text/csv',
+  })
+  const token = getToken()
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
   }
+
+  const response = await fetch(url, { headers })
+  if (!response.ok) {
+    throw new Error('Could not export student roster.')
+  }
+  return await response.blob()
 }

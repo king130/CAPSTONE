@@ -5,10 +5,9 @@ import { useAuthStore } from '@/stores/auth'
 import { getSubscriptionPlans, formatPrice, type SubscriptionPlan } from '@/services/subscriptionPricing'
 import {
   clearPendingPlanChange,
-  createPendingPlanChange,
-  submitPendingPlanPayment,
+  createPaymongoCheckoutSession,
   updateUserSubscription,
-  type PaymentMethod,
+  verifyPaymongoCheckoutSession,
   type SubscriptionStatus,
 } from '@/services/subscriptions'
 
@@ -21,6 +20,7 @@ const props = defineProps<{
 const authStore = useAuthStore()
 const loading = ref(true)
 const savingPlanId = ref<string | null>(null)
+const verifyingPayment = ref(false)
 const plans = ref<SubscriptionPlan[]>([])
 const copied = ref(false)
 
@@ -31,77 +31,89 @@ const subscriptionPlanId = computed(() => (subscription.value?.plan || 'free').t
 const subscriptionStatus = computed<SubscriptionStatus>(() => (subscription.value?.status || 'inactive') as SubscriptionStatus)
 const billingCycle = computed(() => subscription.value?.billingCycle || 'monthly')
 const schoolCode = computed(() => subscription.value?.subscriptionCode || '')
-const pendingChange = computed(() => (subscription.value as any)?.pendingChange as
-  | {
-      requestId: string
-      targetPlan: string
-      amount: number
-      currency: 'PHP'
-      createdAt?: unknown
-      payment?: { method?: PaymentMethod; receiptReference?: string; paidAtIso?: string; submittedAt?: unknown }
-    }
-  | null
-  | undefined)
-
+const pendingChange = computed(() => subscription.value?.pendingChange || null)
 const currentPlan = computed(() => plans.value.find((p) => p.id === subscriptionPlanId.value) || null)
 const pendingTargetPlan = computed(() => {
-  const pc = pendingChange.value
-  if (!pc) return null
-  return plans.value.find((p) => p.id === pc.targetPlan) || null
+  const targetId = pendingChange.value?.targetPlan
+  return targetId ? plans.value.find((p) => p.id === targetId) || null : null
 })
 
-const rolePrice = (plan: SubscriptionPlan) => (props.role === 'school' ? plan.schoolPrice : plan.companyPrice)
-const roleFeatures = (plan: SubscriptionPlan) => (props.role === 'school' ? plan.features.school : plan.features.company)
-
 const headerTitle = computed(() => (props.role === 'school' ? 'School Subscription' : 'Company Subscription'))
-const accent = computed(() => (props.role === 'school' ? 'school' : 'company'))
 const hasActiveSubscription = computed(() => subscriptionStatus.value === 'active')
 const hasPendingChange = computed(() => !!pendingChange.value)
+const hasPaymongoCheckout = computed(() => !!pendingChange.value?.checkoutUrl && !!pendingChange.value?.checkoutSessionId)
+const activeSummary = computed(() => {
+  if (hasPendingChange.value && pendingTargetPlan.value) {
+    return `Pending ${pendingTargetPlan.value.name}`
+  }
+  return currentPlan.value?.name || 'Free'
+})
+
+const sandboxHints = computed(() => {
+  const methods = pendingChange.value?.paymentMethods?.length
+    ? pendingChange.value.paymentMethods
+    : ['card']
+  return methods.map((method) => {
+    if (method === 'card') return 'Use PayMongo test mode card details only. No real charge is created.'
+    if (method === 'gcash') return 'Use a PayMongo test GCash flow if your account has it enabled.'
+    if (method === 'maya') return 'Use a PayMongo test Maya flow if your account has it enabled.'
+    return `Use PayMongo test mode for ${method}.`
+  })
+})
 
 onMounted(async () => {
   try {
     plans.value = await getSubscriptionPlans()
+    await maybeVerifyReturn()
   } finally {
     loading.value = false
   }
 })
 
-async function copySchoolCode() {
-  if (!schoolCode.value) return
-  try {
-    await navigator.clipboard.writeText(schoolCode.value)
-    copied.value = true
-    setTimeout(() => {
-      copied.value = false
-    }, 1400)
-  } catch {
-    const el = document.createElement('textarea')
-    el.value = schoolCode.value
-    el.style.position = 'fixed'
-    el.style.top = '0'
-    el.style.left = '0'
-    el.style.opacity = '0'
-    document.body.appendChild(el)
-    el.focus()
-    el.select()
-    try {
-      document.execCommand('copy')
-      copied.value = true
-      setTimeout(() => {
-        copied.value = false
-      }, 1400)
-    } finally {
-      document.body.removeChild(el)
-    }
+async function maybeVerifyReturn() {
+  if (typeof window === 'undefined') return
+  const url = new URL(window.location.href)
+  const paymongoState = url.searchParams.get('paymongo')
+  const requestId = url.searchParams.get('requestId')
+  const pending = pendingChange.value
+
+  if (!paymongoState || !requestId || !pending || pending.requestId !== requestId) return
+
+  url.searchParams.delete('paymongo')
+  url.searchParams.delete('requestId')
+  window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+
+  if (paymongoState === 'success' && pending.checkoutSessionId) {
+    await verifyPendingCheckout({ silentOnPending: false })
+    return
+  }
+
+  if (paymongoState === 'cancel') {
+    await Swal.fire({
+      icon: 'info',
+      title: 'Checkout closed',
+      text: 'Your PayMongo test checkout is still saved. You can reopen it anytime from the pending payment card.',
+      confirmButtonColor: '#2563eb',
+    })
   }
 }
 
+const rolePrice = (plan: SubscriptionPlan) => (props.role === 'school' ? plan.schoolPrice : plan.companyPrice)
+const roleFeatures = (plan: SubscriptionPlan) => (props.role === 'school' ? plan.features.school : plan.features.company)
+
 function actionLabel(targetId: string) {
-  if (subscriptionStatus.value !== 'active') return `Buy ${targetId === 'free' ? 'Free' : targetId === 'standard' ? 'Standard' : 'Premium'}`
+  if (subscriptionStatus.value !== 'active') return `Choose ${labelForPlan(targetId)}`
   const diff = planRank(targetId) - planRank(subscriptionPlanId.value)
-  if (diff > 0) return `Upgrade to ${targetId === 'standard' ? 'Standard' : 'Premium'}`
-  if (diff < 0) return `Downgrade to ${targetId === 'free' ? 'Free' : 'Standard'}`
+  if (diff > 0) return `Upgrade to ${labelForPlan(targetId)}`
+  if (diff < 0) return `Downgrade to ${labelForPlan(targetId)}`
   return 'Current Plan'
+}
+
+function labelForPlan(planId: string) {
+  if (planId === 'free') return 'Free'
+  if (planId === 'standard') return 'Standard'
+  if (planId === 'premium') return 'Premium'
+  return planId
 }
 
 function requiresPayment(current: SubscriptionPlan | null, target: SubscriptionPlan) {
@@ -113,140 +125,75 @@ function requiresPayment(current: SubscriptionPlan | null, target: SubscriptionP
 }
 
 function planDeltaLabel(target: SubscriptionPlan) {
-  if (!hasActiveSubscription.value) return 'Requires payment + verification'
+  if (!hasActiveSubscription.value) return requiresPayment(currentPlan.value, target) ? 'Starts with PayMongo test checkout' : 'Activates immediately'
   const diff = planRank(target.id) - planRank(subscriptionPlanId.value)
-  if (diff > 0) return requiresPayment(currentPlan.value, target) ? 'Pay then submit receipt' : 'Upgrade'
-  if (diff < 0) return 'Downgrade (no payment)'
-  return 'You are on this plan'
+  if (diff > 0) return requiresPayment(currentPlan.value, target) ? 'Pay in PayMongo test mode' : 'Upgrade instantly'
+  if (diff < 0) return 'Downgrade without checkout'
+  return 'Already active'
 }
 
 function canSelectPlan(target: SubscriptionPlan) {
-  if (savingPlanId.value) return false
-  if (target.id === subscriptionPlanId.value) return false
+  if (savingPlanId.value || verifyingPayment.value) return false
+  if (target.id === subscriptionPlanId.value && !hasPendingChange.value) return false
   if (hasPendingChange.value && target.id !== 'free') return false
   return true
 }
 
 function disabledReason(target: SubscriptionPlan) {
-  if (savingPlanId.value) return 'Processing your request…'
-  if (target.id === subscriptionPlanId.value) return 'This is your current plan.'
-  if (hasPendingChange.value && target.id !== 'free') return 'You have a pending plan change request. Submit a receipt or cancel the request.'
+  if (savingPlanId.value || verifyingPayment.value) return 'Please wait while billing is updating.'
+  if (target.id === subscriptionPlanId.value && !hasPendingChange.value) return 'This is your current plan.'
+  if (hasPendingChange.value && target.id !== 'free') return 'Finish or cancel the current PayMongo checkout first.'
   return ''
 }
 
 function generateRequestId() {
   try {
-    return `PR-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
+    return `PM-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
   } catch {
-    return `PR-${Math.random().toString(16).slice(2, 10).toUpperCase()}`
+    return `PM-${Math.random().toString(16).slice(2, 10).toUpperCase()}`
   }
 }
 
-async function collectReceiptDetails(amount: number) {
-  const result = await Swal.fire({
-    icon: 'info',
-    title: 'Submit payment receipt',
-    html: `
-      <div style="text-align:left;">
-        <p style="margin:0 0 10px 0;">GCash reference/transaction IDs are generated <strong>after</strong> you pay. Paste the receipt reference once available.</p>
-        <div style="display:grid; gap:10px;">
-          <div>
-            <label style="font-size:12px; font-weight:800; color:#334155;">Amount (PHP)</label>
-            <input id="pay-amount" class="swal2-input" style="margin:6px 0 0 0;" value="${amount}" disabled />
-          </div>
-          <div>
-            <label style="font-size:12px; font-weight:800; color:#334155;">Payment method</label>
-            <select id="pay-method" class="swal2-select" style="margin:6px 0 0 0; width:100%;">
-              <option value="gcash">GCash</option>
-              <option value="maya">Maya</option>
-              <option value="bank">Bank transfer</option>
-              <option value="cash">Cash</option>
-              <option value="other">Other</option>
-            </select>
-          </div>
-          <div>
-            <label style="font-size:12px; font-weight:800; color:#334155;">Receipt reference / Transaction ID</label>
-            <input id="pay-ref" class="swal2-input" style="margin:6px 0 0 0;" placeholder="Paste the reference from your receipt" />
-          </div>
-          <div>
-            <label style="font-size:12px; font-weight:800; color:#334155;">Payment date/time</label>
-            <input id="pay-date" type="datetime-local" class="swal2-input" style="margin:6px 0 0 0;"/>
-          </div>
-          <label style="display:flex; gap:10px; align-items:center; margin-top:4px;">
-            <input id="pay-confirm" type="checkbox" />
-            <span style="font-size:13px; color:#475569;">I confirm the receipt details are correct.</span>
-          </label>
-          <div style="font-size:12px; color:#64748b;">After submitting, your plan will update immediately.</div>
-        </div>
-      </div>
-    `,
-    showCancelButton: true,
-    confirmButtonText: 'Submit receipt',
-    cancelButtonText: 'Cancel',
-    confirmButtonColor: '#2563eb',
-    focusConfirm: false,
-    preConfirm: () => {
-      const method = (document.getElementById('pay-method') as HTMLSelectElement | null)?.value as PaymentMethod | undefined
-      const receiptReference = (document.getElementById('pay-ref') as HTMLInputElement | null)?.value?.trim() || ''
-      const paidAtIso = (document.getElementById('pay-date') as HTMLInputElement | null)?.value || ''
-      const confirmed = (document.getElementById('pay-confirm') as HTMLInputElement | null)?.checked === true
-
-      if (!confirmed) {
-        Swal.showValidationMessage('Please confirm the receipt details.')
-        return
-      }
-      if (!method) {
-        Swal.showValidationMessage('Please select a payment method.')
-        return
-      }
-      if (receiptReference.length < 4) {
-        Swal.showValidationMessage('Please enter a valid receipt reference / transaction ID.')
-        return
-      }
-      if (!paidAtIso) {
-        Swal.showValidationMessage('Please select the payment date/time.')
-        return
-      }
-
-      return { method, receiptReference, paidAtIso }
-    },
-  })
-
-  return result.isConfirmed ? (result.value as { method: PaymentMethod; receiptReference: string; paidAtIso: string }) : null
+async function copySchoolCode() {
+  if (!schoolCode.value) return
+  try {
+    await navigator.clipboard.writeText(schoolCode.value)
+    copied.value = true
+    setTimeout(() => {
+      copied.value = false
+    }, 1400)
+  } catch {
+    copied.value = false
+  }
 }
 
 async function setPlan(planId: string) {
-  if (!authStore.user?.uid) return
-  if (savingPlanId.value) return
-
+  if (!authStore.user?.uid || savingPlanId.value) return
   const target = plans.value.find((p) => p.id === planId)
   if (!target) return
 
   if (hasPendingChange.value && planId !== 'free') {
     await Swal.fire({
       icon: 'info',
-      title: 'Pending verification',
-      text: 'You already have a pending plan change. Submit your receipt or cancel the request.',
+      title: 'Pending PayMongo checkout',
+      text: 'Finish or cancel the current test checkout before selecting another paid plan.',
       confirmButtonColor: '#2563eb',
     })
     return
   }
 
-  const targetLabel = target.name
-  const priceText = `${formatPrice(rolePrice(target))}${rolePrice(target) === 0 ? '' : `/${billingCycle.value}`}`
-
   const result = await Swal.fire({
     icon: 'question',
-    title: `Confirm ${targetLabel}`,
+    title: `${actionLabel(planId)}?`,
     html: `
       <div style="text-align:left;">
-        <p><strong>Plan:</strong> ${targetLabel}</p>
-        <p><strong>Price:</strong> ${priceText}</p>
-        <p><strong>Next:</strong> ${requiresPayment(currentPlan.value, target) ? 'Pay first → pending verification' : 'Plan activates immediately'}</p>
+        <p><strong>Plan:</strong> ${target.name}</p>
+        <p><strong>Price:</strong> ${formatPrice(rolePrice(target))}${rolePrice(target) > 0 ? `/${billingCycle.value}` : ''}</p>
+        <p><strong>Flow:</strong> ${requiresPayment(currentPlan.value, target) ? 'PayMongo test checkout' : 'Direct update'}</p>
       </div>
     `,
     showCancelButton: true,
-    confirmButtonText: 'Confirm',
+    confirmButtonText: requiresPayment(currentPlan.value, target) ? 'Open PayMongo checkout' : 'Apply plan',
     cancelButtonText: 'Cancel',
     confirmButtonColor: '#2563eb',
   })
@@ -254,67 +201,49 @@ async function setPlan(planId: string) {
 
   savingPlanId.value = planId
   try {
-    const current = currentPlan.value
-    if (requiresPayment(current, target)) {
+    if (requiresPayment(currentPlan.value, target)) {
       const requestId = generateRequestId()
-      await createPendingPlanChange(authStore.user.uid, {
+      const checkout = await createPaymongoCheckoutSession(authStore.user.uid, {
         requestId,
-        targetPlan: planId,
+        planId: target.id,
+        planName: target.name,
+        role: props.role,
         amount: rolePrice(target),
-        currency: 'PHP',
+        billingCycle: billingCycle.value,
+        returnUrl: typeof window !== 'undefined' ? window.location.href : '',
       })
-
-      const next = await Swal.fire({
-        icon: 'success',
-        title: 'Payment request created',
-        html: `
-          <div style="text-align:left;">
-            <p style="margin:0 0 10px 0;">Request ID (generated before payment):</p>
-            <div style="font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-weight:900; font-size:16px; color:#0f172a;">
-              ${requestId}
-            </div>
-            <div style="margin-top:10px; font-size:13px; color:#475569;">
-              Pay first, then submit the GCash receipt reference/transaction ID to activate your plan.
-            </div>
-          </div>
-        `,
-        showCancelButton: true,
-        confirmButtonText: 'Submit receipt now',
-        cancelButtonText: 'I will do it later',
-        confirmButtonColor: '#2563eb',
-      })
-
-      if (next.isConfirmed) {
-        const receipt = await collectReceiptDetails(rolePrice(target))
-        if (!receipt) return
-        await submitPendingPlanPayment(authStore.user.uid, {
-          requestId,
-          method: receipt.method,
-          receiptReference: receipt.receiptReference,
-          paidAtIso: receipt.paidAtIso,
-        })
-        await updateUserSubscription(authStore.user.uid, { plan: planId, status: 'active' })
-        await clearPendingPlanChange(authStore.user.uid).catch(() => {})
-        await Swal.fire({
-          icon: 'success',
-          title: 'Plan activated',
-          text: 'Payment receipt received. Your plan is now active.',
-          confirmButtonColor: '#2563eb',
-        })
+      if (checkout.checkoutUrl) {
+        window.open(checkout.checkoutUrl, '_blank', 'noopener,noreferrer')
       }
-    } else {
-      await updateUserSubscription(authStore.user.uid, { plan: planId, status: 'active' })
+
+      await authStore.refreshUser()
+
       await Swal.fire({
         icon: 'success',
-        title: 'Subscription updated',
-        text: `Your plan is now ${targetLabel}.`,
+        title: 'PayMongo test checkout ready',
+        html: `
+          <div style="text-align:left;">
+            <p>Your test checkout was created successfully.</p>
+            <p><strong>Request ID:</strong> ${checkout.requestId}</p>
+            <p><strong>Next step:</strong> finish the test payment in PayMongo, then click <strong>Verify payment</strong> on this page.</p>
+          </div>
+        `,
         confirmButtonColor: '#2563eb',
       })
+      return
     }
+
+    await updateUserSubscription(authStore.user.uid, { plan: target.id, status: 'active' })
+    await Swal.fire({
+      icon: 'success',
+      title: 'Subscription updated',
+      text: `Your plan is now ${target.name}.`,
+      confirmButtonColor: '#2563eb',
+    })
   } catch (error) {
     await Swal.fire({
       icon: 'error',
-      title: 'Update failed',
+      title: 'Billing update failed',
       text: error instanceof Error ? error.message : 'Could not update your subscription.',
       confirmButtonColor: '#2563eb',
     })
@@ -324,15 +253,14 @@ async function setPlan(planId: string) {
 }
 
 async function cancelToFree() {
-  if (!authStore.user?.uid) return
-  if (savingPlanId.value) return
+  if (!authStore.user?.uid || savingPlanId.value) return
 
   const result = await Swal.fire({
     icon: 'warning',
-    title: 'Cancel subscription?',
-    text: 'This will move your account to the Free plan and clear any pending change requests.',
+    title: 'Move to Free plan?',
+    text: 'This will switch your account to Free and remove any pending PayMongo checkout.',
     showCancelButton: true,
-    confirmButtonText: 'Cancel subscription',
+    confirmButtonText: 'Move to Free',
     cancelButtonText: 'Keep current plan',
     confirmButtonColor: '#dc2626',
   })
@@ -344,15 +272,15 @@ async function cancelToFree() {
     await clearPendingPlanChange(authStore.user.uid).catch(() => {})
     await Swal.fire({
       icon: 'success',
-      title: 'Moved to Free',
-      text: 'Your subscription has been cancelled and moved to the Free plan.',
+      title: 'Free plan active',
+      text: 'Your subscription has been moved to the Free plan.',
       confirmButtonColor: '#2563eb',
     })
   } catch (error) {
     await Swal.fire({
       icon: 'error',
       title: 'Cancellation failed',
-      text: error instanceof Error ? error.message : 'Could not cancel your subscription.',
+      text: error instanceof Error ? error.message : 'Could not update your subscription.',
       confirmButtonColor: '#2563eb',
     })
   } finally {
@@ -361,17 +289,15 @@ async function cancelToFree() {
 }
 
 async function cancelPendingRequest() {
-  if (!authStore.user?.uid) return
-  if (!pendingChange.value) return
-  if (savingPlanId.value) return
+  if (!authStore.user?.uid || !pendingChange.value || savingPlanId.value) return
 
   const result = await Swal.fire({
     icon: 'warning',
-    title: 'Cancel pending request?',
-    text: 'This will remove the pending plan change request. Your current plan will remain the same.',
+    title: 'Cancel pending PayMongo checkout?',
+    text: 'This keeps your current plan and removes the saved test checkout session from the app.',
     showCancelButton: true,
-    confirmButtonText: 'Cancel request',
-    cancelButtonText: 'Keep request',
+    confirmButtonText: 'Cancel checkout',
+    cancelButtonText: 'Keep checkout',
     confirmButtonColor: '#dc2626',
   })
   if (!result.isConfirmed) return
@@ -381,7 +307,7 @@ async function cancelPendingRequest() {
     await clearPendingPlanChange(authStore.user.uid)
     await Swal.fire({
       icon: 'success',
-      title: 'Request cancelled',
+      title: 'Pending checkout removed',
       confirmButtonColor: '#2563eb',
     })
   } finally {
@@ -389,159 +315,204 @@ async function cancelPendingRequest() {
   }
 }
 
-async function submitReceiptFromBanner() {
-  if (!authStore.user?.uid) return
-  const pc = pendingChange.value
-  if (!pc) return
-  if (savingPlanId.value) return
+function openPendingCheckout() {
+  const url = pendingChange.value?.checkoutUrl
+  if (!url) return
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
 
-  const receipt = await collectReceiptDetails(pc.amount)
-  if (!receipt) return
+async function verifyPendingCheckout(options: { silentOnPending?: boolean } = {}) {
+  if (!authStore.user?.uid || !pendingChange.value?.checkoutSessionId || verifyingPayment.value) return
 
-  savingPlanId.value = 'pending-receipt'
+  verifyingPayment.value = true
   try {
-    await submitPendingPlanPayment(authStore.user.uid, {
-      requestId: pc.requestId,
-      method: receipt.method,
-      receiptReference: receipt.receiptReference,
-      paidAtIso: receipt.paidAtIso,
+    const result = await verifyPaymongoCheckoutSession(authStore.user.uid, {
+      requestId: pendingChange.value.requestId,
+      checkoutSessionId: pendingChange.value.checkoutSessionId,
     })
-    await updateUserSubscription(authStore.user.uid, { plan: pc.targetPlan, status: 'active' })
-    await clearPendingPlanChange(authStore.user.uid).catch(() => {})
+
+    if (result.verified) {
+      await Swal.fire({
+        icon: 'success',
+        title: 'Payment verified',
+        text: 'Your PayMongo test payment is complete and the subscription is now active.',
+        confirmButtonColor: '#2563eb',
+      })
+      return
+    }
+
+    if (!options.silentOnPending) {
+      await Swal.fire({
+        icon: 'info',
+        title: 'Still waiting for payment',
+        text: result.message || 'The test payment is not marked as paid yet. Finish the PayMongo checkout first, then verify again.',
+        confirmButtonColor: '#2563eb',
+      })
+    }
+  } catch (error) {
     await Swal.fire({
-      icon: 'success',
-      title: 'Plan activated',
-      text: 'Payment receipt received. Your plan is now active.',
+      icon: 'error',
+      title: 'Verification failed',
+      text: error instanceof Error ? error.message : 'Could not verify your PayMongo checkout.',
       confirmButtonColor: '#2563eb',
     })
   } finally {
-    savingPlanId.value = null
+    verifyingPayment.value = false
+    await authStore.refreshUser().catch(() => {})
   }
 }
 </script>
 
 <template>
   <div class="subscription-manager">
-    <header class="sub-header" :class="`accent-${accent}`">
-      <div class="sub-title">
-        <div class="kicker">Billing</div>
+    <header class="hero-card" :class="`hero-${props.role}`">
+      <div>
+        <div class="eyebrow">Billing</div>
         <h1>{{ headerTitle }}</h1>
-        <p>Upgrade, downgrade, cancel, or buy again. Paid changes require payment first.</p>
+        <p class="hero-copy">
+          Pick a plan, launch a PayMongo test checkout for paid upgrades, and verify the sandbox payment without using real money.
+        </p>
       </div>
-      <div class="sub-actions">
-        <div class="pill">
-          <span class="pill-label">Status</span>
-          <span class="pill-value" :class="`badge-${subscriptionStatus}`">{{ subscriptionStatus }}</span>
-        </div>
+      <div class="hero-status">
+        <span class="status-chip" :class="`status-${subscriptionStatus}`">{{ subscriptionStatus }}</span>
+        <span class="hero-plan">{{ activeSummary }}</span>
       </div>
     </header>
 
     <div v-if="loading" class="loading-card">
-      <div class="skeleton-row">
-        <div class="skeleton skeleton-pill"></div>
-        <div class="skeleton skeleton-line"></div>
-      </div>
-      <div class="skeleton-grid">
-        <div v-for="i in 3" :key="i" class="skeleton skeleton-card"></div>
-      </div>
+      Loading billing details...
     </div>
 
-    <div v-else class="sub-content">
-      <section class="current-card">
-        <div class="current-top">
+    <div v-else class="billing-layout">
+      <section class="summary-grid">
+        <article class="summary-card primary">
+          <div class="summary-label">Current plan</div>
+          <div class="summary-value">{{ currentPlan?.name || 'Free' }}</div>
+          <div class="summary-subtext">
+            {{ formatPrice(currentPlan ? rolePrice(currentPlan) : 0) }}
+            <span v-if="currentPlan && rolePrice(currentPlan) > 0">/{{ billingCycle }}</span>
+          </div>
+        </article>
+
+        <article class="summary-card">
+          <div class="summary-label">Billing cycle</div>
+          <div class="summary-value capitalize">{{ billingCycle }}</div>
+          <div class="summary-subtext">Applies to the active organization subscription.</div>
+        </article>
+
+        <article class="summary-card" v-if="role === 'school' && schoolCode">
+          <div class="summary-label">School code</div>
+          <div class="summary-value code-text">{{ schoolCode }}</div>
+          <button class="subtle-btn" type="button" @click="copySchoolCode">{{ copied ? 'Copied' : 'Copy code' }}</button>
+        </article>
+      </section>
+
+      <section v-if="pendingChange" class="pending-panel">
+        <div class="pending-head">
           <div>
-            <div class="current-label">Current</div>
-            <div class="current-plan">{{ currentPlan?.name || 'Free' }}</div>
-            <div class="current-meta">
-              <span class="meta">Billing: {{ billingCycle }}</span>
+            <div class="panel-title">Pending PayMongo Test Checkout</div>
+            <div class="panel-copy">
+              {{ pendingTargetPlan?.name || pendingChange.targetPlan }} for {{ formatPrice(pendingChange.amount) }}
             </div>
           </div>
+          <div class="pending-badge">{{ pendingChange.checkoutStatus || 'waiting' }}</div>
+        </div>
 
-          <button
-            v-if="subscriptionPlanId !== 'free' || subscriptionStatus !== 'active'"
-            class="danger-btn"
-            type="button"
-            :disabled="!!savingPlanId"
-            @click="cancelToFree"
-          >
-            {{ savingPlanId ? 'Working…' : 'Cancel subscription' }}
+        <div class="pending-grid">
+          <div class="pending-item">
+            <span class="pending-label">Request ID</span>
+            <strong>{{ pendingChange.requestId }}</strong>
+          </div>
+          <div class="pending-item" v-if="pendingChange.checkoutSessionId">
+            <span class="pending-label">Checkout session</span>
+            <strong class="mono">{{ pendingChange.checkoutSessionId }}</strong>
+          </div>
+          <div class="pending-item">
+            <span class="pending-label">Sandbox mode</span>
+            <strong>No real money is charged</strong>
+          </div>
+        </div>
+
+        <div class="sandbox-box">
+          <div class="sandbox-title">PayMongo test mode notes</div>
+          <ul class="sandbox-list">
+            <li v-for="hint in sandboxHints" :key="hint">{{ hint }}</li>
+            <li>Open the checkout, finish the test payment there, then return here and click `Verify payment`.</li>
+          </ul>
+        </div>
+
+        <div class="pending-actions">
+          <button v-if="hasPaymongoCheckout" class="primary-btn" type="button" :disabled="verifyingPayment" @click="openPendingCheckout">
+            Open checkout
           </button>
-        </div>
-
-        <div v-if="pendingChange" class="pending-banner">
-          <div class="pending-title">Awaiting receipt</div>
-          <div class="pending-text">
-            Payment Request ID: <strong>{{ pendingChange.requestId }}</strong>
-            <span v-if="pendingTargetPlan"> &middot; Plan: <strong>{{ pendingTargetPlan.name }}</strong></span>
-            &middot; Amount: <strong>{{ formatPrice(pendingChange.amount) }}</strong>
-            <div class="pending-hint">This is an internal tracking ID (not your GCash reference).</div>
-          </div>
-          <div class="pending-actions">
-            <button class="primary-mini" type="button" :disabled="!!savingPlanId" @click="submitReceiptFromBanner">
-              Submit receipt
-            </button>
-            <button class="ghost-mini danger" type="button" :disabled="!!savingPlanId" @click="cancelPendingRequest">
-              Cancel request
-            </button>
-          </div>
-        </div>
-
-        <div v-if="role === 'school' && schoolCode" class="school-code">
-          <div class="code-top">
-            <div>
-              <div class="code-label">School subscription code</div>
-              <div class="code">{{ schoolCode }}</div>
-              <div class="code-hint">Share this with students during registration.</div>
-            </div>
-            <button class="ghost-btn" type="button" @click="copySchoolCode">
-              {{ copied ? 'Copied' : 'Copy' }}
-            </button>
-          </div>
+          <button class="primary-btn verify" type="button" :disabled="verifyingPayment" @click="verifyPendingCheckout()">
+            {{ verifyingPayment ? 'Verifying...' : 'Verify payment' }}
+          </button>
+          <button class="ghost-btn danger" type="button" :disabled="!!savingPlanId || verifyingPayment" @click="cancelPendingRequest">
+            Cancel pending checkout
+          </button>
         </div>
       </section>
 
-      <section class="plans-grid">
-        <article
-          v-for="plan in plans"
-          :key="plan.id"
-          class="plan-card"
-          :class="{
-            active: plan.id === subscriptionPlanId,
-            recommended: plan.id === 'standard' && plan.id !== subscriptionPlanId,
-          }"
-        >
-          <div class="plan-head">
-            <div class="plan-head-top">
-              <div class="plan-name">{{ plan.name }}</div>
-              <div class="plan-badges">
-                <span v-if="plan.id === subscriptionPlanId" class="tag tag-current">Current</span>
-                <span v-else-if="plan.id === 'standard'" class="tag tag-rec">Recommended</span>
-                <span v-if="requiresPayment(currentPlan, plan)" class="tag tag-pay">Pay first</span>
-              </div>
-            </div>
-            <div class="plan-price">
-              {{ formatPrice(rolePrice(plan)) }}
-              <span v-if="rolePrice(plan) !== 0" class="per">/{{ billingCycle }}</span>
-            </div>
-            <div class="plan-desc">{{ plan.description }}</div>
-            <div class="plan-delta">{{ planDeltaLabel(plan) }}</div>
+      <section class="plans-section">
+        <div class="section-head">
+          <div>
+            <h2>Plans</h2>
+            <p>Paid upgrades now go through PayMongo test checkout instead of manual receipt entry.</p>
           </div>
-
-          <ul class="plan-features">
-            <li v-for="f in roleFeatures(plan)" :key="f">{{ f }}</li>
-          </ul>
-
           <button
-            class="primary-btn"
+            v-if="subscriptionPlanId !== 'free' || subscriptionStatus !== 'active'"
+            class="ghost-btn danger"
             type="button"
-            :disabled="!canSelectPlan(plan)"
-            :title="disabledReason(plan)"
-            @click="setPlan(plan.id)"
+            :disabled="!!savingPlanId || verifyingPayment"
+            @click="cancelToFree"
           >
-            <span class="btn-title">{{ savingPlanId === plan.id ? 'Updating…' : actionLabel(plan.id) }}</span>
-            <span class="btn-sub">{{ requiresPayment(currentPlan, plan) ? 'Submit payment → pending verification' : hasActiveSubscription ? 'Applies immediately' : 'Requires verification' }}</span>
+            Move to Free
           </button>
-        </article>
+        </div>
+
+        <div class="plans-grid">
+          <article
+            v-for="plan in plans"
+            :key="plan.id"
+            class="plan-card"
+            :class="{
+              active: plan.id === subscriptionPlanId && !hasPendingChange,
+              recommended: plan.id === 'standard' && plan.id !== subscriptionPlanId,
+            }"
+          >
+            <div class="plan-head">
+              <div class="plan-topline">
+                <div class="plan-name">{{ plan.name }}</div>
+                <div class="plan-tags">
+                  <span v-if="plan.id === subscriptionPlanId && !hasPendingChange" class="tag current">Current</span>
+                  <span v-else-if="plan.id === 'standard'" class="tag rec">Recommended</span>
+                  <span v-if="requiresPayment(currentPlan, plan)" class="tag paymongo">PayMongo</span>
+                </div>
+              </div>
+              <div class="plan-price">
+                {{ formatPrice(rolePrice(plan)) }}
+                <span v-if="rolePrice(plan) > 0" class="per">/{{ billingCycle }}</span>
+              </div>
+              <p class="plan-description">{{ plan.description }}</p>
+              <p class="plan-delta">{{ planDeltaLabel(plan) }}</p>
+            </div>
+
+            <ul class="plan-features">
+              <li v-for="feature in roleFeatures(plan)" :key="feature">{{ feature }}</li>
+            </ul>
+
+            <button
+              class="plan-action"
+              type="button"
+              :disabled="!canSelectPlan(plan)"
+              :title="disabledReason(plan)"
+              @click="setPlan(plan.id)"
+            >
+              {{ savingPlanId === plan.id ? 'Processing...' : actionLabel(plan.id) }}
+            </button>
+          </article>
+        </div>
       </section>
     </div>
   </div>
@@ -550,363 +521,324 @@ async function submitReceiptFromBanner() {
 <style scoped>
 .subscription-manager {
   padding: 28px;
-  background:
-    radial-gradient(1200px 500px at 10% 0%, rgba(37, 99, 235, 0.09), transparent 60%),
-    radial-gradient(900px 420px at 95% 5%, rgba(16, 185, 129, 0.09), transparent 55%),
-    #f8fafc;
   min-height: calc(100vh - 40px);
+  background:
+    radial-gradient(1000px 480px at 8% 0%, rgba(14, 165, 233, 0.12), transparent 60%),
+    radial-gradient(760px 420px at 94% 2%, rgba(16, 185, 129, 0.11), transparent 58%),
+    #f8fafc;
 }
 
-.sub-header {
+.hero-card {
   display: flex;
-  align-items: flex-end;
   justify-content: space-between;
-  gap: 14px;
-  margin-bottom: 18px;
-  padding: 18px 18px 16px;
-  border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(6px);
+  gap: 18px;
+  padding: 22px;
+  border-radius: 22px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
 }
 
-.accent-school {
-  box-shadow: 0 12px 30px rgba(37, 99, 235, 0.08);
+.hero-school {
+  box-shadow: 0 18px 40px rgba(37, 99, 235, 0.1);
 }
 
-.accent-company {
-  box-shadow: 0 12px 30px rgba(16, 185, 129, 0.08);
+.hero-company {
+  box-shadow: 0 18px 40px rgba(5, 150, 105, 0.1);
 }
 
-.kicker {
+.eyebrow {
   font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.6px;
+  font-weight: 900;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
   color: #64748b;
-  margin-bottom: 4px;
 }
 
-.sub-title h1 {
-  margin: 0;
-  font-size: 22px;
-  font-weight: 800;
+.hero-card h1 {
+  margin: 6px 0 0;
+  font-size: 26px;
+  font-weight: 900;
   color: #0f172a;
 }
 
-.sub-title p {
-  margin: 6px 0 0 0;
-  color: #64748b;
-  font-size: 14px;
-}
-
-.sub-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.pill {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.5);
-  background: rgba(255, 255, 255, 0.9);
-}
-
-.pill-label {
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.pill-value {
-  font-size: 12px;
-  font-weight: 900;
-  text-transform: capitalize;
-}
-
-.loading-card {
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 18px;
+.hero-copy {
+  margin: 10px 0 0;
+  max-width: 700px;
   color: #475569;
+  line-height: 1.55;
 }
 
-.skeleton-row {
+.hero-status {
+  min-width: 180px;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-
-.skeleton-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 14px;
-}
-
-.skeleton {
-  background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 37%, #f1f5f9 63%);
-  background-size: 400% 100%;
-  animation: shimmer 1.25s ease infinite;
-  border-radius: 12px;
-}
-
-.skeleton-pill {
-  width: 140px;
-  height: 36px;
-}
-
-.skeleton-line {
-  width: 260px;
-  height: 16px;
-  border-radius: 999px;
-}
-
-.skeleton-card {
-  height: 360px;
-}
-
-@keyframes shimmer {
-  0% {
-    background-position: 100% 0;
-  }
-  100% {
-    background-position: 0 0;
-  }
-}
-
-.current-card {
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 14px;
-  padding: 18px 18px 14px;
-  margin-bottom: 16px;
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
-}
-
-.current-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.current-label {
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-  text-transform: uppercase;
-}
-
-.current-plan {
-  font-size: 20px;
-  font-weight: 900;
-  color: #111827;
-  margin-top: 4px;
-}
-
-.current-meta {
-  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   gap: 10px;
-  align-items: center;
-  margin-top: 10px;
-  color: #64748b;
-  font-size: 13px;
 }
 
-.badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 10px;
+.status-chip {
+  padding: 7px 12px;
   border-radius: 999px;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 900;
   text-transform: capitalize;
 }
 
-.badge-active {
+.status-active {
   background: #dcfce7;
   color: #166534;
 }
 
-.badge-pending {
+.status-pending {
   background: #fef3c7;
   color: #92400e;
 }
 
-.badge-inactive {
-  background: #e5e7eb;
-  color: #374151;
+.status-inactive {
+  background: #e2e8f0;
+  color: #334155;
 }
 
-.danger-btn {
-  background: #dc2626;
-  color: white;
-  border: none;
-  padding: 10px 14px;
-  border-radius: 10px;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: 0 8px 18px rgba(220, 38, 38, 0.25);
-}
-
-.danger-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.school-code {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid #e5e7eb;
-}
-
-.code-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.code-label {
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-.code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-  font-size: 18px;
+.hero-plan {
+  font-size: 14px;
   font-weight: 800;
   color: #0f172a;
-  margin-top: 6px;
 }
 
-.code-hint {
+.loading-card,
+.summary-card,
+.pending-panel,
+.plans-section {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
+}
+
+.loading-card {
+  margin-top: 18px;
+  padding: 24px;
+  color: #475569;
+}
+
+.billing-layout {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.summary-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.summary-card {
+  padding: 18px;
+}
+
+.summary-card.primary {
+  background: linear-gradient(135deg, #eff6ff, #ffffff);
+}
+
+.summary-label {
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: #64748b;
+}
+
+.summary-value {
+  margin-top: 8px;
+  font-size: 24px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.summary-subtext {
   margin-top: 6px;
-  font-size: 13px;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.capitalize {
+  text-transform: capitalize;
+}
+
+.code-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 20px;
+}
+
+.subtle-btn,
+.ghost-btn,
+.primary-btn,
+.plan-action {
+  border: none;
+  cursor: pointer;
+  font-weight: 800;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.subtle-btn {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f1f5f9;
+  color: #0f172a;
 }
 
 .ghost-btn {
-  background: rgba(148, 163, 184, 0.15);
-  border: 1px solid rgba(148, 163, 184, 0.25);
+  padding: 11px 14px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid #cbd5e1;
   color: #0f172a;
-  padding: 10px 12px;
+}
+
+.ghost-btn.danger {
+  color: #991b1b;
+  border-color: rgba(220, 38, 38, 0.2);
+  background: rgba(220, 38, 38, 0.06);
+}
+
+.primary-btn,
+.plan-action {
+  padding: 12px 16px;
   border-radius: 12px;
-  font-weight: 900;
-  cursor: pointer;
-}
-
-.ghost-btn:hover {
-  background: rgba(148, 163, 184, 0.22);
-}
-
-.pending-banner {
-  margin-top: 14px;
-  padding: 12px 12px;
-  border-radius: 12px;
-  border: 1px solid #fde68a;
-  background: #fffbeb;
-  color: #92400e;
-}
-
-.pending-title {
-  font-weight: 900;
-  font-size: 13px;
-}
-
-.pending-text {
-  margin-top: 4px;
-  font-size: 13px;
-  color: #92400e;
-}
-
-.pending-hint {
-  margin-top: 6px;
-  font-size: 12px;
-  color: #a16207;
-}
-
-.pending-actions {
-  margin-top: 10px;
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.primary-mini {
-  background: #2563eb;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
   color: white;
-  border: none;
-  padding: 10px 12px;
-  border-radius: 12px;
-  font-weight: 900;
-  cursor: pointer;
-  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.18);
+  box-shadow: 0 14px 26px rgba(37, 99, 235, 0.22);
 }
 
-.primary-mini:disabled {
+.primary-btn.verify {
+  background: linear-gradient(135deg, #0f766e, #0d9488);
+  box-shadow: 0 14px 26px rgba(13, 148, 136, 0.22);
+}
+
+.primary-btn:disabled,
+.ghost-btn:disabled,
+.plan-action:disabled,
+.subtle-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+  transform: none;
   box-shadow: none;
 }
 
-.ghost-mini {
-  background: rgba(148, 163, 184, 0.12);
-  color: #0f172a;
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  padding: 10px 12px;
-  border-radius: 12px;
+.pending-panel,
+.plans-section {
+  padding: 20px;
+}
+
+.pending-head,
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.panel-title,
+.section-head h2 {
+  margin: 0;
+  font-size: 20px;
   font-weight: 900;
-  cursor: pointer;
+  color: #0f172a;
 }
 
-.ghost-mini:hover {
-  background: rgba(148, 163, 184, 0.18);
+.panel-copy,
+.section-head p {
+  margin: 6px 0 0;
+  color: #64748b;
+  line-height: 1.45;
 }
 
-.ghost-mini.danger {
-  background: rgba(220, 38, 38, 0.1);
-  border-color: rgba(220, 38, 38, 0.18);
-  color: #991b1b;
+.pending-badge {
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: capitalize;
 }
 
-.ghost-mini.danger:hover {
-  background: rgba(220, 38, 38, 0.14);
+.pending-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-top: 16px;
+}
+
+.pending-item {
+  padding: 14px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  color: #0f172a;
+}
+
+.pending-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #64748b;
+  text-transform: uppercase;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 13px;
+}
+
+.sandbox-box {
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #ecfeff, #f8fafc);
+  border: 1px solid #bae6fd;
+}
+
+.sandbox-title {
+  font-size: 14px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.sandbox-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: #334155;
+  line-height: 1.55;
+}
+
+.pending-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 18px;
 }
 
 .plans-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  margin-top: 18px;
 }
 
 .plan-card {
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 14px;
-  padding: 18px;
   display: flex;
   flex-direction: column;
   min-height: 340px;
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
-  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-}
-
-.plan-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
-  border-color: #cbd5e1;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid #e2e8f0;
+  background: linear-gradient(180deg, #ffffff, #fbfdff);
 }
 
 .plan-card.active {
@@ -915,17 +847,15 @@ async function submitReceiptFromBanner() {
 }
 
 .plan-card.recommended {
-  border-color: rgba(37, 99, 235, 0.45);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.06);
+  border-color: rgba(37, 99, 235, 0.3);
 }
 
 .plan-head {
-  padding-bottom: 10px;
-  border-bottom: 1px solid #eef2f7;
-  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e2e8f0;
 }
 
-.plan-head-top {
+.plan-topline {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -933,90 +863,81 @@ async function submitReceiptFromBanner() {
 }
 
 .plan-name {
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 900;
   color: #0f172a;
 }
 
-.plan-badges {
+.plan-tags {
   display: flex;
-  align-items: center;
   gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
 
 .tag {
-  display: inline-flex;
-  align-items: center;
   padding: 4px 8px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 900;
-  border: 1px solid transparent;
-  white-space: nowrap;
 }
 
-.tag-current {
+.tag.current {
   background: #dcfce7;
   color: #166534;
 }
 
-.tag-rec {
+.tag.rec {
   background: #eff6ff;
   color: #1d4ed8;
-  border-color: rgba(37, 99, 235, 0.22);
 }
 
-.tag-pay {
-  background: #fff7ed;
-  color: #9a3412;
-  border-color: rgba(249, 115, 22, 0.25);
+.tag.paymongo {
+  background: #ecfeff;
+  color: #0f766e;
 }
 
 .plan-price {
-  margin-top: 6px;
-  font-size: 22px;
-  font-weight: 800;
+  margin-top: 10px;
+  font-size: 28px;
+  font-weight: 900;
   color: #111827;
 }
 
 .per {
+  margin-left: 6px;
   font-size: 13px;
   font-weight: 700;
   color: #64748b;
-  margin-left: 6px;
 }
 
-.plan-desc {
-  margin-top: 8px;
+.plan-description,
+.plan-delta {
+  margin: 8px 0 0;
   color: #64748b;
-  font-size: 13px;
-  line-height: 1.45;
 }
 
 .plan-delta {
-  margin-top: 10px;
-  color: #475569;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 800;
+  color: #334155;
 }
 
 .plan-features {
-  list-style: none;
+  flex: 1;
+  margin: 16px 0;
   padding: 0;
-  margin: 12px 0 16px;
+  list-style: none;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  flex: 1;
 }
 
 .plan-features li {
-  color: #374151;
-  font-size: 13px;
-  padding-left: 18px;
   position: relative;
+  padding-left: 18px;
+  color: #334155;
+  line-height: 1.45;
 }
 
 .plan-features li::before {
@@ -1024,41 +945,20 @@ async function submitReceiptFromBanner() {
   position: absolute;
   left: 0;
   color: #16a34a;
-  font-weight: 800;
-}
-
-.primary-btn {
-  width: 100%;
-  background: #2563eb;
-  color: white;
-  border: none;
-  padding: 12px 14px;
-  border-radius: 10px;
   font-weight: 900;
-  cursor: pointer;
-  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.22);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  align-items: center;
 }
 
-.primary-btn:disabled {
-  background: #cbd5e1;
-  cursor: not-allowed;
-  box-shadow: none;
-}
+@media (max-width: 900px) {
+  .hero-card,
+  .pending-head,
+  .section-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
 
-.btn-title {
-  font-size: 14px;
-  font-weight: 950;
-  line-height: 1.2;
-}
-
-.btn-sub {
-  font-size: 12px;
-  font-weight: 700;
-  opacity: 0.92;
+  .hero-status {
+    align-items: flex-start;
+  }
 }
 
 @media (max-width: 768px) {
@@ -1066,8 +966,15 @@ async function submitReceiptFromBanner() {
     padding: 18px;
   }
 
-  .skeleton-line {
-    width: 160px;
+  .pending-actions,
+  .section-head {
+    flex-direction: column;
+  }
+
+  .primary-btn,
+  .ghost-btn,
+  .plan-action {
+    width: 100%;
   }
 }
 </style>

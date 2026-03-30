@@ -69,14 +69,6 @@ async function handleMenuClick(itemId: string) {
         <img src="/icons/icon-evaluation.png" alt="Readiness Check" class="nav-icon-img" />
         <span>Readiness Check</span>
       </div>
-      <div
-        class="nav-item"
-        :class="{ active: activeItem === 'community' }"
-        @click="handleMenuClick('community')"
-      >
-        <img src="/icons/icon-community.png" alt="Community" class="nav-icon-img" />
-        <span>Community</span>
-      </div>
     </nav>
 
     <div class="sidebar-bottom">

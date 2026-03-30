@@ -1,16 +1,21 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
 import type { Component } from 'vue'
 import { useRouter } from 'vue-router'
 import SchoolSidebar from '../../components/SchoolSidebar.vue'
 import SchoolSettings from '../../components/SchoolSettings.vue'
+import OrganizationAccessManager from '../../components/OrganizationAccessManager.vue'
 import SubscriptionManager from '../../components/SubscriptionManager.vue'
 import FloatingChatWidget from '../../components/FloatingChatWidget.vue'
 import { useAuthStore } from '@/stores/auth'
-import { subscribeSchoolStudents, addSchoolStudent, removeSchoolStudent, type SchoolStudentRecord } from '@/services/schoolStudents'
-import { subscribeSchoolContracts, createContractRequest, cancelContract, type ContractRecord } from '@/services/contracts'
+import { subscribeSchoolStudents, addSchoolStudent, updateSchoolStudent, removeSchoolStudent, type SchoolStudentRow } from '@/services/schoolStudents'
+import { subscribeSchoolContracts, createContractRequest, acceptContract, rejectContract, cancelContract, type ContractRecord } from '@/services/contracts'
 import { ensurePublicProfile, listPublicProfiles, subscribePublicProfiles, type PublicProfile } from '@/services/profilesPublic'
 import { saveSchoolPrograms, getSchoolPrograms } from '@/services/schoolPrograms'
+import { createInternship, deleteInternship, subscribeSchoolInternships, type InternshipRecord } from '@/services/internships'
+import { listDocuments, uploadDocuments, type DocumentRecord } from '@/services/documents'
+import { listSchoolReports, saveSchoolReport, type ReportRecord } from '@/services/reports'
+import { buildProfileAvatarUrl } from '@/services/profileMedia'
 import Swal from 'sweetalert2'
 import {
   BellIcon,
@@ -30,8 +35,6 @@ import {
   TrashIcon,
   EnvelopeIcon,
   EllipsisVerticalIcon,
-  PhotoIcon,
-  VideoCameraIcon,
   DocumentIcon,
   GlobeAltIcon,
   UserCircleIcon,
@@ -43,8 +46,6 @@ import {
   PencilSquareIcon,
   CircleStackIcon,
   HandThumbUpIcon,
-  ChatBubbleLeftIcon,
-  ArrowPathRoundedSquareIcon,
   ClockIcon,
   ChevronRightIcon,
 } from '@heroicons/vue/24/outline'
@@ -53,6 +54,26 @@ const authStore = useAuthStore()
 const schoolName = computed(() => {
   const profile = authStore.user?.profile as Record<string, unknown> | undefined
   return (profile?.institutionName as string) || authStore.user?.displayName || 'School'
+})
+
+const userInitials = computed(() => {
+  const name = authStore.user?.displayName || authStore.user?.email || 'User'
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2)
+})
+
+const userAvatarUrl = computed(() => {
+  const currentUser = authStore.user
+  const profile = currentUser?.profile as Record<string, unknown> | undefined
+  if (currentUser?.uid && profile?.avatarPath) {
+    return buildProfileAvatarUrl(currentUser.uid, currentUser.updatedAt)
+  }
+  return ''
 })
 
 // Auto-generate school domain from the logged-in school's email
@@ -111,6 +132,42 @@ const showStudentSidebar = ref(false)
 // Upload document modal state
 const showUploadDocumentModal = ref(false)
 const schoolSelectedFiles = ref<File[]>([])
+const documentsSearchQuery = ref('')
+const documentsSortBy = ref<'recent' | 'name' | 'size' | 'status'>('recent')
+const schoolDocuments = ref<DocumentRecord[]>([])
+const uploadingDocuments = ref(false)
+
+const filteredSchoolDocuments = computed(() => {
+  const query = documentsSearchQuery.value.trim().toLowerCase()
+  const filtered = schoolDocuments.value.filter((doc) => {
+    if (!query) return true
+    return [
+      doc.fileName,
+      doc.category,
+      doc.fileType || '',
+      doc.status,
+    ].some((value) => value.toLowerCase().includes(query))
+  })
+
+  return [...filtered].sort((a, b) => {
+    if (documentsSortBy.value === 'name') {
+      return a.fileName.localeCompare(b.fileName)
+    }
+    if (documentsSortBy.value === 'size') {
+      return (b.fileSize || 0) - (a.fileSize || 0)
+    }
+    if (documentsSortBy.value === 'status') {
+      return a.status.localeCompare(b.status)
+    }
+    return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+  })
+})
+
+const schoolDocumentStats = computed(() => ({
+  total: schoolDocuments.value.length,
+  approved: schoolDocuments.value.filter((doc) => doc.status === 'approved').length,
+  pending: schoolDocuments.value.filter((doc) => doc.status === 'pending').length,
+}))
 
 function triggerSchoolFileInput() {
   const fileInput = document.getElementById('school-file-upload-input') as HTMLInputElement
@@ -149,20 +206,62 @@ function formatSchoolFileSize(bytes: number): string {
   return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
 }
 
+function formatDocumentDate(value?: string) {
+  if (!value) return '—'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? '—'
+    : date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+}
+
+function documentExtension(doc: DocumentRecord) {
+  const fromName = doc.fileName.split('.').pop()?.toUpperCase()
+  if (fromName) return fromName
+  return doc.fileType?.split('/').pop()?.toUpperCase() || 'FILE'
+}
+
+function documentStatusClass(status: string) {
+  return status.toLowerCase()
+}
+
+async function loadSchoolDocuments() {
+  if (authStore.user?.role !== 'school' || !authStore.user?.uid) {
+    schoolDocuments.value = []
+    return
+  }
+
+  try {
+    schoolDocuments.value = await listDocuments()
+  } catch (error) {
+    schoolDocuments.value = []
+    console.error('Failed to load documents:', error)
+  }
+}
+
 function cancelSchoolUpload() {
   showUploadDocumentModal.value = false
   schoolSelectedFiles.value = []
 }
 
 async function confirmSchoolUpload() {
-  if (schoolSelectedFiles.value.length > 0) {
+  if (schoolSelectedFiles.value.length === 0 || uploadingDocuments.value) return
+
+  uploadingDocuments.value = true
+  try {
+    const uploaded = await uploadDocuments({
+      files: schoolSelectedFiles.value,
+      category: 'school',
+      status: 'pending',
+    })
+
+    schoolDocuments.value = [...uploaded, ...schoolDocuments.value]
     showUploadDocumentModal.value = false
-    
+
     await Swal.fire({
       icon: 'success',
       iconColor: '#16a34a',
       title: 'Documents Uploaded Successfully!',
-      text: `${schoolSelectedFiles.value.length} file(s) have been uploaded and are now being processed.`,
+      text: `${uploaded.length} file(s) have been uploaded and added to your document list.`,
       confirmButtonText: 'Continue',
       confirmButtonColor: '#3b82f6',
       customClass: {
@@ -172,8 +271,17 @@ async function confirmSchoolUpload() {
         confirmButton: 'capstone-swal-confirm',
       },
     })
-    
+  } catch (error) {
+    await Swal.fire({
+      icon: 'error',
+      iconColor: '#ef4444',
+      title: 'Upload failed',
+      text: error instanceof Error ? error.message : 'Could not upload your documents right now.',
+      confirmButtonColor: '#3b82f6',
+    })
+  } finally {
     schoolSelectedFiles.value = []
+    uploadingDocuments.value = false
   }
 }
 
@@ -181,16 +289,6 @@ const selectedStudent = ref<any>(null)
 
 // Student search
 const studentSearchQuery = ref('')
-
-const filteredStudents = computed(() => {
-  const query = studentSearchQuery.value.trim().toLowerCase()
-  if (!query) return studentsData.value
-  return studentsData.value.filter((student) => 
-    student.name.toLowerCase().includes(query) ||
-    student.studentId.toLowerCase().includes(query) ||
-    student.course.toLowerCase().includes(query)
-  )
-})
 
 // Approval modal state
 const showApprovalModal = ref(false)
@@ -259,42 +357,110 @@ const selectedContractType = ref<string>('')
 
 // Submit Report Modal state
 const showSubmitReportModal = ref(false)
+const schoolReports = ref<ReportRecord[]>([])
 const reportFormData = ref({
   reportType: '',
-  studentName: 'John Doe',
+  studentName: '',
   internshipPeriodStart: '',
   internshipPeriodEnd: '',
-  companyName: 'Tech Solutions Inc.'
+  companyName: ''
 })
 
+const reportStats = computed(() => ({
+  pending: schoolReports.value.filter((report) => report.companyStatus === 'pending').length,
+  revisionRequested: schoolReports.value.filter((report) => report.companyStatus === 'revision_requested').length,
+  approved: schoolReports.value.filter((report) => report.companyStatus === 'approved').length,
+}))
+
+function formatReportTypeLabel(value: string) {
+  if (value === 'weekly') return 'Weekly Report'
+  if (value === 'monthly') return 'Monthly Report'
+  if (value === 'final') return 'Final Report'
+  return value || 'Report'
+}
+
+function formatReportPeriod(report: Pick<ReportRecord, 'internshipPeriodStart' | 'internshipPeriodEnd'>) {
+  const start = formatDocumentDate(report.internshipPeriodStart)
+  const end = formatDocumentDate(report.internshipPeriodEnd)
+  return `${start} - ${end}`
+}
+
+async function loadSchoolReports() {
+  if (!authStore.user?.uid || authStore.user.role !== 'school') {
+    schoolReports.value = []
+    return
+  }
+
+  schoolReports.value = await listSchoolReports(authStore.user.uid)
+}
+
 function openSubmitReportModal() {
-  console.log('Opening submit report page')
+  const latestStudent = studentsData.value[0]
+  const latestCompany = schoolContracts.value.find((contract) => contract.status === 'active')?.companyName
+    || companiesForContract.value[0]?.orgName
+    || companiesForContract.value[0]?.displayName
+    || ''
+  reportFormData.value = {
+    reportType: '',
+    studentName: latestStudent?.name || '',
+    internshipPeriodStart: '',
+    internshipPeriodEnd: '',
+    companyName: latestCompany,
+  }
   currentView.value = 'submit-report'
 }
 
 function closeSubmitReportModal() {
   currentView.value = 'reports'
-  // Reset form data
   reportFormData.value = {
     reportType: '',
-    studentName: 'John Doe',
+    studentName: '',
     internshipPeriodStart: '',
     internshipPeriodEnd: '',
-    companyName: 'Tech Solutions Inc.'
+    companyName: ''
   }
 }
 
-function saveAsDraft() {
-  // Handle save as draft logic
-  console.log('Saving as draft:', reportFormData.value)
-  currentView.value = 'reports'
+async function persistReport(status: 'draft' | 'pending') {
+  const uid = authStore.user?.uid
+  if (!uid) return
+
+  if (!reportFormData.value.reportType || !reportFormData.value.studentName || !reportFormData.value.internshipPeriodStart || !reportFormData.value.internshipPeriodEnd || !reportFormData.value.companyName) {
+    await Swal.fire({
+      icon: 'warning',
+      title: 'Complete the report form',
+      text: 'Please fill in the report type, student, period, and company before saving.',
+      confirmButtonColor: '#2563eb',
+    })
+    return
+  }
+
+  const created = await saveSchoolReport({
+    schoolId: uid,
+    reportType: reportFormData.value.reportType,
+    studentName: reportFormData.value.studentName,
+    internshipPeriodStart: reportFormData.value.internshipPeriodStart,
+    internshipPeriodEnd: reportFormData.value.internshipPeriodEnd,
+    companyName: reportFormData.value.companyName,
+    status,
+  })
+
+  schoolReports.value = [created, ...schoolReports.value]
+  await Swal.fire({
+    icon: 'success',
+    title: status === 'draft' ? 'Draft saved' : 'Report submitted',
+    text: status === 'draft' ? 'Your report draft is now saved in the reports table.' : 'Your report has been added and is now pending review.',
+    confirmButtonColor: '#2563eb',
+  })
+  closeSubmitReportModal()
 }
 
-function nextStep() {
-  // Handle next step logic
-  console.log('Going to next step:', reportFormData.value)
-  // For now, just go back to reports
-  currentView.value = 'reports'
+async function saveAsDraft() {
+  await persistReport('draft')
+}
+
+async function nextStep() {
+  await persistReport('pending')
 }
 
 // Sample company data
@@ -363,149 +529,6 @@ const companiesData = ref([
         rating: 4,
         feedback: '"Hands-on Experience, learned a lot about site management and safety protocols"'
       }
-    ]
-  }
-])
-
-// Sample student data
-const studentsData = ref([
-  {
-    id: 1,
-    name: 'John Doe',
-    studentId: '2020-0001',
-    course: 'BSIT',
-    yearLevel: '4th Year',
-    status: 'Registered',
-    eligibility: 'Eligible',
-    company: 'Electro Systems',
-    position: 'Software Development Intern',
-    applicationDate: 'January 15, 2024',
-    documents: [
-      { name: 'Resume.pdf', type: 'pdf' },
-      { name: 'Recommendation Letter.docx', type: 'docx' },
-      { name: 'Transcript of Records.jpg', type: 'jpg' }
-    ],
-    timeline: [
-      { status: 'Application Submitted', date: 'January 15, 2024 - 2:30 PM', completed: true },
-      { status: 'Reviewed by Academic Advisor', date: 'January 16, 2024 - 10:15 AM', completed: true },
-      { status: 'Company Interview & Approval', date: 'January 18, 2024 - 3:45 PM', completed: true },
-      { status: 'Endorsed to Company', date: 'January 20, 2024 - 9:00 AM', completed: true }
-    ]
-  },
-  {
-    id: 2,
-    name: 'Jane Smith',
-    studentId: '2020-0002',
-    course: 'BSCS',
-    yearLevel: '3rd Year',
-    status: 'Active Intern',
-    eligibility: 'Pending',
-    company: 'Tech Solutions Inc.',
-    position: 'Web Developer Intern',
-    applicationDate: 'January 10, 2024',
-    documents: [
-      { name: 'CV_JaneSmith.pdf', type: 'pdf' },
-      { name: 'Portfolio.zip', type: 'zip' },
-      { name: 'Grades.pdf', type: 'pdf' }
-    ],
-    timeline: [
-      { status: 'Application Submitted', date: 'January 10, 2024 - 9:15 AM', completed: true },
-      { status: 'Initial Screening', date: 'January 11, 2024 - 2:00 PM', completed: true },
-      { status: 'Technical Interview', date: 'January 12, 2024 - 4:30 PM', completed: false },
-      { status: 'Final Approval Pending', date: 'Pending', completed: false }
-    ]
-  },
-  {
-    id: 3,
-    name: 'Peter Jones',
-    studentId: '2020-0003',
-    course: 'BSIT',
-    yearLevel: '4th Year',
-    status: 'Pending Application',
-    eligibility: 'Not Eligible',
-    company: 'DataCorp Analytics',
-    position: 'Data Analyst Intern',
-    applicationDate: 'January 20, 2024',
-    documents: [
-      { name: 'Resume_Peter.pdf', type: 'pdf' },
-      { name: 'CertificationLetter.docx', type: 'docx' }
-    ],
-    timeline: [
-      { status: 'Application Submitted', date: 'January 20, 2024 - 11:45 AM', completed: true },
-      { status: 'Document Review', date: 'January 21, 2024 - 3:20 PM', completed: false },
-      { status: 'Eligibility Check', date: 'Pending', completed: false },
-      { status: 'Company Review', date: 'Pending', completed: false }
-    ]
-  },
-  {
-    id: 4,
-    name: 'Alice Brown',
-    studentId: '2020-0004',
-    course: 'BSECE',
-    yearLevel: '3rd Year',
-    status: 'Registered',
-    eligibility: 'Eligible',
-    company: 'Innovation Labs',
-    position: 'Hardware Engineer Intern',
-    applicationDate: 'January 8, 2024',
-    documents: [
-      { name: 'AliceBrown_Resume.pdf', type: 'pdf' },
-      { name: 'ProjectPortfolio.pdf', type: 'pdf' },
-      { name: 'Transcript.jpg', type: 'jpg' },
-      { name: 'RecommendationLetter.pdf', type: 'pdf' }
-    ],
-    timeline: [
-      { status: 'Application Submitted', date: 'January 8, 2024 - 1:10 PM', completed: true },
-      { status: 'Academic Review', date: 'January 9, 2024 - 10:30 AM', completed: true },
-      { status: 'Company Screening', date: 'January 10, 2024 - 2:45 PM', completed: true },
-      { status: 'Placement Confirmed', date: 'January 11, 2024 - 4:00 PM', completed: true }
-    ]
-  },
-  {
-    id: 5,
-    name: 'Michael White',
-    studentId: '2020-0005',
-    course: 'BSIT',
-    yearLevel: '4th Year',
-    status: 'Active Intern',
-    eligibility: 'Eligible',
-    company: 'Creative Design Studio',
-    position: 'UI/UX Design Intern',
-    applicationDate: 'December 28, 2023',
-    documents: [
-      { name: 'MichaelWhite_CV.pdf', type: 'pdf' },
-      { name: 'DesignPortfolio.pdf', type: 'pdf' },
-      { name: 'AcademicRecords.pdf', type: 'pdf' }
-    ],
-    timeline: [
-      { status: 'Application Submitted', date: 'December 28, 2023 - 3:25 PM', completed: true },
-      { status: 'Portfolio Review', date: 'December 29, 2023 - 11:00 AM', completed: true },
-      { status: 'Design Challenge', date: 'January 2, 2024 - 2:15 PM', completed: true },
-      { status: 'Internship Started', date: 'January 5, 2024 - 8:00 AM', completed: true }
-    ]
-  },
-  {
-    id: 6,
-    name: 'Emily Green',
-    studentId: '2020-0006',
-    course: 'BSCS',
-    yearLevel: '4th Year',
-    status: 'Completed',
-    eligibility: 'Eligible',
-    company: 'TechStart Solutions',
-    position: 'Full Stack Developer Intern',
-    applicationDate: 'November 15, 2023',
-    documents: [
-      { name: 'EmilyGreen_Resume.pdf', type: 'pdf' },
-      { name: 'CodingProjects.zip', type: 'zip' },
-      { name: 'FinalTranscript.pdf', type: 'pdf' },
-      { name: 'CompletionCertificate.pdf', type: 'pdf' }
-    ],
-    timeline: [
-      { status: 'Application Submitted', date: 'November 15, 2023 - 10:20 AM', completed: true },
-      { status: 'Technical Assessment', date: 'November 16, 2023 - 2:30 PM', completed: true },
-      { status: 'Final Interview', date: 'November 18, 2023 - 4:00 PM', completed: true },
-      { status: 'Internship Completed', date: 'January 15, 2024 - 5:00 PM', completed: true }
     ]
   }
 ])
@@ -835,95 +858,6 @@ async function loadExistingPrograms() {
   }
 }
 
-// Dashboard stats
-const dashboardStats = ref({
-  ojtHours: { current: 245, total: 400, remaining: 155 },
-  applications: { active: 3, underReview: 1, scheduled: 1, accepted: 1 },
-  currentInternship: {
-    company: 'Tech Solutions Inc.',
-    position: 'Software Development Intern',
-    status: 'Active since Jan 1'
-  },
-  pendingTasks: [
-    { task: 'Submit Weekly Journal', type: 'journal' },
-    { task: 'Complete Evaluation', type: 'evaluation' }
-  ]
-})
-
-// Recommended internships
-const recommendedInternships = ref([
-  {
-    id: 1,
-    title: 'Marketing Assistant',
-    company: 'Digital Marketing Co.',
-    location: 'Cavite City',
-    match: 92,
-    skills: ['Social Media Marketing', 'Content Creation', 'Analytics']
-  },
-  {
-    id: 2,
-    title: 'Web Developer',
-    company: 'Creative Tech Studio',
-    location: 'Bacoor',
-    match: 88,
-    skills: ['HTML/CSS', 'JavaScript', 'Responsive Design']
-  },
-  {
-    id: 3,
-    title: 'Graphic Designer',
-    company: 'Design Hub Agency',
-    location: 'Imus City',
-    match: 85,
-    skills: ['Adobe Photoshop', 'Illustrator', 'Branding']
-  }
-])
-
-// Recent activities
-const recentActivities = ref([
-  {
-    id: 1,
-    text: 'Application accepted by Tech Solutions',
-    time: '2 hours ago',
-    status: 'success'
-  },
-  {
-    id: 2,
-    text: 'Weekly journal submitted',
-    time: '1 day ago',
-    status: 'info'
-  },
-  {
-    id: 3,
-    text: 'Time out recorded',
-    time: '1 day ago',
-    status: 'neutral'
-  },
-  {
-    id: 4,
-    text: 'Application submitted to Creative Agency',
-    time: '3 days ago',
-    status: 'info'
-  }
-])
-
-// Upcoming deadlines
-const upcomingDeadlines = ref([
-  {
-    id: 1,
-    title: 'Weekly Journal Due',
-    date: 'Jan 20',
-    daysRemaining: 2,
-    type: 'warning'
-  },
-  {
-    id: 2,
-    title: 'Evaluation Form',
-    date: 'Jan 25',
-    daysRemaining: 7,
-    type: 'info'
-  }
-])
-
 // School Info Data
 const schoolInfoData = ref({
   institutionDetails: {
@@ -1078,8 +1012,170 @@ const requiredDocumentsList = ref([
 ])
 
 // Student Emails (school-generated) - from Firebase
-const schoolStudentEmails = ref<SchoolStudentRecord[]>([])
+const schoolStudentEmails = ref<SchoolStudentRow[]>([])
+const studentsData = computed(() =>
+  schoolStudentEmails.value.map((student) => ({
+    id: student.id,
+    name: student.studentName || student.email,
+    studentId: student.studentNumber || '—',
+    course: student.course || '—',
+    yearLevel: student.yearLevel || '—',
+    status: student.status || 'Registered',
+    eligibility: 'Eligible',
+    company: '—',
+    position: 'Registered Student',
+    applicationDate: '—',
+    documents: [],
+    timeline: [],
+    email: student.email,
+  }))
+)
+
+function formatRelativeTime(value?: unknown) {
+  if (!value) return 'Recently'
+  const date = new Date(String(value))
+  if (Number.isNaN(date.getTime())) return 'Recently'
+  const diffMs = Date.now() - date.getTime()
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
+  if (diffHours < 1) return 'Just now'
+  if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`
+  const diffDays = Math.floor(diffHours / 24)
+  if (diffDays < 30) return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+const schoolCourseList = computed(() => {
+  const raw = (authStore.user?.profile as Record<string, unknown> | undefined)?.courses
+  return Array.isArray(raw) ? raw.map((item) => String(item)) : []
+})
+
+const schoolDashboardStats = computed(() => {
+  const totalStudents = schoolStudentEmails.value.length
+  const registeredStudents = schoolStudentEmails.value.filter((student) => (student.status || 'Registered') === 'Registered').length
+  const activeContracts = schoolContracts.value.filter((contract) => contract.status === 'active').length
+  const pendingContracts = schoolContracts.value.filter((contract) => contract.status === 'pending').length
+  const rejectedContracts = schoolContracts.value.filter((contract) => contract.status === 'rejected').length
+  const currentPartner = schoolContracts.value.find((contract) => contract.status === 'active') || schoolContracts.value[0] || null
+  const pendingDocuments = schoolDocuments.value.filter((doc) => doc.status === 'pending').length
+
+  const pendingTasks = [
+    ...(pendingContracts > 0 ? [{ task: `${pendingContracts} pending contract request${pendingContracts === 1 ? '' : 's'}`, type: 'contract' }] : []),
+    ...(pendingDocuments > 0 ? [{ task: `${pendingDocuments} document${pendingDocuments === 1 ? '' : 's'} waiting for review`, type: 'document' }] : []),
+    ...(totalStudents === 0 ? [{ task: 'Add your first registered student', type: 'student' }] : []),
+  ]
+
+  return {
+    students: {
+      total: totalStudents,
+      registered: registeredStudents,
+      pending: Math.max(totalStudents - registeredStudents, 0),
+    },
+    contracts: {
+      active: activeContracts,
+      pending: pendingContracts,
+      rejected: rejectedContracts,
+    },
+    currentPartner: {
+      company: currentPartner?.companyName || 'No active company yet',
+      position: currentPartner?.subject || currentPartner?.contractType || 'Start a company partnership to see it here',
+      status: currentPartner ? `${currentPartner.status} contract` : 'Waiting for first partnership',
+    },
+    pendingTasks,
+  }
+})
+
+const recommendedInternships = computed(() => {
+  const schoolCourses = schoolCourseList.value.map((course) => course.toLowerCase())
+  return companiesForContract.value
+    .slice()
+    .sort((a, b) => {
+      const aCourses = (a.courses || []).map((course) => course.toLowerCase())
+      const bCourses = (b.courses || []).map((course) => course.toLowerCase())
+      const aMatches = aCourses.filter((course) => schoolCourses.includes(course)).length
+      const bMatches = bCourses.filter((course) => schoolCourses.includes(course)).length
+      return bMatches - aMatches
+    })
+    .slice(0, 3)
+    .map((company, index) => {
+      const courseMatches = (company.courses || []).filter((course) => schoolCourses.includes(course.toLowerCase())).length
+      const denominator = Math.max((company.courses || []).length, schoolCourses.length, 1)
+      const match = Math.min(99, Math.max(70, Math.round((courseMatches / denominator) * 100) || (90 - index * 5)))
+      return {
+        id: company.uid,
+        title: 'Potential Contract Partner',
+        company: company.orgName || company.displayName || company.email || 'Company',
+        location: company.email || 'Company profile available',
+        match,
+        skills: (company.courses || []).slice(0, 4),
+      }
+    })
+})
+
+const recentActivities = computed(() => {
+  const contractActivities = schoolContracts.value.slice(0, 3).map((contract) => ({
+    id: `contract-${contract.id}`,
+    text: `${contract.companyName} contract is ${contract.status}`,
+    time: formatRelativeTime(contract.updatedAt || contract.createdAt),
+    status: contract.status === 'active' ? 'success' : contract.status === 'rejected' ? 'warning' : 'info',
+    sortAt: new Date(String(contract.updatedAt || contract.createdAt || 0)).getTime(),
+  }))
+
+  const documentActivities = schoolDocuments.value.slice(0, 3).map((document) => ({
+    id: `document-${document.id}`,
+    text: `${document.fileName} uploaded to school documents`,
+    time: formatRelativeTime(document.createdAt),
+    status: document.status === 'approved' ? 'success' : 'info',
+    sortAt: new Date(String(document.createdAt || 0)).getTime(),
+  }))
+
+  return [...contractActivities, ...documentActivities]
+    .sort((a, b) => b.sortAt - a.sortAt)
+    .slice(0, 4)
+    .map(({ sortAt, ...item }) => item)
+})
+
+const upcomingDeadlines = computed(() => {
+  const items = []
+  if (schoolDashboardStats.value.contracts.pending > 0) {
+    items.push({
+      id: 'pending-contracts',
+      title: 'Review pending contracts',
+      date: 'This week',
+      daysRemaining: 3,
+      type: 'warning',
+    })
+  }
+  if (schoolDocumentStats.value.pending > 0) {
+    items.push({
+      id: 'pending-documents',
+      title: 'Check pending documents',
+      date: 'This week',
+      daysRemaining: 5,
+      type: 'info',
+    })
+  }
+  if (schoolStudentEmails.value.length === 0) {
+    items.push({
+      id: 'student-roster',
+      title: 'Add student roster',
+      date: 'As soon as possible',
+      daysRemaining: 7,
+      type: 'warning',
+    })
+  }
+  return items
+})
 const studentEmailSearchQuery = ref('')
+const filteredStudents = computed(() => {
+  const query = studentSearchQuery.value.trim().toLowerCase()
+  if (!query) return studentsData.value
+  return studentsData.value.filter((student) =>
+    student.name.toLowerCase().includes(query) ||
+    student.studentId.toLowerCase().includes(query) ||
+    student.course.toLowerCase().includes(query) ||
+    student.email.toLowerCase().includes(query)
+  )
+})
 const filteredSchoolStudentEmails = computed(() => {
   const q = studentEmailSearchQuery.value.trim().toLowerCase()
   if (!q) return schoolStudentEmails.value
@@ -1108,6 +1204,15 @@ const newStudentId = ref('')
 const newStudentCourse = ref('')
 const newStudentYearLevel = ref('')
 const addingStudentEmail = ref(false)
+const editingStudentId = ref<string | null>(null)
+const editingStudentForm = ref({
+  studentName: '',
+  studentNumber: '',
+  course: '',
+  yearLevel: '',
+  status: 'Registered',
+})
+const savingStudentEdit = ref(false)
 const yearLevelOptions = ['1st Year', '2nd Year', '3rd Year', '4th Year', '5th Year']
 
 // Internship review modal state
@@ -1136,6 +1241,135 @@ const showAddProgramModal = ref(false)
 const newProgramName = ref('')
 const newProgramHours = ref(400)
 const savingProgramHours = ref(false)
+const schoolHostedInternships = ref<InternshipRecord[]>([])
+const creatingSchoolPlacement = ref(false)
+const schoolPlacementForm = ref({
+  title: '',
+  location: 'Cavite',
+  type: 'On-site',
+  duration: '8 weeks',
+  slotsAvailable: 1,
+  eligibleCoursesText: '',
+  requirementsText: '',
+  description: '',
+  status: 'active' as 'active' | 'draft',
+})
+let unsubSchoolInternships: (() => void) | null = null
+
+const schoolPlacementStats = computed(() => ({
+  total: schoolHostedInternships.value.length,
+  active: schoolHostedInternships.value.filter((item) => item.status === 'active').length,
+  draft: schoolHostedInternships.value.filter((item) => item.status === 'draft').length,
+}))
+
+function resetSchoolPlacementForm() {
+  schoolPlacementForm.value = {
+    title: '',
+    location: 'Cavite',
+    type: 'On-site',
+    duration: '8 weeks',
+    slotsAvailable: 1,
+    eligibleCoursesText: '',
+    requirementsText: '',
+    description: '',
+    status: 'active',
+  }
+}
+
+async function createSchoolPlacement() {
+  const uid = authStore.user?.uid
+  if (!uid || authStore.user?.role !== 'school') return
+  if (!schoolPlacementForm.value.title.trim()) {
+    await Swal.fire({
+      icon: 'warning',
+      title: 'Missing title',
+      text: 'Please add a placement title before saving.',
+      confirmButtonColor: '#2563eb',
+    })
+    return
+  }
+
+  creatingSchoolPlacement.value = true
+  try {
+    const eligibleCourses = schoolPlacementForm.value.eligibleCoursesText
+      .split(/[,\n]/)
+      .map((value) => value.trim())
+      .filter(Boolean)
+    const requirements = schoolPlacementForm.value.requirementsText
+      .split(/[,\n]/)
+      .map((value) => value.trim())
+      .filter(Boolean)
+
+    await createInternship({
+      title: schoolPlacementForm.value.title.trim(),
+      description: schoolPlacementForm.value.description.trim() || undefined,
+      companyId: '',
+      companyName: schoolName.value,
+      hostType: 'school',
+      hostId: uid,
+      hostName: schoolName.value,
+      schoolId: uid,
+      schoolName: schoolName.value,
+      location: schoolPlacementForm.value.location.trim() || 'Cavite',
+      type: schoolPlacementForm.value.type.trim() || 'On-site',
+      duration: schoolPlacementForm.value.duration.trim() || 'TBD',
+      slotsAvailable: Math.max(1, Number(schoolPlacementForm.value.slotsAvailable) || 1),
+      eligibleCourses: eligibleCourses.length ? eligibleCourses : undefined,
+      requirements: requirements.length ? requirements : undefined,
+      status: schoolPlacementForm.value.status,
+      allowance: undefined,
+      contactInfo: authStore.user?.email || undefined,
+    })
+
+    resetSchoolPlacementForm()
+    await Swal.fire({
+      icon: 'success',
+      title: 'Placement posted',
+      text: 'Students can now find this school-hosted internship placement.',
+      confirmButtonColor: '#2563eb',
+    })
+  } catch (error) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Could not save placement',
+      text: error instanceof Error ? error.message : 'Please try again.',
+      confirmButtonColor: '#2563eb',
+    })
+  } finally {
+    creatingSchoolPlacement.value = false
+  }
+}
+
+async function removeSchoolPlacement(internship: InternshipRecord) {
+  const result = await Swal.fire({
+    icon: 'warning',
+    title: 'Delete placement?',
+    text: `Remove "${internship.title}" from the student internship list?`,
+    showCancelButton: true,
+    confirmButtonText: 'Delete',
+    confirmButtonColor: '#dc2626',
+    cancelButtonText: 'Keep it',
+  })
+
+  if (!result.isConfirmed) return
+
+  try {
+    await deleteInternship(internship.id)
+    await Swal.fire({
+      icon: 'success',
+      title: 'Placement removed',
+      text: 'The school-hosted placement has been deleted.',
+      confirmButtonColor: '#2563eb',
+    })
+  } catch (error) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Could not delete placement',
+      text: error instanceof Error ? error.message : 'Please try again.',
+      confirmButtonColor: '#2563eb',
+    })
+  }
+}
 
 // Watch for authentication changes to load programs
 watch(
@@ -1605,6 +1839,12 @@ function selectContractCompany(company: PublicProfile) {
   showContractTypeModal.value = true
 }
 
+function selectContractCompanyById(id: string) {
+  const company = companiesForContract.value.find((item) => item.uid === id)
+  if (!company) return
+  selectContractCompany(company)
+}
+
 function openContractTypeModal() {
   selectedContractType.value = schoolContractForm.value.contractType || contractTypeOptions[0]!.value
   showContractTypeModal.value = true
@@ -1720,6 +1960,20 @@ function displayContractStatusLabel(status?: string) {
   return s.charAt(0).toUpperCase() + s.slice(1)
 }
 
+function contractRequestedByLabel(role?: 'school' | 'company') {
+  return role === 'company' ? 'Company' : 'School'
+}
+
+function canSchoolRespondToContract(contract: ContractRecord) {
+  return (contract.status || 'pending') === 'pending' && contract.requestedByRole === 'company'
+}
+
+function canSchoolCancelContract(contract: ContractRecord) {
+  const status = contract.status || 'pending'
+  if (status === 'active') return true
+  return status === 'pending' && contract.requestedByRole !== 'company'
+}
+
 watch(
   () => [schoolContractForm.value.companyId, alignedContractCourses.value.join('|')] as const,
   () => {
@@ -1810,7 +2064,7 @@ async function submitSchoolContractRequest() {
       return
     }
 
-    await createContractRequest({
+    const createdContract = await createContractRequest({
       companyId: schoolContractForm.value.companyId,
       companyName: schoolContractForm.value.companyName,
       schoolId,
@@ -1835,12 +2089,15 @@ async function submitSchoolContractRequest() {
       companyResponsibilities: schoolContractForm.value.companyResponsibilities.trim() || undefined,
       terms: schoolContractForm.value.terms.trim() || undefined,
       notes: schoolContractForm.value.notes.trim() || undefined,
+      files: contractFiles.value,
       attachments: contractFiles.value.map((file) => ({
         name: file.name,
         size: file.size,
         type: file.type || 'application/octet-stream',
       })),
     })
+
+    schoolContracts.value = [createdContract, ...schoolContracts.value.filter((item) => item.id !== createdContract.id)]
 
     await Swal.fire({
       icon: 'success',
@@ -1849,6 +2106,7 @@ async function submitSchoolContractRequest() {
       confirmButtonColor: '#2563eb',
     })
     resetSchoolContractForm()
+    currentView.value = 'contracts'
   } catch (e) {
     const firestoreCode = (e as { code?: string })?.code || ''
     const details = [
@@ -1904,6 +2162,71 @@ async function handleCancelSchoolContract(contract: ContractRecord) {
   }
 }
 
+async function handleAcceptSchoolContract(contract: ContractRecord) {
+  const result = await Swal.fire({
+    icon: 'question',
+    title: 'Accept contract request?',
+    text: `Accept contract request from ${contract.companyName}?`,
+    showCancelButton: true,
+    confirmButtonText: 'Accept',
+    confirmButtonColor: '#059669',
+    cancelButtonText: 'Keep pending',
+  })
+
+  if (!result.isConfirmed) return
+
+  try {
+    await acceptContract(contract.id)
+    await Swal.fire({
+      icon: 'success',
+      title: 'Contract accepted',
+      text: 'The contract is now active.',
+      confirmButtonColor: '#2563eb',
+    })
+  } catch (e) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Failed',
+      text: e instanceof Error ? e.message : 'Could not accept the contract.',
+      confirmButtonColor: '#2563eb',
+    })
+  }
+}
+
+async function handleRejectSchoolContract(contract: ContractRecord) {
+  const result = await Swal.fire({
+    title: 'Reject contract request?',
+    text: `Reject contract request from ${contract.companyName}?`,
+    icon: 'warning',
+    input: 'text',
+    inputLabel: 'Reason (optional)',
+    inputPlaceholder: 'Enter rejection reason',
+    showCancelButton: true,
+    confirmButtonText: 'Reject',
+    confirmButtonColor: '#dc2626',
+    cancelButtonText: 'Keep pending',
+  })
+
+  if (!result.isConfirmed) return
+
+  try {
+    await rejectContract(contract.id, (result.value as string | undefined)?.trim())
+    await Swal.fire({
+      icon: 'success',
+      title: 'Contract rejected',
+      text: 'The contract request was rejected.',
+      confirmButtonColor: '#2563eb',
+    })
+  } catch (e) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Failed',
+      text: e instanceof Error ? e.message : 'Could not reject the contract.',
+      confirmButtonColor: '#2563eb',
+    })
+  }
+}
+
 watch(
   () => [authStore.user?.uid, authStore.user?.role] as const,
   async ([uid, role]) => {
@@ -1919,11 +2242,18 @@ watch(
       unsubCompaniesPublic()
       unsubCompaniesPublic = null
     }
+    if (unsubSchoolInternships) {
+      unsubSchoolInternships()
+      unsubSchoolInternships = null
+    }
 
     if (!uid || role !== 'school') {
       schoolStudentEmails.value = []
       schoolContracts.value = []
       companiesForContract.value = []
+      schoolDocuments.value = []
+      schoolReports.value = []
+      schoolHostedInternships.value = []
       return
     }
 
@@ -1954,6 +2284,13 @@ watch(
       for (const item of items) byUid.set(item.uid, item)
       companiesForContract.value = Array.from(byUid.values())
     })
+
+    unsubSchoolInternships = subscribeSchoolInternships(uid, (items) => {
+      schoolHostedInternships.value = items
+    })
+
+    await loadSchoolDocuments()
+    await loadSchoolReports()
   },
   { immediate: true }
 )
@@ -1962,6 +2299,7 @@ onUnmounted(() => {
   if (unsubSchoolStudents) unsubSchoolStudents()
   if (unsubSchoolContracts) unsubSchoolContracts()
   if (unsubCompaniesPublic) unsubCompaniesPublic()
+  if (unsubSchoolInternships) unsubSchoolInternships()
 })
 
 async function addStudentEmail() {
@@ -1970,7 +2308,7 @@ async function addStudentEmail() {
   if (!uid || !email) return
   addingStudentEmail.value = true
   try {
-    await addSchoolStudent(uid, email, {
+    const createdStudent = await addSchoolStudent(uid, email, {
       studentName: generatedStudentFullName.value || undefined,
       studentNumber: newStudentId.value.trim() || undefined,
       course: newStudentCourse.value.trim() || undefined,
@@ -1978,10 +2316,13 @@ async function addStudentEmail() {
     })
     await Swal.fire({
       icon: 'success',
-      title: 'Student Email Added',
+      title: 'Student Account Added',
       html: `<div style="text-align:left">` +
         `<p><strong>Email:</strong> ${email}</p>` +
-        `<p style="margin-top:8px">Student can now register with this email address.</p>` +
+        (createdStudent.defaultPassword
+          ? `<p style="margin-top:8px"><strong>Default Password:</strong> ${createdStudent.defaultPassword}</p>`
+          : '') +
+        `<p style="margin-top:8px">Share these credentials with the student. They will be required to change the password on first login.</p>` +
       `</div>`,
       confirmButtonColor: '#2563eb',
     })
@@ -2003,7 +2344,7 @@ async function addStudentEmail() {
   }
 }
 
-async function removeStudentEmail(record: SchoolStudentRecord) {
+async function removeStudentEmail(record: SchoolStudentRow) {
   const result = await Swal.fire({
     icon: 'warning',
     title: 'Remove Student Email?',
@@ -2021,6 +2362,97 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
       icon: 'error',
       title: 'Failed',
       text: err instanceof Error ? err.message : 'Could not remove.',
+      confirmButtonColor: '#2563eb',
+    })
+  }
+}
+
+function schoolStudentStatusClass(status?: string) {
+  return String(status || 'Registered')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+}
+
+function startEditStudent(record: SchoolStudentRow) {
+  editingStudentId.value = record.id
+  editingStudentForm.value = {
+    studentName: record.studentName || '',
+    studentNumber: record.studentNumber || '',
+    course: record.course || '',
+    yearLevel: record.yearLevel || '',
+    status: record.status || 'Registered',
+  }
+}
+
+function cancelEditStudent() {
+  editingStudentId.value = null
+  editingStudentForm.value = {
+    studentName: '',
+    studentNumber: '',
+    course: '',
+    yearLevel: '',
+    status: 'Registered',
+  }
+}
+
+async function saveStudentEdit(record: SchoolStudentRow) {
+  savingStudentEdit.value = true
+  try {
+    await updateSchoolStudent(record.id, {
+      studentName: editingStudentForm.value.studentName.trim() || null,
+      studentNumber: editingStudentForm.value.studentNumber.trim() || null,
+      course: editingStudentForm.value.course.trim() || null,
+      yearLevel: editingStudentForm.value.yearLevel.trim() || null,
+      status: editingStudentForm.value.status,
+    })
+    cancelEditStudent()
+    await Swal.fire({
+      icon: 'success',
+      title: 'Student Updated',
+      confirmButtonColor: '#2563eb',
+      timer: 1500,
+      showConfirmButton: false,
+    })
+  } catch (err) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Update Failed',
+      text: err instanceof Error ? err.message : 'Could not update the student.',
+      confirmButtonColor: '#2563eb',
+    })
+  } finally {
+    savingStudentEdit.value = false
+  }
+}
+
+async function toggleStudentAccess(record: SchoolStudentRow) {
+  const nextStatus = (record.status || 'Registered') === 'Disabled' ? 'Registered' : 'Disabled'
+  const actionLabel = nextStatus === 'Disabled' ? 'disable' : 'reactivate'
+  const result = await Swal.fire({
+    icon: 'question',
+    title: `${nextStatus === 'Disabled' ? 'Disable' : 'Reactivate'} Student?`,
+    text: `This will ${actionLabel} ${record.email}.`,
+    showCancelButton: true,
+    confirmButtonColor: '#2563eb',
+    cancelButtonColor: '#6b7280',
+  })
+  if (!result.isConfirmed) return
+
+  try {
+    await updateSchoolStudent(record.id, { status: nextStatus })
+    await Swal.fire({
+      icon: 'success',
+      title: nextStatus === 'Disabled' ? 'Student Disabled' : 'Student Reactivated',
+      confirmButtonColor: '#2563eb',
+      timer: 1500,
+      showConfirmButton: false,
+    })
+  } catch (err) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Action Failed',
+      text: err instanceof Error ? err.message : 'Could not update student access.',
       confirmButtonColor: '#2563eb',
     })
   }
@@ -2046,7 +2478,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <div class="header-right">
             <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
-            <div class="avatar">AC</div>
+            <div class="avatar"><img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="avatar-img" /><span v-else>{{ userInitials }}</span></div>
           </div>
         </header>
 
@@ -2058,58 +2490,64 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
               Hello, Admin! 
               <HandRaisedIcon class="welcome-icon" />
             </h2>
-            <p>You have {{ dashboardStats.applications.active }} pending applications and {{ recommendedInternships.length }} recommended internship.</p>
+            <p>
+              You have {{ schoolDashboardStats.contracts.pending }} pending contract request{{ schoolDashboardStats.contracts.pending === 1 ? '' : 's' }}
+              and {{ recommendedInternships.length }} recommended compan{{ recommendedInternships.length === 1 ? 'y' : 'ies' }}.
+            </p>
           </div>
 
           <!-- Stats Cards -->
           <div class="stats-grid">
-            <!-- OJT Hours Card -->
+            <!-- Student Roster Card -->
             <div class="stat-card">
               <div class="stat-header">
-                <span class="stat-label">OJT HOURS</span>
+                <span class="stat-label">STUDENT ROSTER</span>
               </div>
               <div class="stat-main">
-                <div class="stat-number-large">{{ dashboardStats.ojtHours.current }} / {{ dashboardStats.ojtHours.total }}</div>
+                <div class="stat-number-large">{{ schoolDashboardStats.students.registered }} / {{ schoolDashboardStats.students.total }}</div>
                 <div class="progress-bar-container">
-                  <div class="progress-bar" :style="{ width: (dashboardStats.ojtHours.current / dashboardStats.ojtHours.total * 100) + '%' }"></div>
+                  <div
+                    class="progress-bar"
+                    :style="{ width: ((schoolDashboardStats.students.total ? schoolDashboardStats.students.registered / schoolDashboardStats.students.total : 0) * 100) + '%' }"
+                  ></div>
                 </div>
-                <div class="stat-subtitle">{{ dashboardStats.ojtHours.remaining }} hours remaining</div>
+                <div class="stat-subtitle">{{ schoolDashboardStats.students.pending }} awaiting registration details</div>
               </div>
-              <a href="#" class="stat-link">View details →</a>
+              <a href="#" class="stat-link" @click.prevent="currentView = 'student-interns'">View students →</a>
             </div>
 
-            <!-- Applications Card -->
+            <!-- Contracts Card -->
             <div class="stat-card">
               <div class="stat-header">
-                <span class="stat-label">APPLICATIONS</span>
+                <span class="stat-label">CONTRACTS</span>
               </div>
               <div class="stat-main">
-                <div class="stat-number-large">{{ dashboardStats.applications.active }} Active</div>
+                <div class="stat-number-large">{{ schoolDashboardStats.contracts.active }} Active</div>
                 <div class="stat-details">
-                  <div>{{ dashboardStats.applications.underReview }} Under Review</div>
-                  <div>{{ dashboardStats.applications.scheduled }} Interview Scheduled</div>
-                  <div>{{ dashboardStats.applications.accepted }} Accepted</div>
+                  <div>{{ schoolDashboardStats.contracts.pending }} Pending</div>
+                  <div>{{ schoolDashboardStats.contracts.rejected }} Rejected</div>
+                  <div>{{ companiesForContract.length }} Companies Available</div>
                 </div>
               </div>
-              <a href="#" class="stat-link">View all →</a>
+              <a href="#" class="stat-link" @click.prevent="currentView = 'contracts-select'">View contracts →</a>
             </div>
 
-            <!-- Current Internship Card -->
+            <!-- Current Partner Card -->
             <div class="stat-card">
               <div class="stat-header">
-                <span class="stat-label">CURRENT INTERNSHIP</span>
+                <span class="stat-label">CURRENT PARTNER</span>
               </div>
               <div class="stat-main">
                 <div class="company-logo-card">
                   <img src="/icons/company-icon.png" alt="Company" />
                 </div>
                 <div class="company-info-card">
-                  <div class="company-name-card">{{ dashboardStats.currentInternship.company }}</div>
-                  <div class="position-title-card">{{ dashboardStats.currentInternship.position }}</div>
-                  <div class="status-card">{{ dashboardStats.currentInternship.status }}</div>
+                  <div class="company-name-card">{{ schoolDashboardStats.currentPartner.company }}</div>
+                  <div class="position-title-card">{{ schoolDashboardStats.currentPartner.position }}</div>
+                  <div class="status-card">{{ schoolDashboardStats.currentPartner.status }}</div>
                 </div>
               </div>
-              <a href="#" class="stat-link">View details →</a>
+              <a href="#" class="stat-link" @click.prevent="currentView = 'contracts'">View details →</a>
             </div>
 
             <!-- Pending Tasks Card -->
@@ -2118,22 +2556,22 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                 <span class="stat-label">PENDING TASKS</span>
               </div>
               <div class="stat-main">
-                <div class="stat-number-large">{{ dashboardStats.pendingTasks.length }}</div>
+                <div class="stat-number-large">{{ schoolDashboardStats.pendingTasks.length }}</div>
                 <div class="task-list-card">
-                  <div v-for="task in dashboardStats.pendingTasks" :key="task.task" class="task-item-card">
+                  <div v-for="task in schoolDashboardStats.pendingTasks" :key="task.task" class="task-item-card">
                     • {{ task.task }}
                   </div>
                 </div>
               </div>
-              <a href="#" class="stat-link">View tasks →</a>
+              <a href="#" class="stat-link" @click.prevent="currentView = 'documents'">View tasks →</a>
             </div>
           </div>
 
           <!-- Recommended Section -->
           <section class="recommended-section">
             <div class="section-header">
-              <h3>Recommended for You</h3>
-              <p>Based on your profile</p>
+              <h3>Recommended Companies</h3>
+              <p>Based on your school profile and available partner companies</p>
             </div>
 
             <div class="internships-grid">
@@ -2161,10 +2599,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                 </div>
 
                 <div class="internship-actions">
-                  <button class="btn-primary">View Details</button>
-                  <button class="btn-secondary">
-                    <img src="/icons/heart-icon.png" alt="Like" class="heart-icon" />
-                  </button>
+                  <button class="btn-primary" @click="selectContractCompanyById(String(internship.id))">Create Contract</button>
                 </div>
               </div>
             </div>
@@ -2184,7 +2619,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                   </div>
                 </div>
               </div>
-              <a href="#" class="view-all-link">View all activity →</a>
+              <a href="#" class="view-all-link" @click.prevent="currentView = 'contracts'">View all activity →</a>
             </section>
 
             <!-- Upcoming Deadlines -->
@@ -2201,10 +2636,13 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                     <span class="deadline-date">{{ deadline.date }} • {{ deadline.daysRemaining }} days remaining</span>
                   </div>
                 </div>
+                <div v-if="upcomingDeadlines.length === 0" class="empty-state" style="padding: 18px 0;">
+                  No upcoming admin follow-ups right now.
+                </div>
               </div>
-              <a href="#" class="view-all-link">
+              <a href="#" class="view-all-link" @click.prevent="currentView = 'documents'">
                 <CalendarIcon class="calendar-icon-inline" />
-                View calendar
+                Open documents
               </a>
             </section>
           </div>
@@ -2221,7 +2659,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <div class="header-right">
             <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
-            <div class="avatar">AC</div>
+            <div class="avatar"><img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="avatar-img" /><span v-else>{{ userInitials }}</span></div>
           </div>
         </header>
         <main class="main-content">
@@ -2334,6 +2772,92 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                   </div>
                 </div>
               </div>
+
+              <div class="requirements-card">
+                <div class="card-header">
+                  <h3>School-Hosted Internship Placements</h3>
+                  <p class="card-description">Post placements for programs like Psychology where students may intern inside your school or in another partner school setting.</p>
+                </div>
+                <div class="card-content">
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label class="form-label">Placement Title</label>
+                      <input v-model="schoolPlacementForm.title" type="text" class="form-input" placeholder="e.g. Guidance Office Internship" />
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label">Location</label>
+                      <input v-model="schoolPlacementForm.location" type="text" class="form-input" placeholder="Cavite" />
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label class="form-label">Setup</label>
+                      <input v-model="schoolPlacementForm.type" type="text" class="form-input" placeholder="On-site" />
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label">Duration</label>
+                      <input v-model="schoolPlacementForm.duration" type="text" class="form-input" placeholder="8 weeks" />
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label">Slots</label>
+                      <input v-model.number="schoolPlacementForm.slotsAvailable" type="number" min="1" class="form-input" />
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label class="form-label">Eligible Courses</label>
+                      <textarea v-model="schoolPlacementForm.eligibleCoursesText" rows="2" class="form-input" placeholder="BS Psychology, BS Education"></textarea>
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label">Requirements</label>
+                      <textarea v-model="schoolPlacementForm.requirementsText" rows="2" class="form-input" placeholder="Resume, endorsement letter"></textarea>
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Description</label>
+                    <textarea v-model="schoolPlacementForm.description" rows="3" class="form-input" placeholder="Describe the school-based internship placement."></textarea>
+                  </div>
+                  <div class="card-actions">
+                    <button class="btn-primary" @click="createSchoolPlacement" :disabled="creatingSchoolPlacement">
+                      <span v-if="creatingSchoolPlacement">Saving...</span>
+                      <span v-else>Post School Placement</span>
+                    </button>
+                    <button class="btn-secondary" @click="resetSchoolPlacementForm">Clear</button>
+                  </div>
+
+                  <div class="school-placement-summary">
+                    <div class="stat-item">
+                      <span class="stat-label">Total Posted</span>
+                      <span class="stat-value">{{ schoolPlacementStats.total }}</span>
+                    </div>
+                    <div class="stat-item">
+                      <span class="stat-label">Active</span>
+                      <span class="stat-value">{{ schoolPlacementStats.active }}</span>
+                    </div>
+                    <div class="stat-item">
+                      <span class="stat-label">Drafts</span>
+                      <span class="stat-value">{{ schoolPlacementStats.draft }}</span>
+                    </div>
+                  </div>
+
+                  <div v-if="schoolHostedInternships.length === 0" class="empty-state" style="padding: 16px 0;">
+                    No school-hosted placements yet.
+                  </div>
+                  <div v-else class="school-placement-list">
+                    <div v-for="placement in schoolHostedInternships" :key="placement.id" class="school-placement-card">
+                      <div>
+                        <div class="program-name">{{ placement.title }}</div>
+                        <div class="placement-meta">{{ placement.location || 'Cavite' }} • {{ placement.duration || 'TBD' }} • {{ placement.slotsAvailable }} slot(s)</div>
+                        <div class="placement-courses">{{ (placement.eligibleCourses || []).join(', ') || 'Open to aligned school programs' }}</div>
+                      </div>
+                      <div class="table-actions">
+                        <span class="status-badge" :class="placement.status">{{ placement.status }}</span>
+                        <button class="table-btn danger" @click="removeSchoolPlacement(placement)">Delete</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <!-- Right Sidebar -->
@@ -2413,7 +2937,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
             </div>
             <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
-            <div class="avatar">AC</div>
+            <div class="avatar"><img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="avatar-img" /><span v-else>{{ userInitials }}</span></div>
           </div>
         </header>
         <main class="main-content">
@@ -2696,7 +3220,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <div class="header-right">
             <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
-            <div class="avatar">AC</div>
+            <div class="avatar"><img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="avatar-img" /><span v-else>{{ userInitials }}</span></div>
           </div>
         </header>
         <main class="main-content">
@@ -2792,403 +3316,74 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <div class="header-right">
             <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
-            <div class="avatar">AC</div>
+            <div class="avatar">
+              <img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="avatar-img" />
+              <span v-else>{{ userInitials }}</span>
+            </div>
           </div>
         </header>
         <main class="main-content">
-          <!-- Page Header -->
           <div class="companies-page-header">
-            <h2>Manage Industry Partners</h2>
-            <p class="page-subtitle">Oversee company profiles, internship offerings, MOAs, and performance feedback for all partner organizations.</p>
+            <h2>Choose a Company Partner</h2>
+            <p class="page-subtitle">Browse available companies and select one to start a contract request.</p>
           </div>
 
-          <!-- Search and Filters -->
           <div class="companies-controls">
             <div class="search-section">
               <div class="search-box">
                 <MagnifyingGlassIcon class="search-icon-svg" />
-                <input type="search" placeholder="Search companies by name or industry..." class="search-input-companies" />
+                <input
+                  v-model="contractCompanySearch"
+                  type="search"
+                  placeholder="Search companies by name or email..."
+                  class="search-input-companies"
+                />
               </div>
-            </div>
-            <div class="filter-section">
-              <select class="filter-dropdown">
-                <option value="all-industries">All Industries</option>
-                <option value="technology">Technology</option>
-                <option value="healthcare">Healthcare</option>
-                <option value="finance">Finance</option>
-                <option value="education">Education</option>
-              </select>
-              <select class="filter-dropdown">
-                <option value="all-status">All Status</option>
-                <option value="active">Active</option>
-                <option value="pending">Pending</option>
-                <option value="inactive">Inactive</option>
-              </select>
             </div>
           </div>
 
-          <!-- Companies Grid -->
           <div class="companies-grid">
-            <!-- Software Engineer Intern Card -->
-            <div class="company-card" @click="openCompanySidebar(companiesData[0])">
-              <div class="company-card-header">
-                <div class="company-avatar">IC</div>
-                <div class="company-details">
-                  <h3>Software Engineer Intern</h3>
-                  <p class="company-name">Innovate Corp.</p>
-                </div>
-              </div>
-
-              <div class="company-location">
-                <MapPinIcon class="location-icon-svg" />
-                <span>New York, NY</span>
-              </div>
-
-              <div class="match-info">
-                <span class="match-percentage">92% Match</span>
-                <div class="recommended-badge">
-                  <CheckCircleIcon class="recommended-icon-svg" />
-                  Recommended for You
-                </div>
-              </div>
-
-              <p class="company-description">
-                Join Our dynamic team to develop innovative software solutions. 
-                You'll work on cutting-edge projects and contribute the projects.
-              </p>
-
-              <div class="company-skills">
-                <span class="skill-tag">Python</span>
-                <span class="skill-tag">AWS</span>
-                <span class="skill-tag">Machine Learning</span>
-                <span class="skill-tag">Django</span>
-              </div>
-
-              <div class="company-rating">
-                <div class="stars">
-                  <span class="star filled">★</span>
-                  <span class="star filled">★</span>
-                  <span class="star filled">★</span>
-                  <span class="star filled">★</span>
-                  <span class="star">★</span>
-                </div>
-                <span class="rating-text">4.8/5 95% Placement</span>
-                <div class="rating-bar">
-                  <div class="rating-fill" style="width: 95%"></div>
-                </div>
-              </div>
+            <div v-if="filteredContractCompanies.length === 0" class="empty-state">
+              No companies found.
             </div>
 
-            <!-- Data Analyst Intern Card -->
-            <div class="company-card" @click="openCompanySidebar(companiesData[0])">
-              <div class="company-card-header">
-                <div class="company-avatar">IC</div>
-                <div class="company-details">
-                  <h3>Data Analyst Intern</h3>
-                  <p class="company-name">Innovate Corp.</p>
+            <template v-else>
+              <button
+                v-for="company in filteredContractCompanies"
+                :key="company.uid"
+                type="button"
+                class="company-card company-card-select"
+                @click="selectContractCompany(company)"
+              >
+                <div class="company-card-header">
+                  <div class="contracts-company-icon company-card-logo" :style="companyLogoStyle(company)">
+                    <span class="contracts-company-initials">{{ companyInitials(company) }}</span>
+                  </div>
+                  <div class="company-details">
+                    <h3>{{ companyDisplayLabel(company) }}</h3>
+                    <p class="company-name">{{ company.email || 'Directory profile' }}</p>
+                  </div>
                 </div>
-              </div>
 
-              <div class="company-location">
-                <MapPinIcon class="location-icon-svg" />
-                <span>New York, NY</span>
-              </div>
+                <p class="company-description">
+                  {{ ((company as PublicProfile & { courses?: string[] }).courses?.length ?? 0) > 0
+                    ? `Accepts: ${((company as PublicProfile & { courses?: string[] }).courses ?? []).join(', ')}`
+                    : 'Select this company to continue to contract type selection and contract request details.' }}
+                </p>
 
-              <div class="match-info">
-                <span class="match-percentage">89% Match</span>
-                <div class="recommended-badge">
-                  <CheckCircleIcon class="recommended-icon-svg" />
-                  Recommended for You
+                <div class="company-card-footer">
+                  <span class="company-card-meta">
+                    {{ schoolContracts.some((c) => c.companyId === company.uid && (c.status || 'pending') === 'pending')
+                      ? 'Pending contract exists'
+                      : 'Ready for contract request' }}
+                  </span>
+                  <span class="company-card-action">Select Company</span>
                 </div>
-              </div>
-
-              <p class="company-description">
-                Join Our dynamic team to develop innovative software solutions. 
-                You'll work on cutting-edge projects and contribute the projects.
-              </p>
-
-              <div class="company-skills">
-                <span class="skill-tag">Python</span>
-                <span class="skill-tag">SQL</span>
-                <span class="skill-tag">Machine Learning</span>
-                <span class="skill-tag">Excel</span>
-              </div>
-
-              <div class="company-rating">
-                <div class="stars">
-                  <span class="star filled">★</span>
-                  <span class="star filled">★</span>
-                  <span class="star filled">★</span>
-                  <span class="star filled">★</span>
-                  <span class="star">★</span>
-                </div>
-                <span class="rating-text">4.2/5 70% Placement</span>
-                <div class="rating-bar">
-                  <div class="rating-fill" style="width: 70%"></div>
-                </div>
-              </div>
-            </div>
-
-            <!-- UI/UX Designer Intern Card -->
-            <div class="company-card" @click="openCompanySidebar(companiesData[0])">
-              <div class="company-card-header">
-                <div class="company-avatar">IC</div>
-                <div class="company-details">
-                  <h3>UI/UX Designer Intern</h3>
-                  <p class="company-name">Innovate Corp.</p>
-                </div>
-              </div>
-
-              <div class="company-location">
-                <MapPinIcon class="location-icon-svg" />
-                <span>New York, NY</span>
-              </div>
-
-              <div class="match-info">
-                <span class="match-percentage">85% Match</span>
-                <div class="recommended-badge">
-                  <CheckCircleIcon class="recommended-icon-svg" />
-                  Recommended for You
-                </div>
-              </div>
-
-              <p class="company-description">
-                Join Our dynamic team to develop innovative software solutions. 
-                You'll work on cutting-edge projects and contribute the projects.
-              </p>
-
-              <div class="company-skills">
-                <span class="skill-tag">Figma</span>
-                <span class="skill-tag">Prototyping</span>
-                <span class="skill-tag">Design System</span>
-              </div>
-
-              <div class="company-rating">
-                <div class="stars">
-                  <span class="star filled">★</span>
-                  <span class="star filled">★</span>
-                  <span class="star filled">★</span>
-                  <span class="star">★</span>
-                  <span class="star">★</span>
-                </div>
-                <span class="rating-text">3.0/5 65% Placement</span>
-                <div class="rating-bar">
-                  <div class="rating-fill" style="width: 65%"></div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Business Development Intern Card -->
-            <div class="company-card" @click="openCompanySidebar(companiesData[0])">
-              <div class="company-card-header">
-                <div class="company-avatar">IC</div>
-                <div class="company-details">
-                  <h3>Business Development Intern</h3>
-                  <p class="company-name">Innovate Corp.</p>
-                </div>
-              </div>
-
-              <div class="company-location">
-                <MapPinIcon class="location-icon-svg" />
-                <span>New York, NY</span>
-              </div>
-
-              <div class="match-info">
-                <span class="match-percentage">92% Match</span>
-                <div class="recommended-badge">
-                  <CheckCircleIcon class="recommended-icon-svg" />
-                  Recommended for You
-                </div>
-              </div>
-
-              <p class="company-description">
-                Join Our dynamic team to develop innovative software solutions. 
-                You'll work on cutting-edge projects and contribute the projects.
-              </p>
-
-              <div class="company-skills">
-                <span class="skill-tag">Python</span>
-                <span class="skill-tag">AWS</span>
-                <span class="skill-tag">Machine Learning</span>
-                <span class="skill-tag">Django</span>
-              </div>
-
-              <div class="company-rating">
-                <div class="stars">
-                  <span class="star filled">★</span>
-                  <span class="star filled">★</span>
-                  <span class="star filled">★</span>
-                  <span class="star filled">★</span>
-                  <span class="star">★</span>
-                </div>
-                <span class="rating-text">4.4/5 75% Placement</span>
-                <div class="rating-bar">
-                  <div class="rating-fill" style="width: 75%"></div>
-                </div>
-              </div>
-            </div>
+              </button>
+            </template>
           </div>
         </main>
-
-        <!-- Company Details Sidebar -->
-        <div v-if="showCompanySidebar" class="company-sidebar-overlay" @click="closeCompanySidebar">
-          <div class="company-sidebar" @click.stop>
-            <div class="company-sidebar-header">
-              <div class="company-header-info">
-                <div class="company-avatar-large">{{ selectedCompany?.avatar }}</div>
-                <div class="company-header-details">
-                  <h2>{{ selectedCompany?.name }}</h2>
-                  <span class="partner-status">Partner since 2019</span>
-                </div>
-              </div>
-              <button class="close-btn" @click="closeCompanySidebar">✕</button>
-            </div>
-
-            <!-- Tab Navigation -->
-            <div class="company-tabs">
-              <button 
-                class="tab-btn" 
-                :class="{ active: activeCompanyTab === 'general' }"
-                @click="setActiveCompanyTab('general')"
-              >
-                Company Info
-              </button>
-              <button 
-                class="tab-btn" 
-                :class="{ active: activeCompanyTab === 'contacts' }"
-                @click="setActiveCompanyTab('contacts')"
-              >
-                Key Contacts
-              </button>
-              <button 
-                class="tab-btn" 
-                :class="{ active: activeCompanyTab === 'offerings' }"
-                @click="setActiveCompanyTab('offerings')"
-              >
-                Internship Offerings
-              </button>
-              <button 
-                class="tab-btn" 
-                :class="{ active: activeCompanyTab === 'moa' }"
-                @click="setActiveCompanyTab('moa')"
-              >
-                MOA History
-              </button>
-              <button 
-                class="tab-btn" 
-                :class="{ active: activeCompanyTab === 'feedback' }"
-                @click="setActiveCompanyTab('feedback')"
-              >
-                Intern Feedback
-              </button>
-            </div>
-
-            <div class="company-sidebar-content">
-              <!-- General Information Tab -->
-              <div v-if="activeCompanyTab === 'general'" class="tab-content">
-                <h3>General Information</h3>
-                <div class="company-info-grid">
-                  <div class="info-item">
-                    <span class="info-label">Address:</span>
-                    <span class="info-value">{{ selectedCompany?.generalInfo?.address }}</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="info-label">Contact Email:</span>
-                    <span class="info-value">{{ selectedCompany?.generalInfo?.contactEmail }}</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="info-label">Website:</span>
-                    <span class="info-value">{{ selectedCompany?.generalInfo?.website }}</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="info-label">Partner Status:</span>
-                    <span class="status-active">{{ selectedCompany?.generalInfo?.partnerStatus }}</span>
-                  </div>
-                </div>
-
-                <h4>Performance Metrics Summary</h4>
-                <div class="metrics-grid">
-                  <div class="metric-item">
-                    <span class="metric-label">Average Rating:</span>
-                    <span class="metric-value">4.2/5 ⭐</span>
-                  </div>
-                  <div class="metric-item">
-                    <span class="metric-label">Placement Rate:</span>
-                    <span class="metric-value">70%</span>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Key Contacts Tab -->
-              <div v-if="activeCompanyTab === 'contacts'" class="tab-content">
-                <h3>Key Contacts</h3>
-                <div v-for="contact in selectedCompany?.keyContacts" :key="contact.name" class="contact-item">
-                  <div class="contact-info">
-                    <h4>{{ contact.name }}</h4>
-                    <p class="contact-title">{{ contact.title }}</p>
-                    <p class="contact-email">📧 {{ contact.email }}</p>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Internship Offerings Tab -->
-              <div v-if="activeCompanyTab === 'offerings'" class="tab-content">
-                <h3>Internship Offerings</h3>
-                <div class="offerings-list">
-                  <div v-for="offering in selectedCompany?.internshipOfferings" :key="offering.title" class="offering-item">
-                    <div class="offering-header">
-                      <h4>{{ offering.title }}</h4>
-                      <span class="expand-icon">⌄</span>
-                    </div>
-                    <p class="offering-requirements">{{ offering.requirements }}</p>
-                    <div class="offering-details">
-                      <span class="placement-info">Placement: {{ offering.placement }}</span>
-                      <span class="status-active">Status: {{ offering.status }}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- MOA History Tab -->
-              <div v-if="activeCompanyTab === 'moa'" class="tab-content">
-                <h3>MOA History</h3>
-                <div v-for="moa in selectedCompany?.moaHistory" :key="moa.title" class="moa-item">
-                  <h4>{{ moa.title }}</h4>
-                  <div class="moa-details">
-                    <p>Date: {{ moa.date }}</p>
-                    <p>Status: <span class="status-active">{{ moa.status }}</span></p>
-                    <p>Expires: {{ moa.expires }}</p>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Intern Feedback Tab -->
-              <div v-if="activeCompanyTab === 'feedback'" class="tab-content">
-                <h3>Intern Feedback</h3>
-                <div v-for="feedback in selectedCompany?.internFeedback" :key="feedback.name" class="feedback-item">
-                  <div class="feedback-header">
-                    <h4>{{ feedback.name }}</h4>
-                    <div class="feedback-rating">
-                      <span v-for="i in 5" :key="i" class="star" :class="{ filled: i <= feedback.rating }">★</span>
-                    </div>
-                  </div>
-                  <p class="feedback-text">{{ feedback.feedback }}</p>
-                </div>
-              </div>
-            </div>
-
-            <!-- Action Buttons -->
-            <div class="company-sidebar-actions">
-              <button class="btn-edit-company">📝 Edit Company Details</button>
-              <button class="btn-view-moas">
-                <DocumentIcon class="btn-inline-icon" />
-                View All MOAs
-              </button>
-          </div>
-          </div>
-          </div>
       </div>
-
       <div v-else-if="currentView === 'contracts-select'">
         <header class="top-header">
           <div class="header-left">
@@ -3198,7 +3393,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <div class="header-right">
             <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
-            <div class="avatar">AC</div>
+            <div class="avatar"><img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="avatar-img" /><span v-else>{{ userInitials }}</span></div>
           </div>
         </header>
         <main class="main-content">
@@ -3260,187 +3455,188 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <div class="header-right">
             <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
-            <div class="avatar">AC</div>
+            <div class="avatar"><img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="avatar-img" /><span v-else>{{ userInitials }}</span></div>
           </div>
         </header>
         <main class="main-content">
           <div class="student-emails-section">
-            <h2 class="section-title">Create Contract Requests</h2>
-            <p class="section-subtitle">Schools initiate partnership contracts with companies. Add complete details and files, then send the request.</p>
+              <h2 class="section-title">Create Contract Requests</h2>
+              <p class="section-subtitle">Schools initiate partnership contracts with companies. Add complete details and files, then send the request.</p>
 
-            <div class="section-card">
-              <div class="add-student-form">
-                <div class="form-row">
-                  <div class="form-group">
-                    <label>Select Company <span class="required">*</span></label>
-                    <select
-                      v-model="schoolContractForm.companyId"
-                      class="form-input"
-                      :disabled="!!schoolContractForm.companyId"
-                      @change="onSchoolContractCompanySelect"
-                    >
-                      <option value="">-- Select Company --</option>
-                      <option v-for="c in companiesForContract" :key="c.uid" :value="c.uid">{{ c.orgName || c.displayName || c.email || c.uid }}</option>
-                    </select>
-                    <p v-if="companiesForContract.length === 0" class="bulk-import-hint" style="margin-top:8px;">
-                      No companies available yet. Ask a company to log in and complete their profile (Company Settings) so it appears here.
-                    </p>
-                  </div>
-                  <div class="form-group">
-                    <label>Contract Type</label>
-                    <div class="contract-type-input-row">
-                      <input v-model="schoolContractForm.contractType" type="text" class="form-input" readonly />
-                      <button type="button" class="contract-type-change-btn" @click="openContractTypeModal">Change</button>
-                    </div>
-                  </div>
-                  <div class="form-group">
-                    <label>MOA Reference No.</label>
-                    <input :value="schoolContractForm.moaReferenceNo || autoGeneratedMoaRef" type="text" class="form-input" readonly style="background: #f3f4f6; cursor: not-allowed;" />
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label>Subject <span class="required">*</span></label>
-                    <input v-model="schoolContractForm.subject" type="text" class="form-input" placeholder="e.g. OJT Partnership for SY 2026" />
-                    <p v-if="selectedCompanyHasPendingContract" class="bulk-import-hint" style="color:#b45309; margin-top:6px;">
-                      You already have a pending contract request for this company. Cancel the pending request or wait for the company response.
-                    </p>
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label>Purpose</label>
-                    <textarea v-model="schoolContractForm.purpose" rows="2" class="form-input" placeholder="Purpose of the partnership..."></textarea>
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label>Start Date</label>
-                    <input v-model="schoolContractForm.startDate" type="date" class="form-input" />
-                  </div>
-                  <div class="form-group">
-                    <label>End Date</label>
-                    <input v-model="schoolContractForm.endDate" type="date" class="form-input" />
-                  </div>
-                  <div class="form-group">
-                    <label>Internship Slots</label>
-                    <input v-model="schoolContractForm.internshipSlots" type="number" min="1" class="form-input" />
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group full-width">
-                    <label>Aligned Courses (select and set slots)</label>
-                    <p v-if="isContractAmendment" class="bulk-import-hint">
-                      Optional for amendments: only set course slots if you are changing allocations in this addendum.
-                    </p>
-                    <p v-if="!schoolContractForm.companyId" class="bulk-import-hint">Select a company to see aligned courses.</p>
-                    <p v-else-if="alignedContractCourses.length === 0" class="bulk-import-hint">
-                      No aligned courses found. Add your school courses in Settings, and make sure the company adds the courses they accept.
-                    </p>
-                    <div v-else class="aligned-courses">
-                      <button
-                        v-for="course in alignedContractCourses"
-                        :key="course"
-                        type="button"
-                        class="aligned-course-btn"
-                        :class="{ active: selectedContractCourses.includes(course) }"
-                        @click="toggleAlignedCourse(course)"
+              <div class="section-card">
+                <div class="add-student-form">
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label>Select Company <span class="required">*</span></label>
+                      <select
+                        v-model="schoolContractForm.companyId"
+                        class="form-input"
+                        :disabled="!!schoolContractForm.companyId"
+                        @change="onSchoolContractCompanySelect"
                       >
-                        {{ course }}
-                      </button>
+                        <option value="">-- Select Company --</option>
+                        <option v-for="c in companiesForContract" :key="c.uid" :value="c.uid">{{ c.orgName || c.displayName || c.email || c.uid }}</option>
+                      </select>
+                      <p v-if="companiesForContract.length === 0" class="bulk-import-hint" style="margin-top:8px;">
+                        No companies available yet. Ask a company to log in and complete their profile (Company Settings) so it appears here.
+                      </p>
                     </div>
-                    <div v-if="selectedContractCourses.length" class="course-allocation-grid">
-                      <div v-for="course in selectedContractCourses" :key="course" class="course-allocation-item">
-                        <div class="course-allocation-label">
-                          <span>{{ course }}</span>
-                          <button type="button" class="file-chip-remove" @click="toggleAlignedCourse(course)">x</button>
+                    <div class="form-group">
+                      <label>Contract Type</label>
+                      <div class="contract-type-input-row">
+                        <input v-model="schoolContractForm.contractType" type="text" class="form-input" readonly />
+                        <button type="button" class="contract-type-change-btn" @click="openContractTypeModal">Change</button>
+                      </div>
+                    </div>
+                    <div class="form-group">
+                      <label>MOA Reference No.</label>
+                      <input :value="schoolContractForm.moaReferenceNo || autoGeneratedMoaRef" type="text" class="form-input" readonly style="background: #f3f4f6; cursor: not-allowed;" />
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label>Subject <span class="required">*</span></label>
+                      <input v-model="schoolContractForm.subject" type="text" class="form-input" placeholder="e.g. OJT Partnership for SY 2026" />
+                      <p v-if="selectedCompanyHasPendingContract" class="bulk-import-hint" style="color:#b45309; margin-top:6px;">
+                        You already have a pending contract request for this company. Cancel the pending request or wait for the company response.
+                      </p>
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label>Purpose</label>
+                      <textarea v-model="schoolContractForm.purpose" rows="2" class="form-input" placeholder="Purpose of the partnership..."></textarea>
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label>Start Date</label>
+                      <input v-model="schoolContractForm.startDate" type="date" class="form-input" />
+                    </div>
+                    <div class="form-group">
+                      <label>End Date</label>
+                      <input v-model="schoolContractForm.endDate" type="date" class="form-input" />
+                    </div>
+                    <div class="form-group">
+                      <label>Internship Slots</label>
+                      <input v-model="schoolContractForm.internshipSlots" type="number" min="1" class="form-input" />
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <div class="form-group full-width">
+                      <label>Aligned Courses (select and set slots)</label>
+                      <p v-if="isContractAmendment" class="bulk-import-hint">
+                        Optional for amendments: only set course slots if you are changing allocations in this addendum.
+                      </p>
+                      <p v-if="!schoolContractForm.companyId" class="bulk-import-hint">Select a company to see aligned courses.</p>
+                      <p v-else-if="alignedContractCourses.length === 0" class="bulk-import-hint">
+                        No aligned courses found. Add your school courses in Settings, and make sure the company adds the courses they accept.
+                      </p>
+                      <div v-else class="aligned-courses">
+                        <button
+                          v-for="course in alignedContractCourses"
+                          :key="course"
+                          type="button"
+                          class="aligned-course-btn"
+                          :class="{ active: selectedContractCourses.includes(course) }"
+                          @click="toggleAlignedCourse(course)"
+                        >
+                          {{ course }}
+                        </button>
+                      </div>
+                      <div v-if="selectedContractCourses.length" class="course-allocation-grid">
+                        <div v-for="course in selectedContractCourses" :key="course" class="course-allocation-item">
+                          <div class="course-allocation-label">
+                            <span>{{ course }}</span>
+                            <button type="button" class="file-chip-remove" @click="toggleAlignedCourse(course)">x</button>
+                          </div>
+                          <input
+                            v-model="contractCourseSlots[course]"
+                            type="number"
+                            min="1"
+                            class="form-input course-slot-input"
+                            :placeholder="`How many ${course} students`"
+                          />
                         </div>
-                        <input
-                          v-model="contractCourseSlots[course]"
-                          type="number"
-                          min="1"
-                          class="form-input course-slot-input"
-                          :placeholder="`How many ${course} students`"
-                        />
                       </div>
                     </div>
                   </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label>School Contact Name</label>
-                    <input v-model="schoolContractForm.schoolContactName" type="text" class="form-input" />
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label>School Contact Name</label>
+                      <input v-model="schoolContractForm.schoolContactName" type="text" class="form-input" />
+                    </div>
+                    <div class="form-group">
+                      <label>School Contact Email</label>
+                      <input v-model="schoolContractForm.schoolContactEmail" type="email" class="form-input" />
+                    </div>
+                    <div class="form-group">
+                      <label>Company Contact Name</label>
+                      <input v-model="schoolContractForm.companyContactName" type="text" class="form-input" />
+                    </div>
+                    <div class="form-group">
+                      <label>Company Contact Email</label>
+                      <input v-model="schoolContractForm.companyContactEmail" type="email" class="form-input" />
+                    </div>
                   </div>
-                  <div class="form-group">
-                    <label>School Contact Email</label>
-                    <input v-model="schoolContractForm.schoolContactEmail" type="email" class="form-input" />
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label>School Responsibilities</label>
+                      <textarea v-model="schoolContractForm.schoolResponsibilities" rows="3" class="form-input" placeholder="Responsibilities of school..."></textarea>
+                    </div>
+                    <div class="form-group">
+                      <label>Company Responsibilities</label>
+                      <textarea v-model="schoolContractForm.companyResponsibilities" rows="3" class="form-input" placeholder="Responsibilities of company..."></textarea>
+                    </div>
                   </div>
-                  <div class="form-group">
-                    <label>Company Contact Name</label>
-                    <input v-model="schoolContractForm.companyContactName" type="text" class="form-input" />
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label>Terms and Conditions</label>
+                      <textarea v-model="schoolContractForm.terms" rows="3" class="form-input" placeholder="Contract terms..."></textarea>
+                    </div>
+                    <div class="form-group">
+                      <label>Additional Notes</label>
+                      <textarea v-model="schoolContractForm.notes" rows="3" class="form-input" placeholder="Notes for company review..."></textarea>
+                    </div>
                   </div>
-                  <div class="form-group">
-                    <label>Company Contact Email</label>
-                    <input v-model="schoolContractForm.companyContactEmail" type="email" class="form-input" />
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label>School Responsibilities</label>
-                    <textarea v-model="schoolContractForm.schoolResponsibilities" rows="3" class="form-input" placeholder="Responsibilities of school..."></textarea>
-                  </div>
-                  <div class="form-group">
-                    <label>Company Responsibilities</label>
-                    <textarea v-model="schoolContractForm.companyResponsibilities" rows="3" class="form-input" placeholder="Responsibilities of company..."></textarea>
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label>Terms and Conditions</label>
-                    <textarea v-model="schoolContractForm.terms" rows="3" class="form-input" placeholder="Contract terms..."></textarea>
-                  </div>
-                  <div class="form-group">
-                    <label>Additional Notes</label>
-                    <textarea v-model="schoolContractForm.notes" rows="3" class="form-input" placeholder="Notes for company review..."></textarea>
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label>Supporting Files</label>
-                    <input id="school-contract-file-input" type="file" multiple class="hidden-file-input" @change="onSchoolContractFileSelect" />
-                    <button type="button" class="btn-import-file" @click="triggerContractFileInput">
-                      <DocumentIcon class="icon-sm" /> Add Files
-                    </button>
-                    <p class="bulk-import-hint">Attach draft MOA, guidelines, or supporting files (metadata only).</p>
-                    <div v-if="contractFiles.length > 0" class="file-chip-list">
-                      <div v-for="(f, idx) in contractFiles" :key="`${f.name}-${idx}`" class="file-chip">
-                        <span>{{ f.name }}</span>
-                        <button type="button" class="file-chip-remove" @click="removeContractFile(idx)">x</button>
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label>Supporting Files</label>
+                      <input id="school-contract-file-input" type="file" multiple class="hidden-file-input" @change="onSchoolContractFileSelect" />
+                      <button type="button" class="btn-import-file" @click="triggerContractFileInput">
+                        <DocumentIcon class="icon-sm" /> Add Files
+                      </button>
+                      <p class="bulk-import-hint">Attach draft MOA, guidelines, or supporting files.</p>
+                      <div v-if="contractFiles.length > 0" class="file-chip-list">
+                        <div v-for="(f, idx) in contractFiles" :key="`${f.name}-${idx}`" class="file-chip">
+                          <span>{{ f.name }}</span>
+                          <button type="button" class="file-chip-remove" @click="removeContractFile(idx)">x</button>
+                        </div>
                       </div>
                     </div>
                   </div>
+                  <button
+                    type="button"
+                    class="btn-add-email"
+                    :disabled="creatingContract || !schoolContractForm.companyId || selectedCompanyHasPendingContract"
+                    @click="submitSchoolContractRequest"
+                  >
+                    <PlusIcon class="icon-sm" />
+                    {{ creatingContract ? 'Sending...' : 'Send Contract Request' }}
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  class="btn-add-email"
-                  :disabled="creatingContract || !schoolContractForm.companyId || selectedCompanyHasPendingContract"
-                  @click="submitSchoolContractRequest"
-                >
-                  <PlusIcon class="icon-sm" />
-                  {{ creatingContract ? 'Sending...' : 'Send Contract Request' }}
-                </button>
               </div>
-            </div>
 
-            <h2 class="section-title" style="margin-top: 28px;">Sent Contract Requests</h2>
+            <h2 class="section-title" style="margin-top: 28px;">Contract Requests</h2>
             <div v-if="schoolContracts.length === 0" class="empty-state">
-              No contract requests sent yet.
+              No contract requests yet.
             </div>
             <div v-else class="contracts-table-wrap">
               <table class="contracts-table">
                 <thead>
                   <tr>
                     <th>Ref</th>
+                    <th>Requested By</th>
                     <th>Company</th>
                     <th>Subject</th>
                     <th>Status</th>
@@ -3452,6 +3648,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                   <template v-for="c in schoolContracts" :key="c.id">
                     <tr>
                       <td class="mono">{{ c.moaReferenceNo || '-' }}</td>
+                      <td>{{ contractRequestedByLabel(c.requestedByRole) }}</td>
                       <td>{{ c.companyName }}</td>
                       <td>{{ c.subject || '-' }}</td>
                       <td>
@@ -3463,7 +3660,23 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                           {{ expandedSentContractId === c.id ? 'Hide' : 'View' }}
                         </button>
                         <button
-                          v-if="(c.status || 'pending') === 'pending' || (c.status || 'pending') === 'active'"
+                          v-if="canSchoolRespondToContract(c)"
+                          type="button"
+                          class="table-btn ok"
+                          @click="handleAcceptSchoolContract(c)"
+                        >
+                          Accept
+                        </button>
+                        <button
+                          v-if="canSchoolRespondToContract(c)"
+                          type="button"
+                          class="table-btn danger"
+                          @click="handleRejectSchoolContract(c)"
+                        >
+                          Reject
+                        </button>
+                        <button
+                          v-if="canSchoolCancelContract(c)"
                           type="button"
                           class="table-btn danger"
                           @click="handleCancelSchoolContract(c)"
@@ -3473,7 +3686,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                       </td>
                     </tr>
                     <tr v-if="expandedSentContractId === c.id" class="details-row">
-                      <td colspan="6">
+                      <td colspan="7">
                         <div class="details-panel">
                           <div class="details-grid">
                             <div><strong>Type:</strong> {{ c.contractType || 'MOA' }}</div>
@@ -3525,7 +3738,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
             <span class="step-indicator">Step 1 of 3</span>
             <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
-            <div class="avatar">AC</div>
+            <div class="avatar"><img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="avatar-img" /><span v-else>{{ userInitials }}</span></div>
           </div>
         </header>
         <main class="main-content submit-report-main">
@@ -3552,8 +3765,8 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                       id="studentName" 
                       v-model="reportFormData.studentName" 
                       type="text" 
-                      class="form-input" 
-                      readonly
+                      class="form-input"
+                      placeholder="Enter student name"
                     />
                   </div>
                 </div>
@@ -3588,8 +3801,8 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                       id="companyName" 
                       v-model="reportFormData.companyName" 
                       type="text" 
-                      class="form-input" 
-                      readonly
+                      class="form-input"
+                      placeholder="Enter company name"
                     />
                   </div>
                 </div>
@@ -3609,252 +3822,6 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
         </main>
       </div>
 
-      <div v-else-if="currentView === 'community'">
-        <header class="top-header">
-          <div class="header-left">
-            <img src="/icons/icon-community.png" alt="Community" class="header-icon-img" />
-            <h1>Community</h1>
-          </div>
-          <div class="header-right">
-            <BellIcon class="notification-icon-bell" />
-            <span class="school-name">{{ schoolName }}</span>
-            <div class="avatar">AC</div>
-          </div>
-        </header>
-        <main class="main-content community-main">
-          <div class="community-container-school">
-            <!-- Left Sidebar -->
-            <aside class="left-sidebar-school">
-              <!-- User Profile Card -->
-              <div class="profile-card-school">
-                <div class="profile-header-school">
-                  <div class="profile-avatar-school">AC</div>
-                  <h3 class="profile-name-school">Admin User</h3>
-                  <p class="profile-title-school">School Administrator</p>
-                </div>
-                <div class="profile-stats-school">
-                  <div class="stat-school">
-                    <span class="stat-number-school">150</span>
-                    <span class="stat-label-school">Connections</span>
-                  </div>
-                  <div class="stat-school">
-                    <span class="stat-number-school">89</span>
-                    <span class="stat-label-school">Profile views</span>
-                  </div>
-                </div>
-                <button class="view-profile-btn-school">View Profile</button>
-              </div>
-
-              <!-- Suggestions -->
-              <div class="suggestions-card-school">
-                <h4 class="suggestions-title-school">Suggestions</h4>
-                <div class="suggestions-list-school">
-                  <div class="suggestion-item-school">
-                    <div class="suggestion-avatar-school">JS</div>
-                    <div class="suggestion-info-school">
-                      <span class="suggestion-name-school">John Smith</span>
-                      <span class="suggestion-title-school">HR Manager</span>
-                    </div>
-                    <button class="connect-btn-school">+</button>
-                  </div>
-                  <div class="suggestion-item-school">
-                    <div class="suggestion-avatar-school">EM</div>
-                    <div class="suggestion-info-school">
-                      <span class="suggestion-name-school">Emily Martinez</span>
-                      <span class="suggestion-title-school">Company Supervisor</span>
-                    </div>
-                    <button class="connect-btn-school">+</button>
-                  </div>
-                  <div class="suggestion-item-school">
-                    <div class="suggestion-avatar-school">DK</div>
-                    <div class="suggestion-info-school">
-                      <span class="suggestion-name-school">David Kim</span>
-                      <span class="suggestion-title-school">Student Intern</span>
-                    </div>
-                    <button class="connect-btn-school">+</button>
-                  </div>
-                </div>
-              </div>
-            </aside>
-
-            <!-- Main Content -->
-            <main class="main-content-school">
-              <!-- Post Creation -->
-              <div class="post-creation-school">
-                <div class="post-input-area-school">
-                  <div class="post-avatar-school">AC</div>
-                  <input type="text" placeholder="What's on your mind?" class="post-input-school" />
-                </div>
-                <div class="post-actions-school">
-                  <button class="post-action-btn-school">
-                    <PhotoIcon class="post-action-icon" />
-                    Photo
-                  </button>
-                  <button class="post-action-btn-school">
-                    <VideoCameraIcon class="post-action-icon" />
-                    Video
-                  </button>
-                  <button class="post-action-btn-school">
-                    <DocumentIcon class="post-action-icon" />
-                    Document
-                  </button>
-                  <button class="post-btn-school">Post</button>
-                </div>
-              </div>
-
-              <!-- Posts Feed -->
-              <div class="posts-feed-school">
-                <article class="post-school">
-                  <div class="post-header-school">
-                    <div class="post-author-avatar-school">JS</div>
-                    <div class="post-author-info-school">
-                      <h4 class="post-author-name-school">John Smith</h4>
-                      <p class="post-author-title-school">HR Manager at Tech Solutions Inc.</p>
-                      <span class="post-timestamp-school">2 hours ago</span>
-                    </div>
-                  </div>
-                  <div class="post-content-school">
-                    <p>Great to see our intern program growing! We're excited to welcome new students this semester. Looking forward to mentoring the next generation of professionals.</p>
-                  </div>
-                  <div class="post-actions-bar-school">
-                    <button class="post-action-school">
-                      <HandThumbUpIcon class="post-reaction-icon" />
-                      12
-                    </button>
-                    <button class="post-action-school">
-                      <ChatBubbleLeftIcon class="post-reaction-icon" />
-                      3 Comment
-                    </button>
-                    <button class="post-action-school">
-                      <ArrowPathRoundedSquareIcon class="post-reaction-icon" />
-                      2 Share
-                    </button>
-                  </div>
-                </article>
-
-                <article class="post-school">
-                  <div class="post-header-school">
-                    <div class="post-author-avatar-school">EM</div>
-                    <div class="post-author-info-school">
-                      <h4 class="post-author-name-school">Emily Martinez</h4>
-                      <p class="post-author-title-school">Student Intern at Creative Design Studio</p>
-                      <span class="post-timestamp-school">5 hours ago</span>
-                    </div>
-                  </div>
-                  <div class="post-content-school">
-                    <p>Just completed my first week of internship! Learning so much about UI/UX design and working with amazing mentors. Grateful for this opportunity!</p>
-                  </div>
-                  <div class="post-actions-bar-school">
-                    <button class="post-action-school">
-                      <HandThumbUpIcon class="post-reaction-icon" />
-                      24
-                    </button>
-                    <button class="post-action-school">
-                      <ChatBubbleLeftIcon class="post-reaction-icon" />
-                      8 Comment
-                    </button>
-                    <button class="post-action-school">
-                      <ArrowPathRoundedSquareIcon class="post-reaction-icon" />
-                      5 Share
-                    </button>
-                  </div>
-                </article>
-
-                <article class="post-school">
-                  <div class="post-header-school">
-                    <div class="post-author-avatar-school">DK</div>
-                    <div class="post-author-info-school">
-                      <h4 class="post-author-name-school">David Kim</h4>
-                      <p class="post-author-title-school">Software Development Intern</p>
-                      <span class="post-timestamp-school">1 day ago</span>
-                    </div>
-                  </div>
-                  <div class="post-content-school">
-                    <p>Successfully deployed my first feature to production today! Big thanks to my supervisor and the development team for their guidance and support.</p>
-                  </div>
-                  <div class="post-actions-bar-school">
-                    <button class="post-action-school">
-                      <HandThumbUpIcon class="post-reaction-icon" />
-                      18
-                    </button>
-                    <button class="post-action-school">
-                      <ChatBubbleLeftIcon class="post-reaction-icon" />
-                      6 Comment
-                    </button>
-                    <button class="post-action-school">
-                      <ArrowPathRoundedSquareIcon class="post-reaction-icon" />
-                      3 Share
-                    </button>
-                  </div>
-                </article>
-              </div>
-            </main>
-
-            <!-- Right Sidebar -->
-            <aside class="right-sidebar-school">
-              <!-- OJT Path Logo -->
-              <div class="ojt-logo-card-school">
-                <img src="/icons/logo-main.png" alt="OJT Path" class="ojt-logo-school" />
-                <span class="ojt-text-school">OJT Intern Path</span>
-              </div>
-
-              <!-- Top Jobs -->
-              <div class="jobs-card-school">
-                <h4 class="jobs-title-school">Top Internship Opportunities</h4>
-                <div class="jobs-list-school">
-                  <div class="job-item-school">
-                    <h5 class="job-title-school">Software Developer Intern</h5>
-                    <p class="job-company-school">Tech Solutions Inc.</p>
-                    <p class="job-location-school">Bacoor, Cavite</p>
-                    <span class="job-type-school">Full-time</span>
-                  </div>
-                  <div class="job-item-school">
-                    <h5 class="job-title-school">Marketing Assistant</h5>
-                    <p class="job-company-school">Digital Marketing Co.</p>
-                    <p class="job-location-school">Imus, Cavite</p>
-                    <span class="job-type-school">Part-time</span>
-                  </div>
-                  <div class="job-item-school">
-                    <h5 class="job-title-school">Data Analyst Intern</h5>
-                    <p class="job-company-school">DataCorp Analytics</p>
-                    <p class="job-location-school">BGC, Taguig</p>
-                    <span class="job-type-school">Full-time</span>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Most Active Users -->
-              <div class="most-viewed-card-school">
-                <h4 class="most-viewed-title-school">Most Active Users</h4>
-                <div class="most-viewed-list-school">
-                  <div class="viewed-item-school">
-                    <div class="viewed-avatar-school">MS</div>
-                    <div class="viewed-info-school">
-                      <span class="viewed-name-school">Maria Santos</span>
-                      <span class="viewed-title-school">Project Manager</span>
-                    </div>
-                  </div>
-                  <div class="viewed-item-school">
-                    <div class="viewed-avatar-school">RT</div>
-                    <div class="viewed-info-school">
-                      <span class="viewed-name-school">Robert Taylor</span>
-                      <span class="viewed-title-school">Senior Developer</span>
-                    </div>
-                  </div>
-                  <div class="viewed-item-school">
-                    <div class="viewed-avatar-school">SM</div>
-                    <div class="viewed-info-school">
-                      <span class="viewed-name-school">Sophia Martinez</span>
-                      <span class="viewed-title-school">Design Lead</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </aside>
-          </div>
-        </main>
-      </div>
-
       <div v-else-if="currentView === 'documents'">
         <header class="top-header">
           <div class="header-left">
@@ -3867,26 +3834,31 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <div class="header-right">
             <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
-            <div class="avatar">AC</div>
+            <div class="avatar"><img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="avatar-img" /><span v-else>{{ userInitials }}</span></div>
           </div>
         </header>
         
         <!-- Documents Toolbar -->
         <div class="documents-toolbar">
           <div class="toolbar-left">
-            <label class="checkbox-label-toolbar">
-              <input type="checkbox" class="select-all-checkbox-toolbar" />
-              <span>Select All</span>
-            </label>
-            <div class="divider-vertical"></div>
             <div class="sort-container-toolbar">
               <span class="sort-label-toolbar">Sort by:</span>
-              <select class="sort-select-toolbar">
-                <option>Recent</option>
-                <option>Name</option>
-                <option>Size</option>
-                <option>Status</option>
+              <select v-model="documentsSortBy" class="sort-select-toolbar">
+                <option value="recent">Recent</option>
+                <option value="name">Name</option>
+                <option value="size">Size</option>
+                <option value="status">Status</option>
               </select>
+            </div>
+            <div class="divider-vertical"></div>
+            <div class="documents-count-chip">
+              {{ schoolDocumentStats.total }} total
+            </div>
+            <div class="documents-count-chip approved">
+              {{ schoolDocumentStats.approved }} approved
+            </div>
+            <div class="documents-count-chip pending">
+              {{ schoolDocumentStats.pending }} pending
             </div>
           </div>
           <div class="toolbar-right">
@@ -3896,13 +3868,9 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                 type="text" 
                 placeholder="Search documents..." 
                 class="search-input-toolbar"
+                v-model="documentsSearchQuery"
               />
             </div>
-            <button class="filter-btn-toolbar">
-              <svg class="filter-icon-toolbar" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
-              </svg>
-            </button>
             <button class="upload-document-btn" @click="showUploadDocumentModal = true">
               <svg class="upload-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
@@ -3915,132 +3883,36 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
         <main class="main-content">
 
           <!-- Documents Grid -->
-          <div class="documents-grid-school">
-            <!-- Document Card 1 -->
-            <div class="document-card-school">
-              <input type="checkbox" class="doc-checkbox-school" />
-              <div class="doc-type-badge-school">PDF</div>
+          <div v-if="filteredSchoolDocuments.length > 0" class="documents-grid-school">
+            <div v-for="doc in filteredSchoolDocuments" :key="doc.id" class="document-card-school">
+              <div class="doc-type-badge-school">{{ documentExtension(doc) }}</div>
               <div class="doc-icon-wrapper-school">
-                <div class="doc-icon-container-school">
-                  <img src="/icons/icon-pdf.png" alt="PDF" class="doc-icon-school" />
+                <div class="doc-icon-container-school doc-icon-generic-school">
+                  <DocumentIcon class="doc-svg-school" />
                 </div>
               </div>
               <div class="doc-info-school">
-                <h3 class="doc-name-school">Resume_Maria_Santos_2024.pdf</h3>
+                <h3 class="doc-name-school">{{ doc.fileName }}</h3>
                 <div class="doc-details-school">
-                  <span class="doc-size-school">2.4 MB</span>
-                  <span class="doc-date-school">Jan 15, 2024</span>
+                  <span class="doc-size-school">{{ formatSchoolFileSize(doc.fileSize || 0) }}</span>
+                  <span class="doc-date-school">{{ formatDocumentDate(doc.createdAt) }}</span>
+                </div>
+                <div class="doc-details-school">
+                  <span class="doc-category-school">{{ doc.category }}</span>
                 </div>
                 <div class="doc-status-wrapper-school">
-                  <span class="status-badge-school approved">Approved</span>
+                  <span class="status-badge-school" :class="documentStatusClass(doc.status)">{{ doc.status }}</span>
+                  <a v-if="doc.fileUrl" :href="doc.fileUrl" target="_blank" rel="noopener noreferrer" class="doc-open-link-school">
+                    Open
+                  </a>
                 </div>
               </div>
             </div>
-
-            <!-- Document Card 2 -->
-            <div class="document-card-school">
-              <input type="checkbox" class="doc-checkbox-school" />
-              <div class="doc-type-badge-school">XLSX</div>
-              <div class="doc-icon-wrapper-school">
-                <div class="doc-icon-container-school">
-                  <img src="/icons/icon-docs.png" alt="XLSX" class="doc-icon-school" />
-                </div>
-              </div>
-              <div class="doc-info-school">
-                <h3 class="doc-name-school">DTR_January_2024.xlsx</h3>
-                <div class="doc-details-school">
-                  <span class="doc-size-school">1.2 MB</span>
-                  <span class="doc-date-school">Feb 1, 2024</span>
-                </div>
-                <div class="doc-status-wrapper-school">
-                  <span class="status-badge-school pending">Pending Review</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Document Card 3 -->
-            <div class="document-card-school">
-              <input type="checkbox" class="doc-checkbox-school" />
-              <div class="doc-type-badge-school">PDF</div>
-              <div class="doc-icon-wrapper-school">
-                <div class="doc-icon-container-school">
-                  <img src="/icons/icon-pdf.png" alt="PDF" class="doc-icon-school" />
-                </div>
-              </div>
-              <div class="doc-info-school">
-                <h3 class="doc-name-school">Parent_Consent.pdf</h3>
-                <div class="doc-details-school">
-                  <span class="doc-size-school">856 KB</span>
-                  <span class="doc-date-school">Jan 20, 2024</span>
-                </div>
-                <div class="doc-status-wrapper-school">
-                  <span class="status-badge-school rejected">Rejected</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Document Card 4 -->
-            <div class="document-card-school">
-              <input type="checkbox" class="doc-checkbox-school" />
-              <div class="doc-type-badge-school">DOCX</div>
-              <div class="doc-icon-wrapper-school">
-                <div class="doc-icon-container-school">
-                  <img src="/icons/icon-word.png" alt="DOCX" class="doc-icon-school" />
-                </div>
-              </div>
-              <div class="doc-info-school">
-                <h3 class="doc-name-school">Endorsement_Letter.docx</h3>
-                <div class="doc-details-school">
-                  <span class="doc-size-school">1.8 MB</span>
-                  <span class="doc-date-school">Jan 10, 2024</span>
-                </div>
-                <div class="doc-status-wrapper-school">
-                  <span class="status-badge-school approved">Approved</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Document Card 5 -->
-            <div class="document-card-school">
-              <input type="checkbox" class="doc-checkbox-school" />
-              <div class="doc-type-badge-school">PDF</div>
-              <div class="doc-icon-wrapper-school">
-                <div class="doc-icon-container-school">
-                  <img src="/icons/icon-pdf.png" alt="PDF" class="doc-icon-school" />
-                </div>
-              </div>
-              <div class="doc-info-school">
-                <h3 class="doc-name-school">Application_Form_2024.pdf</h3>
-                <div class="doc-details-school">
-                  <span class="doc-size-school">3.1 MB</span>
-                  <span class="doc-date-school">Jan 5, 2024</span>
-                </div>
-                <div class="doc-status-wrapper-school">
-                  <span class="status-badge-school pending">Pending Review</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Document Card 6 -->
-            <div class="document-card-school">
-              <input type="checkbox" class="doc-checkbox-school" />
-              <div class="doc-type-badge-school">PDF</div>
-              <div class="doc-icon-wrapper-school">
-                <div class="doc-icon-container-school">
-                  <img src="/icons/icon-pdf.png" alt="PDF" class="doc-icon-school" />
-                </div>
-              </div>
-              <div class="doc-info-school">
-                <h3 class="doc-name-school">Internship_Completion.pdf</h3>
-                <div class="doc-details-school">
-                  <span class="doc-size-school">1.5 MB</span>
-                  <span class="doc-date-school">Dec 20, 2023</span>
-                </div>
-                <div class="doc-status-wrapper-school">
-                  <span class="status-badge-school approved">Approved</span>
-                </div>
-              </div>
-            </div>
+          </div>
+          <div v-else class="documents-empty-state">
+            <DocumentIcon class="documents-empty-icon" />
+            <h3>No documents yet</h3>
+            <p>Upload your school files here and they will appear in this list.</p>
           </div>
         </main>
         
@@ -4091,13 +3963,13 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
               <button class="cancel-upload-btn" @click="cancelSchoolUpload">Cancel</button>
               <button 
                 class="confirm-upload-btn" 
-                :disabled="schoolSelectedFiles.length === 0"
+                :disabled="schoolSelectedFiles.length === 0 || uploadingDocuments"
                 @click="confirmSchoolUpload"
               >
                 <svg class="upload-btn-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                 </svg>
-                Upload Files
+                {{ uploadingDocuments ? 'Uploading...' : 'Upload Files' }}
               </button>
             </div>
           </div>
@@ -4113,7 +3985,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <div class="header-right">
             <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
-            <div class="avatar">AC</div>
+            <div class="avatar"><img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="avatar-img" /><span v-else>{{ userInitials }}</span></div>
           </div>
         </header>
         <main class="main-content">
@@ -4121,7 +3993,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <div class="reports-header">
             <div class="reports-title-section">
               <h2>My Reports</h2>
-              <span class="reports-count">9 reports</span>
+              <span class="reports-count">{{ schoolReports.length }} reports</span>
             </div>
             <button class="btn-submit-report" @click="openSubmitReportModal">+ Submit New Report</button>
           </div>
@@ -4135,7 +4007,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                   <ClockIcon class="stat-icon-svg" />
                 </div>
               </div>
-              <div class="stat-number-report">2</div>
+              <div class="stat-number-report">{{ reportStats.pending }}</div>
             </div>
             <div class="stat-card-report">
               <div class="stat-header-report">
@@ -4144,7 +4016,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                   <ExclamationTriangleIcon class="stat-icon-svg" />
                 </div>
               </div>
-              <div class="stat-number-report">1</div>
+              <div class="stat-number-report">{{ reportStats.revisionRequested }}</div>
             </div>
             <div class="stat-card-report">
               <div class="stat-header-report">
@@ -4153,7 +4025,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                   <CheckCircleIcon class="stat-icon-svg" />
                 </div>
               </div>
-              <div class="stat-number-report">5</div>
+              <div class="stat-number-report">{{ reportStats.approved }}</div>
             </div>
           </div>
 
@@ -4170,7 +4042,39 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                   <th>ACTIONS</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody v-if="schoolReports.length > 0">
+                <tr v-for="report in schoolReports" :key="report.id">
+                  <td class="report-type">{{ formatReportTypeLabel(report.reportType) }}</td>
+                  <td>{{ formatReportPeriod(report) }}</td>
+                  <td>{{ formatDocumentDate(report.submittedAt || report.createdAt) }}</td>
+                  <td><span class="status-badge" :class="report.companyStatus">{{ report.companyStatus.replaceAll('_', ' ') }}</span></td>
+                  <td>
+                    <span v-if="report.schoolStatus" class="status-badge" :class="report.schoolStatus">{{ report.schoolStatus.replaceAll('_', ' ') }}</span>
+                    <span v-else>—</span>
+                  </td>
+                  <td>
+                    <button
+                      class="action-btn"
+                      type="button"
+                      @click="reportFormData = {
+                        reportType: report.reportType,
+                        studentName: report.studentName,
+                        internshipPeriodStart: report.internshipPeriodStart,
+                        internshipPeriodEnd: report.internshipPeriodEnd,
+                        companyName: report.companyName,
+                      }; currentView = 'submit-report'"
+                    >
+                      <EllipsisVerticalIcon class="action-menu-icon" />
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+              <tbody v-else-if="schoolReports.length === 0">
+                <tr>
+                  <td colspan="6" class="empty-state">No reports yet. Submit your first report to see it here.</td>
+                </tr>
+              </tbody>
+              <tbody v-if="false">
                 <tr>
                   <td class="report-type">Weekly Report 10</td>
                   <td>Jul 8-14, 2024</td>
@@ -4277,7 +4181,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <div class="header-right">
             <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
-            <div class="avatar">AC</div>
+            <div class="avatar"><img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="avatar-img" /><span v-else>{{ userInitials }}</span></div>
           </div>
         </header>
         <main class="main-content">
@@ -4390,7 +4294,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                         <th>ACTIONS</th>
                       </tr>
                     </thead>
-                    <tbody>
+                    <tbody v-if="false">
                       <tr v-for="s in filteredSchoolStudentEmails" :key="s.id">
                         <td>{{ s.email }}</td>
                         <td>{{ s.studentName || '—' }}</td>
@@ -4402,6 +4306,78 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
                           <button @click="removeStudentEmail(s)" class="btn-remove" title="Remove">
                             <TrashIcon class="icon-sm" />
                           </button>
+                        </td>
+                      </tr>
+                    </tbody>
+                    <tbody>
+                      <tr v-for="s in filteredSchoolStudentEmails" :key="s.id">
+                        <td>{{ s.email }}</td>
+                        <td>
+                          <template v-if="editingStudentId === s.id">
+                            <input v-model="editingStudentForm.studentName" type="text" class="table-edit-input" placeholder="Student name" />
+                          </template>
+                          <template v-else>{{ s.studentName || '—' }}</template>
+                        </td>
+                        <td>
+                          <template v-if="editingStudentId === s.id">
+                            <input v-model="editingStudentForm.studentNumber" type="text" class="table-edit-input" placeholder="Student no." />
+                          </template>
+                          <template v-else>{{ s.studentNumber || '—' }}</template>
+                        </td>
+                        <td>
+                          <template v-if="editingStudentId === s.id">
+                            <input v-model="editingStudentForm.course" type="text" class="table-edit-input" placeholder="Course" />
+                          </template>
+                          <template v-else>{{ s.course || '—' }}</template>
+                        </td>
+                        <td>
+                          <template v-if="editingStudentId === s.id">
+                            <select v-model="editingStudentForm.yearLevel" class="table-edit-input">
+                              <option value="">Select year</option>
+                              <option v-for="year in yearLevelOptions" :key="year" :value="year">{{ year }}</option>
+                            </select>
+                          </template>
+                          <template v-else>{{ s.yearLevel || '—' }}</template>
+                        </td>
+                        <td>
+                          <template v-if="editingStudentId === s.id">
+                            <select v-model="editingStudentForm.status" class="table-edit-input">
+                              <option value="Pending Setup">Pending Setup</option>
+                              <option value="Registered">Registered</option>
+                              <option value="Disabled">Disabled</option>
+                            </select>
+                          </template>
+                          <template v-else>
+                            <span class="status-badge" :class="schoolStudentStatusClass(s.status)">{{ s.status }}</span>
+                          </template>
+                        </td>
+                        <td>
+                          <div class="table-actions">
+                            <template v-if="editingStudentId === s.id">
+                              <button @click="saveStudentEdit(s)" class="btn-table-action btn-save" :disabled="savingStudentEdit" title="Save">
+                                {{ savingStudentEdit ? 'Saving...' : 'Save' }}
+                              </button>
+                              <button @click="cancelEditStudent" class="btn-table-action btn-cancel" :disabled="savingStudentEdit" title="Cancel">
+                                Cancel
+                              </button>
+                            </template>
+                            <template v-else>
+                              <button @click="startEditStudent(s)" class="btn-table-action btn-edit" title="Edit">
+                                Edit
+                              </button>
+                              <button
+                                @click="toggleStudentAccess(s)"
+                                class="btn-table-action"
+                                :class="(s.status || 'Registered') === 'Disabled' ? 'btn-activate' : 'btn-disable'"
+                                :title="(s.status || 'Registered') === 'Disabled' ? 'Reactivate' : 'Disable'"
+                              >
+                                {{ (s.status || 'Registered') === 'Disabled' ? 'Reactivate' : 'Disable' }}
+                              </button>
+                              <button @click="removeStudentEmail(s)" class="btn-remove" title="Remove">
+                                <TrashIcon class="icon-sm" />
+                              </button>
+                            </template>
+                          </div>
                         </td>
                       </tr>
                     </tbody>
@@ -4422,7 +4398,7 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
           <div class="header-right">
             <BellIcon class="notification-icon-bell" />
             <span class="school-name">{{ schoolName }}</span>
-            <div class="avatar">AC</div>
+            <div class="avatar"><img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="avatar-img" /><span v-else>{{ userInitials }}</span></div>
           </div>
         </header>
         
@@ -4511,6 +4487,10 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
 
       <div v-else-if="currentView === 'subscription'">
         <SubscriptionManager role="school" />
+      </div>
+
+      <div v-else-if="currentView === 'team-access'">
+        <OrganizationAccessManager organizationType="school" />
       </div>
 
       <div v-else-if="currentView === 'settings'">
@@ -4791,6 +4771,9 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
 .status-badge.pending { background: #fef3c7; color: #92400e; }
 .status-badge.active { background: #d1fae5; color: #065f46; }
 .status-badge.rejected { background: #fee2e2; color: #991b1b; }
+.status-badge.draft { background: #e2e8f0; color: #334155; }
+.status-badge.approved { background: #dcfce7; color: #166534; }
+.status-badge.revision_requested { background: #fee2e2; color: #991b1b; }
 .empty-state { padding: 24px; text-align: center; color: #6b7280; }
 .contracts-table-wrap { overflow-x: auto; }
 .contracts-table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; }
@@ -5155,7 +5138,41 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
 .emails-table th { font-size: 0.75rem; font-weight: 600; color: #6b7280; text-transform: uppercase; }
 .emails-table .status-badge { padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 500; }
 .emails-table .status-badge.pending { background: #dbeafe; color: #1e40af; }
+.emails-table .status-badge.pending-setup { background: #fef3c7; color: #92400e; }
 .emails-table .status-badge.registered { background: #d1fae5; color: #065f46; }
+.emails-table .status-badge.disabled { background: #e5e7eb; color: #374151; }
+.table-edit-input {
+  width: 100%;
+  min-width: 110px;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  background: #fff;
+}
+.table-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.btn-table-action {
+  border: none;
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-table-action:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.btn-edit { background: #dbeafe; color: #1d4ed8; }
+.btn-disable { background: #fee2e2; color: #b91c1c; }
+.btn-activate { background: #dcfce7; color: #166534; }
+.btn-save { background: #2563eb; color: #fff; }
+.btn-cancel { background: #e5e7eb; color: #374151; }
 .password-cell { display: flex; align-items: center; gap: 8px; }
 .password-text { font-family: 'Courier New', Courier, monospace; font-size: 0.82rem; }
 .btn-copy-password {
@@ -5170,7 +5187,114 @@ async function removeStudentEmail(record: SchoolStudentRecord) {
 .btn-copy-password:hover { background: #f9fafb; }
 .btn-remove { background: none; border: none; padding: 8px; cursor: pointer; color: #ef4444; border-radius: 6px; }
 .btn-remove:hover { background: #fef2f2; }
+.school-placement-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+.school-placement-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 18px;
+}
+.school-placement-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+.placement-meta {
+  margin-top: 6px;
+  color: #475569;
+  font-size: 0.9rem;
+}
+.placement-courses {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 0.85rem;
+}
+.documents-count-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  color: #334155;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.documents-count-chip.approved {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #166534;
+}
+.documents-count-chip.pending {
+  background: #fffbeb;
+  border-color: #fcd34d;
+  color: #92400e;
+}
+.doc-icon-generic-school {
+  background: linear-gradient(135deg, #eff6ff, #dbeafe);
+}
+.doc-svg-school {
+  width: 34px;
+  height: 34px;
+  color: #2563eb;
+}
+.doc-category-school {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+.doc-open-link-school {
+  color: #2563eb;
+  font-weight: 700;
+  text-decoration: none;
+}
+.doc-open-link-school:hover {
+  text-decoration: underline;
+}
+.documents-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 280px;
+  background: #fff;
+  border: 1px dashed #cbd5e1;
+  border-radius: 20px;
+  color: #64748b;
+  text-align: center;
+}
+.documents-empty-state h3 {
+  margin: 0;
+  color: #0f172a;
+}
+.documents-empty-state p {
+  margin: 0;
+  max-width: 420px;
+}
+.documents-empty-icon {
+  width: 48px;
+  height: 48px;
+  color: #94a3b8;
+}
 </style>
+
 
 
 

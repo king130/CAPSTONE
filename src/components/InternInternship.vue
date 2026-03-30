@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import { buildProfileAvatarUrl } from '@/services/profileMedia'
 import { subscribeActiveInternships, getInternship, type InternshipRecord } from '@/services/internships'
 import { submitApplication } from '@/services/applications'
 import Swal from 'sweetalert2'
@@ -33,6 +34,15 @@ const userInitials = computed(() => {
     .join('')
     .toUpperCase()
     .slice(0, 2)
+})
+
+const userAvatarUrl = computed(() => {
+  const currentUser = authStore.user
+  const profile = currentUser?.profile as Record<string, unknown> | undefined
+  if (currentUser?.uid && profile?.avatarPath) {
+    return buildProfileAvatarUrl(currentUser.uid, currentUser.updatedAt)
+  }
+  return ''
 })
 
 // TEMPORARY DATA: Notification dropdown state - this is a UI state variable
@@ -122,6 +132,8 @@ const applicationData = ref({
 // Internships from Firebase
 type InternshipDisplay = InternshipRecord & {
   company?: string
+  hostLabel?: string
+  hostTypeLabel?: string
   skills?: string[]
   match?: number
   recommended?: boolean
@@ -140,7 +152,9 @@ onMounted(() => {
   unsub = subscribeActiveInternships((items) => {
     internships.value = items.map((i) => ({
       ...i,
-      company: i.companyName,
+      company: i.hostName || i.companyName,
+      hostLabel: i.hostName || i.companyName,
+      hostTypeLabel: i.hostType === 'school' ? 'School-based placement' : 'Company placement',
       skills: i.requirements || [],
       match: 85,
       recommended: false,
@@ -153,7 +167,9 @@ onMounted(() => {
         totalHours: i.duration || 'TBD'
       },
       aboutCompany: i.description || 'No description available.',
-      mission: 'Join our team and grow your skills.',
+      mission: i.hostType === 'school'
+        ? 'Build your internship experience in an academic or guidance setting.'
+        : 'Join our team and grow your skills.',
       compatibility: {
         score: 85,
         matches: (i.requirements || []).slice(0, 3).map((s) => `${s} (Matched)`),
@@ -176,7 +192,7 @@ const filteredInternships = computed(() => {
     result = result.filter(
       (i) =>
         (i.title || '').toLowerCase().includes(q) ||
-        (i.companyName || '').toLowerCase().includes(q) ||
+        (i.hostName || i.companyName || '').toLowerCase().includes(q) ||
         (i.description || '').toLowerCase().includes(q) ||
         (i.requirements || []).some((r) => r.toLowerCase().includes(q))
     )
@@ -292,8 +308,8 @@ async function submitApplicationWithBypass() {
   }
   submittingApplication.value = true
   try {
-    let companyId = internship.companyId
-    if (!companyId && internship.id) {
+    let companyId = internship.hostType === 'company' ? internship.companyId : ''
+    if (!companyId && internship.hostType !== 'school' && internship.id) {
       const full = await getInternship(String(internship.id))
       companyId = full?.companyId || ''
     }
@@ -358,7 +374,7 @@ function getInitials(company: string | undefined): string {
         <div class="notification-wrapper">
           <BellIcon class="notification-icon-bell" />
         </div>
-        <div class="avatar" @click="handleAvatarClick" title="View Profile">{{ userInitials }}</div>
+        <div class="avatar" @click="handleAvatarClick" title="View Profile"><img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="avatar-image" /><span v-else>{{ userInitials }}</span></div>
       </div>
     </div>
 
@@ -471,7 +487,8 @@ function getInitials(company: string | undefined): string {
               </div>
               <div class="internship-info">
                 <h3 class="internship-title">{{ internship.title }}</h3>
-                <p class="company-name">{{ internship.company || internship.companyName }}</p>
+                <p class="company-name">{{ internship.hostLabel || internship.company || internship.companyName }}</p>
+                <p class="placement-type">{{ internship.hostTypeLabel }}</p>
                 <div class="location-info">
                   <MapPinIcon class="location-icon-svg" />
                   <span class="location-text">{{ internship.location }}</span>
@@ -524,7 +541,8 @@ function getInitials(company: string | undefined): string {
             </div>
               <div class="header-details">
               <h2 class="modal-title">{{ selectedInternship.title }}</h2>
-              <p class="modal-company">{{ selectedInternship.company || selectedInternship.companyName }}</p>
+              <p class="modal-company">{{ selectedInternship.hostLabel || selectedInternship.company || selectedInternship.companyName }}</p>
+              <p class="placement-type modal-placement-type">{{ selectedInternship.hostTypeLabel }}</p>
               <div class="modal-location">
                 <MapPinIcon class="location-icon-svg" />
                 <span>{{ selectedInternship.location }}</span>
@@ -587,7 +605,7 @@ function getInitials(company: string | undefined): string {
 
               <!-- About Company -->
               <div class="section">
-                <h3 class="section-title">About {{ selectedInternship.company || selectedInternship.companyName }}</h3>
+                <h3 class="section-title">About {{ selectedInternship.hostLabel || selectedInternship.company || selectedInternship.companyName }}</h3>
                 <p class="section-content">{{ selectedInternship.aboutCompany }}</p>
                 <p class="section-content">{{ selectedInternship.mission }}</p>
               </div>
@@ -640,7 +658,7 @@ function getInitials(company: string | undefined): string {
             <img src="/icons/logo-main.png" alt="Logo" class="app-logo" />
           </div>
           <div class="header-right">
-            <span class="company-name">{{ selectedInternship.company || selectedInternship.companyName }}</span>
+            <span class="company-name">{{ selectedInternship.hostLabel || selectedInternship.company || selectedInternship.companyName }}</span>
             <div class="user-avatar">AC</div>
           </div>
         </div>
@@ -1132,6 +1150,7 @@ function getInitials(company: string | undefined): string {
   background: #3b82f6;
   color: #fff;
   border-radius: 50%;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1145,6 +1164,13 @@ function getInitials(company: string | undefined): string {
   background: #2563eb;
   transform: scale(1.05);
   box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
 }
 
 .company-name {
@@ -1677,6 +1703,18 @@ function getInitials(company: string | undefined): string {
   margin: 0 0 8px 0;
 }
 
+.placement-type {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0 10px 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .location-info {
   display: flex;
   align-items: center;
@@ -1897,6 +1935,10 @@ function getInitials(company: string | undefined): string {
   font-size: 16px;
   color: #6b7280;
   margin: 0 0 8px 0;
+}
+
+.modal-placement-type {
+  margin-bottom: 10px;
 }
 
 .modal-location {

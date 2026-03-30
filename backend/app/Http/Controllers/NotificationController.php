@@ -11,8 +11,8 @@ class NotificationController extends Controller
         return response()->json(['data' => []]);
     }
 
-    public function markRead(Request $request, $notificationId)
+    public function markRead(Request $request, string $id)
     {
-        return response()->json(['message' => 'Notification marked as read']);
+        return response()->json(['message' => 'Notification marked as read', 'id' => $id]);
     }
 }

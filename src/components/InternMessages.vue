@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import { buildProfileAvatarUrl } from '@/services/profileMedia'
 import { 
   BellIcon,
   MagnifyingGlassIcon,
@@ -22,6 +23,15 @@ const userInitials = computed(() => {
     .join('')
     .toUpperCase()
     .slice(0, 2)
+})
+
+const userAvatarUrl = computed(() => {
+  const currentUser = authStore.user
+  const profile = currentUser?.profile as Record<string, unknown> | undefined
+  if (currentUser?.uid && profile?.avatarPath) {
+    return buildProfileAvatarUrl(currentUser.uid, currentUser.updatedAt)
+  }
+  return ''
 })
 
 // TEMPORARY DATA: Conversations list - replace with real data from backend
@@ -143,7 +153,7 @@ const activeConversation = computed(() => {
       </div>
       <div class="header-right">
         <BellIcon class="notification-icon-bell" />
-        <div class="avatar" @click="handleAvatarClick" title="View Profile">{{ userInitials }}</div>
+        <div class="avatar" @click="handleAvatarClick" title="View Profile"><img v-if="userAvatarUrl" :src="userAvatarUrl" alt="Profile" class="avatar-image" /><span v-else>{{ userInitials }}</span></div>
       </div>
     </header>
 
@@ -320,6 +330,7 @@ const activeConversation = computed(() => {
   background: #3b82f6;
   color: #fff;
   border-radius: 50%;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -333,6 +344,13 @@ const activeConversation = computed(() => {
   background: #2563eb;
   transform: scale(1.05);
   box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
 }
 
 /* Layout */

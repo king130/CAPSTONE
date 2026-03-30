@@ -10,6 +10,7 @@ class Student extends Model
     protected $fillable = [
         'user_id',
         'school_id',
+        'organization_id',
         'student_id_number',
         'school_name',
         'school_subscription_code',
@@ -27,5 +28,10 @@ class Student extends Model
     public function school(): BelongsTo
     {
         return $this->belongsTo(School::class);
+    }
+
+    public function organization(): BelongsTo
+    {
+        return $this->belongsTo(Organization::class);
     }
 }

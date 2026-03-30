@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { doc, setDoc, updateDoc } from 'firebase/firestore'
-import { db } from '@/services/firebase'
+import { apiFetch } from '@/services/http'
+import { mapApiUserToProfile, updateCurrentUserPassword } from '@/services/auth'
+import { buildProfileAvatarUrl, uploadProfileAvatar } from '@/services/profileMedia'
 import { ensurePublicProfile } from '@/services/profilesPublic'
 import Swal from 'sweetalert2'
 import { BellIcon } from '@heroicons/vue/24/outline'
@@ -18,6 +19,15 @@ const userInitials = computed(() => {
     .join('')
     .toUpperCase()
     .slice(0, 2)
+})
+
+const headerAvatarUrl = computed(() => {
+  const currentUser = authStore.user
+  const profile = currentUser?.profile as Record<string, unknown> | undefined
+  if (currentUser?.uid && profile?.avatarPath) {
+    return buildProfileAvatarUrl(currentUser.uid, currentUser.updatedAt)
+  }
+  return ''
 })
 
 const organizationName = computed(() => {
@@ -43,8 +53,6 @@ const personalInfo = ref({
 const institutionInfo = ref({
   institutionType: '',
   address: '',
-  region: '',
-  province: '',
   city: '',
   zipCode: ''
 })
@@ -53,13 +61,29 @@ const courses = ref<string[]>([])
 const newCourse = ref('')
 
 const security = ref({
-  oldPassword: '',
   newPassword: '',
+  confirmPassword: '',
   twoFactorAuth: false,
   loginAlerts: true
 })
 
-const profilePicture = ref('/icons/profiles/alex-doe.jpg')
+const fileInput = ref<HTMLInputElement | null>(null)
+const uploadingPhoto = ref(false)
+const localProfilePreview = ref('')
+
+const profilePicture = computed(() => {
+  if (localProfilePreview.value) {
+    return localProfilePreview.value
+  }
+
+  const currentUser = authStore.user
+  const profile = currentUser?.profile as Record<string, unknown> | undefined
+  if (currentUser?.uid && profile?.avatarPath) {
+    return buildProfileAvatarUrl(currentUser.uid, currentUser.updatedAt)
+  }
+
+  return '/icons/profiles/alex-doe.jpg'
+})
 
 watch(
   () => authStore.user,
@@ -84,8 +108,6 @@ watch(
     institutionInfo.value = {
       institutionType: (profile?.institutionType as string) || '',
       address: (profile?.schoolAddress as string) || '',
-      region: (profile?.region as string) || '',
-      province: (profile?.province as string) || '',
       city: (profile?.cityMunicipality as string) || '',
       zipCode: (profile?.zipCode as string) || ''
     }
@@ -107,13 +129,57 @@ watch(
 
 // Functions
 function updateProfilePicture() {
-  Swal.fire({
-    icon: 'info',
-    title: 'Feature Under Development',
-    text: 'Profile picture upload will be available soon.',
-    confirmButtonText: 'OK',
-    confirmButtonColor: '#3b82f6'
-  })
+  fileInput.value?.click()
+}
+
+async function onProfilePictureSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+
+  if (!file.type.startsWith('image/')) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Invalid File',
+      text: 'Please choose an image file.',
+      confirmButtonColor: '#3b82f6'
+    })
+    input.value = ''
+    return
+  }
+
+  if (localProfilePreview.value.startsWith('blob:')) {
+    URL.revokeObjectURL(localProfilePreview.value)
+  }
+  localProfilePreview.value = URL.createObjectURL(file)
+  uploadingPhoto.value = true
+
+  try {
+    const updatedUser = await uploadProfileAvatar(file)
+    authStore.setUserProfile(updatedUser)
+    await Swal.fire({
+      icon: 'success',
+      title: 'Photo Updated',
+      text: 'Your profile picture has been uploaded successfully.',
+      confirmButtonColor: '#3b82f6',
+      timer: 1800,
+      showConfirmButton: false
+    })
+  } catch (error) {
+    if (localProfilePreview.value.startsWith('blob:')) {
+      URL.revokeObjectURL(localProfilePreview.value)
+    }
+    localProfilePreview.value = ''
+    await Swal.fire({
+      icon: 'error',
+      title: 'Upload Failed',
+      text: error instanceof Error ? error.message : 'Unable to upload your profile picture.',
+      confirmButtonColor: '#3b82f6'
+    })
+  } finally {
+    uploadingPhoto.value = false
+    input.value = ''
+  }
 }
 
 function addCourse() {
@@ -162,47 +228,72 @@ async function saveChanges() {
     return
   }
 
+  if (security.value.newPassword || security.value.confirmPassword) {
+    if (security.value.newPassword.length < 8) {
+      await Swal.fire({
+        icon: 'error',
+        title: 'Validation Error',
+        text: 'New password must be at least 8 characters.',
+        confirmButtonColor: '#3b82f6'
+      })
+      return
+    }
+
+    if (security.value.newPassword !== security.value.confirmPassword) {
+      await Swal.fire({
+        icon: 'error',
+        title: 'Validation Error',
+        text: 'New password and confirmation do not match.',
+        confirmButtonColor: '#3b82f6'
+      })
+      return
+    }
+  }
+
   saving.value = true
   
   try {
-    const userRef = doc(db, 'users', authStore.user.uid)
-    
-    // Update Firestore with new profile data
-    const updatePayload = {
-      displayName: personalInfo.value.name,
-      email: personalInfo.value.email,
-      'profile.schoolContactNumber': personalInfo.value.phoneNumber,
-      'profile.contactNumber': personalInfo.value.phoneNumber,
-      'profile.institutionName': personalInfo.value.institutionName,
-      'profile.department': personalInfo.value.department,
-      'profile.position': personalInfo.value.position,
-      'profile.officeLocation': personalInfo.value.officeLocation,
-      'profile.institutionType': institutionInfo.value.institutionType,
-      'profile.schoolAddress': institutionInfo.value.address,
-      'profile.region': institutionInfo.value.region,
-      'profile.province': institutionInfo.value.province,
-      'profile.cityMunicipality': institutionInfo.value.city,
-      'profile.zipCode': institutionInfo.value.zipCode,
-      'profile.courses': courses.value.map((c) => c.trim()).filter(Boolean),
-      'profile.twoFactorAuth': security.value.twoFactorAuth,
-      'profile.loginAlerts': security.value.loginAlerts,
-      updatedAt: new Date()
-    } as const
+    const profilePayload = {
+      schoolContactNumber: personalInfo.value.phoneNumber,
+      contactNumber: personalInfo.value.phoneNumber,
+      institutionName: personalInfo.value.institutionName,
+      department: personalInfo.value.department,
+      position: personalInfo.value.position,
+      officeLocation: personalInfo.value.officeLocation,
+      institutionType: institutionInfo.value.institutionType,
+      schoolAddress: institutionInfo.value.address,
+      province: 'Cavite',
+      cityMunicipality: institutionInfo.value.city,
+      zipCode: institutionInfo.value.zipCode,
+      courses: courses.value.map((c) => c.trim()).filter(Boolean),
+      twoFactorAuth: security.value.twoFactorAuth,
+      loginAlerts: security.value.loginAlerts,
+    }
 
-    try {
-      await updateDoc(userRef, updatePayload)
-    } catch (e) {
-      const code = (e as { code?: string })?.code || ''
-      if (code === 'not-found') {
-        await setDoc(userRef, updatePayload, { merge: true })
-      } else {
-        throw e
-      }
+    const raw = await apiFetch<Record<string, unknown>>('/profile', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        displayName: personalInfo.value.name,
+        profile: profilePayload,
+      }),
+    })
+    authStore.setUserProfile(mapApiUserToProfile(raw))
+
+    if (security.value.newPassword) {
+      await updateCurrentUserPassword(security.value.newPassword)
+      await authStore.refreshUser()
+      security.value.newPassword = ''
+      security.value.confirmPassword = ''
     }
 
     let publicProfileFailed = false
     try {
-      await ensurePublicProfile(authStore.user.uid, {
+      const currentUser = authStore.user
+      if (!currentUser) {
+        throw new Error('Unable to refresh your account after saving.')
+      }
+
+      await ensurePublicProfile(currentUser.uid, {
         displayName: personalInfo.value.name,
         role: 'school',
         orgName: personalInfo.value.institutionName || personalInfo.value.name,
@@ -245,6 +336,10 @@ async function saveChanges() {
 }
 
 function handleImageError(event: Event) {
+  if (localProfilePreview.value) {
+    return
+  }
+
   const img = event.target as HTMLImageElement
   const name = personalInfo.value.name || 'User'
   const initials = name.split(' ').map(n => n[0]).join('').toUpperCase()
@@ -279,7 +374,8 @@ function handleImageError(event: Event) {
           <BellIcon class="notification-bell" />
         </div>
         <button class="user-avatar" type="button" @click="() => {}" :title="`View Profile`">
-          {{ userInitials }}
+          <img v-if="headerAvatarUrl" :src="headerAvatarUrl" alt="Profile" class="user-avatar-image" />
+          <span v-else>{{ userInitials }}</span>
         </button>
       </div>
     </header>
@@ -294,13 +390,22 @@ function handleImageError(event: Event) {
         <!-- Profile Card -->
         <div class="profile-card">
           <div class="profile-picture-section">
+            <input
+              ref="fileInput"
+              type="file"
+              accept="image/*"
+              class="hidden-file-input"
+              @change="onProfilePictureSelected"
+            />
             <img 
               :src="profilePicture" 
               :alt="personalInfo.name" 
               class="profile-picture"
               @error="handleImageError"
             />
-            <button @click="updateProfilePicture" class="update-picture-btn">Change Photo</button>
+            <button @click="updateProfilePicture" class="update-picture-btn" :disabled="uploadingPhoto">
+              {{ uploadingPhoto ? 'Uploading...' : 'Change Photo' }}
+            </button>
           </div>
           <div class="profile-info">
             <h2 class="profile-name">{{ personalInfo.name || 'User' }}</h2>
@@ -336,8 +441,9 @@ function handleImageError(event: Event) {
                   v-model="personalInfo.email"
                   type="email" 
                   class="form-input"
-                  placeholder="Enter your email"
+                  readonly
                 />
+                <p class="form-help">Email is managed from your account record and is not editable here yet.</p>
               </div>
 
               <div class="form-group">
@@ -415,30 +521,14 @@ function handleImageError(event: Event) {
               </div>
 
               <div class="form-group">
-                <label class="form-label">Region</label>
-                <select 
-                  v-model="institutionInfo.region"
-                  class="form-input"
-                >
-                  <option value="">Select region</option>
-                  <option value="NCR">NCR</option>
-                  <option value="Region I">Region I - Ilocos Region</option>
-                  <option value="Region II">Region II - Cagayan Valley</option>
-                  <option value="Region III">Region III - Central Luzon</option>
-                  <option value="Region IV-A">Region IV-A - CALABARZON</option>
-                  <option value="Region IV-B">Region IV-B - MIMAROPA</option>
-                  <option value="Region V">Region V - Bicol Region</option>
-                </select>
-              </div>
-
-              <div class="form-group">
                 <label class="form-label">Province</label>
-                <input 
-                  v-model="institutionInfo.province"
-                  type="text" 
+                <input
+                  type="text"
                   class="form-input"
-                  placeholder="Enter province"
+                  value="Cavite"
+                  readonly
                 />
+                <p class="form-help">All schools in this system are within Cavite.</p>
               </div>
             </div>
           </div>
@@ -493,7 +583,7 @@ function handleImageError(event: Event) {
               </div>
               <div class="form-row">
                 <div class="form-group">
-                  <label class="form-label">City/Municipality</label>
+                  <label class="form-label">City/Municipality in Cavite</label>
                   <input 
                     v-model="institutionInfo.city"
                     type="text" 
@@ -522,16 +612,6 @@ function handleImageError(event: Event) {
             </div>
             <div class="card-body">
               <div class="form-group">
-                <label class="form-label">Current Password</label>
-                <input 
-                  v-model="security.oldPassword"
-                  type="password" 
-                  class="form-input"
-                  placeholder="Enter current password"
-                />
-              </div>
-
-              <div class="form-group">
                 <label class="form-label">New Password</label>
                 <input 
                   v-model="security.newPassword"
@@ -539,11 +619,21 @@ function handleImageError(event: Event) {
                   class="form-input"
                   placeholder="Enter new password"
                 />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Confirm New Password</label>
+                <input 
+                  v-model="security.confirmPassword"
+                  type="password" 
+                  class="form-input"
+                  placeholder="Confirm new password"
+                />
                 <div v-if="security.newPassword" class="password-strength">
                   <div class="strength-bar">
                     <div class="strength-fill weak"></div>
                   </div>
-                  <span class="strength-text">Weak - Add numbers and symbols</span>
+                  <span class="strength-text">Use at least 8 characters for a stronger password</span>
                 </div>
               </div>
             </div>
@@ -664,6 +754,7 @@ function handleImageError(event: Event) {
   background: #3b82f6;
   color: #fff;
   border-radius: 50%;
+  overflow: hidden;
   border: none;
   display: flex;
   align-items: center;
@@ -679,6 +770,13 @@ function handleImageError(event: Event) {
   background: #2563eb;
   transform: scale(1.05);
   box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.user-avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
 }
 
 /* Body */
@@ -894,6 +992,16 @@ function handleImageError(event: Event) {
 .form-input::placeholder,
 .form-textarea::placeholder {
   color: #9ca3af;
+}
+
+.hidden-file-input {
+  display: none;
+}
+
+.form-help {
+  margin: 0;
+  font-size: 12px;
+  color: #6b7280;
 }
 
 /* Password Strength */

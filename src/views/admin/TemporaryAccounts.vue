@@ -1,41 +1,37 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import Swal from 'sweetalert2'
-import { collection, doc, onSnapshot, orderBy, query, updateDoc, where } from 'firebase/firestore'
-import { db } from '@/services/firebase'
+import { apiFetch } from '@/services/http'
 
 type TempUser = {
   uid: string
   displayName?: string
   email?: string
   role?: string
+  isTemporary?: boolean
   isActive?: boolean
   createdAt?: unknown
 }
 
 const tempUsers = ref<TempUser[]>([])
-let unsubscribe: null | (() => void) = null
+let refreshTimer: ReturnType<typeof setInterval> | null = null
+
+async function loadTempUsers() {
+  try {
+    const res = await apiFetch<{ data: TempUser[] }>('/admin/users')
+    tempUsers.value = (res.data ?? []).filter((u) => u.isTemporary === true)
+  } catch {
+    tempUsers.value = []
+  }
+}
 
 onMounted(() => {
-  const usersRef = collection(db, 'users')
-  const usersQuery = query(usersRef, where('isTemporary', '==', true), orderBy('createdAt', 'desc'))
-  unsubscribe = onSnapshot(
-    usersQuery,
-    (snapshot) => {
-      tempUsers.value = snapshot.docs.map((docSnap) => ({
-        uid: docSnap.id,
-        ...(docSnap.data() as Omit<TempUser, 'uid'>),
-      }))
-    },
-    (err) => {
-      console.warn('Admin temp users subscription error:', err?.message || err)
-      tempUsers.value = []
-    }
-  )
+  loadTempUsers()
+  refreshTimer = setInterval(loadTempUsers, 30000)
 })
 
 onUnmounted(() => {
-  if (unsubscribe) unsubscribe()
+  if (refreshTimer) clearInterval(refreshTimer)
 })
 
 function formatDate(value: unknown) {
@@ -67,7 +63,11 @@ async function disableTemp(user: TempUser) {
   })
 
   if (!result.isConfirmed) return
-  await updateDoc(doc(db, 'users', user.uid), { isActive: false })
+  await apiFetch(`/admin/users/${user.uid}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ isActive: false }),
+  })
+  await loadTempUsers()
 }
 </script>
 

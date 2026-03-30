@@ -1,16 +1,12 @@
 <script setup lang="ts">
 import { RouterView } from 'vue-router'
-import { onMounted, watch } from 'vue'
+import { watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useNotificationStore } from '@/stores/notifications'
 import { AUTH_DISABLED } from '@/config/auth'
 
 const authStore = useAuthStore()
 const notificationStore = useNotificationStore()
-
-onMounted(() => {
-  if (!AUTH_DISABLED) authStore.init()
-})
 
 watch(
   () => authStore.user?.uid,

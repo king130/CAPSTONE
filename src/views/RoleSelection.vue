@@ -2,8 +2,8 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { doc, updateDoc } from 'firebase/firestore'
-import { db } from '@/services/firebase'
+import { apiFetch } from '@/services/http'
+import { mapApiUserToProfile } from '@/services/auth'
 import { ensurePublicProfile } from '@/services/profilesPublic'
 import Swal from 'sweetalert2'
 
@@ -18,13 +18,14 @@ async function selectRole() {
   loading.value = true
 
   try {
-    const updates: Record<string, unknown> = {
-      role: selectedRole.value,
-      profileSetupComplete: selectedRole.value === 'student',
-      updatedAt: new Date()
-    }
-
-    await updateDoc(doc(db, 'users', authStore.user!.uid), updates)
+    const raw = await apiFetch<Record<string, unknown>>('/profile', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        role: selectedRole.value,
+        profileSetupComplete: selectedRole.value === 'student',
+      }),
+    })
+    authStore.user = mapApiUserToProfile(raw)
 
     if (selectedRole.value === 'school' || selectedRole.value === 'company') {
       const profile = (authStore.user?.profile as Record<string, unknown>) || {}
