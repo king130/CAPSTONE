@@ -1,6 +1,35 @@
 /** API base URL, e.g. http://localhost:8000/api — or leave empty and use Vite proxy to /api */
 const TOKEN_KEY = 'capstone_auth_token'
 
+function normalizeApiBase(raw: unknown): string | null {
+  const value = String(raw ?? '').trim().replace(/\/$/, '')
+  if (!value) return null
+
+  if (value.startsWith('/')) return value
+  if (/^https?:\/\//i.test(value)) return value
+
+  const protocol =
+    typeof window !== 'undefined' && window.location?.protocol
+      ? window.location.protocol
+      : 'http:'
+  const hostname =
+    typeof window !== 'undefined' && window.location?.hostname
+      ? window.location.hostname
+      : '127.0.0.1'
+
+  if (/^:\d+(\/|$)/.test(value)) return `${protocol}//${hostname}${value}`
+  if (/^[^/]+:\d+(\/|$)/.test(value)) return `${protocol}//${value}`
+
+  if (
+    /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\d{1,3}(?:\.\d{1,3}){3})(\/|$)/.test(value) ||
+    /^[a-z0-9.-]+\.[a-z]{2,}(\/|$)/i.test(value)
+  ) {
+    return `${protocol}//${value}`
+  }
+
+  return value
+}
+
 function tryParseJson(text: string): Record<string, unknown> | null {
   if (!text.trim()) {
     return null
@@ -23,10 +52,8 @@ export function setToken(token: string | null): void {
 }
 
 export function apiBase(): string {
-  const b = import.meta.env.VITE_API_BASE_URL
-  if (b && String(b).trim() !== '') {
-    return String(b).replace(/\/$/, '')
-  }
+  const explicit = normalizeApiBase(import.meta.env.VITE_API_BASE_URL)
+  if (explicit) return explicit
 
   if (import.meta.env.DEV && typeof window !== 'undefined') {
     const hostname = window.location.hostname

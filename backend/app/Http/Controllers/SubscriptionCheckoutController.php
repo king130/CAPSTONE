@@ -3,8 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Models\Subscription;
+use App\Models\SubscriptionPlanDefinition;
 use App\Models\User;
 use App\Services\SubscriptionPlanService;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Http;
@@ -12,8 +14,114 @@ use Illuminate\Validation\Rule;
 
 class SubscriptionCheckoutController extends Controller
 {
+    /**
+     * Only allow known PayMongo checkout method identifiers.
+     *
+     * @var array<int, string>
+     */
+    private const ALLOWED_PAYMENT_METHOD_TYPES = [
+        'card',
+        'gcash',
+        'paymaya',
+        'grab_pay',
+        'billease',
+        'dob',
+    ];
+
     public function __construct(private readonly SubscriptionPlanService $subscriptionPlans)
     {
+    }
+
+    private function resolvePaymongoCaBundle(): string
+    {
+        $caBundle = trim((string) config('services.paymongo.ca_bundle', ''));
+        if ($caBundle === '') {
+            return '';
+        }
+
+        if (preg_match('/^[A-Za-z]:\\\\/', $caBundle) === 1 || str_starts_with($caBundle, '\\\\')) {
+            return $caBundle;
+        }
+
+        if (str_starts_with($caBundle, '/')) {
+            return $caBundle;
+        }
+
+        return base_path($caBundle);
+    }
+
+    private function paymongoHttp(string $secretKey)
+    {
+        $http = Http::withBasicAuth($secretKey, '')
+            ->acceptJson()
+            ->timeout(30)
+            ->retry(2, 200);
+
+        $verifySsl = (bool) config('services.paymongo.verify_ssl', true);
+        $caBundle = $this->resolvePaymongoCaBundle();
+
+        if (! $verifySsl && app()->environment('local')) {
+            return $http->withOptions(['verify' => false]);
+        }
+
+        if ($caBundle !== '') {
+            $http = $http->withOptions(['verify' => $caBundle]);
+        }
+
+        return $http;
+    }
+
+    private function paymongoSslErrorResponse(ConnectionException $exception)
+    {
+        $configured = trim((string) config('services.paymongo.ca_bundle', ''));
+        $resolved = $this->resolvePaymongoCaBundle();
+
+        $hints = [];
+        if ($configured === '') {
+            $hints[] = 'Set PAYMONGO_CA_BUNDLE to the path of a CA bundle file (cacert.pem).';
+        } else {
+            $hints[] = 'Verify PAYMONGO_CA_BUNDLE points to an existing cacert.pem file.';
+        }
+
+        $hints[] = 'Example (backend-relative): PAYMONGO_CA_BUNDLE=storage/certs/cacert.pem';
+        $hints[] = 'For local dev only, you can set PAYMONGO_VERIFY_SSL=false (not recommended).';
+
+        return response()->json([
+            'message' => 'PayMongo request failed due to an SSL certificate verification problem (cURL error 60).',
+            'details' => $exception->getMessage(),
+            'paymongo' => [
+                'caBundleConfigured' => $configured !== '' ? $configured : null,
+                'caBundleResolved' => $resolved !== '' ? $resolved : null,
+                'verifySsl' => (bool) config('services.paymongo.verify_ssl', true),
+            ],
+            'hints' => $hints,
+        ], Response::HTTP_BAD_GATEWAY);
+    }
+
+    /**
+     * Resolve payment methods safely.
+     * If nothing valid is configured, default to all allowed methods.
+     *
+     * @return array<int, string>
+     */
+    private function resolvePaymentMethodTypes(): array
+    {
+        $configuredMethods = config('services.paymongo.payment_methods', []);
+        if (! is_array($configuredMethods)) {
+            return self::ALLOWED_PAYMENT_METHOD_TYPES;
+        }
+
+        $sanitized = [];
+        foreach ($configuredMethods as $method) {
+            $normalized = strtolower(trim((string) $method));
+            if ($normalized === '' || ! in_array($normalized, self::ALLOWED_PAYMENT_METHOD_TYPES, true)) {
+                continue;
+            }
+
+            $sanitized[$normalized] = $normalized;
+        }
+
+        return $sanitized === [] ? self::ALLOWED_PAYMENT_METHOD_TYPES : array_values($sanitized);
     }
 
     public function create(Request $request)
@@ -24,9 +132,9 @@ class SubscriptionCheckoutController extends Controller
         $data = $request->validate([
             'requestId' => ['required', 'string', 'max:255'],
             'planId' => ['required', 'string', 'max:255'],
-            'planName' => ['required', 'string', 'max:255'],
+            'planName' => ['nullable', 'string', 'max:255'],
             'role' => ['required', Rule::in(['school', 'company'])],
-            'amount' => ['required', 'numeric', 'min:1'],
+            'amount' => ['nullable', 'numeric', 'min:1'],
             'billingCycle' => ['nullable', 'string', 'max:255'],
             'returnUrl' => ['nullable', 'url', 'max:2048'],
         ]);
@@ -45,6 +153,25 @@ class SubscriptionCheckoutController extends Controller
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
+        if ($organization->type !== $data['role']) {
+            return response()->json([
+                'message' => 'The requested plan role does not match your organization type.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $planSlug = strtolower(trim((string) $data['planId']));
+        /** @var SubscriptionPlanDefinition|null $planDefinition */
+        $planDefinition = SubscriptionPlanDefinition::query()
+            ->where('is_active', true)
+            ->where('slug', $planSlug)
+            ->first();
+
+        if (! $planDefinition) {
+            return response()->json([
+                'message' => 'Selected subscription plan is not available.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
         $subscription = $organization->subscription;
         if (! $subscription) {
             $subscription = Subscription::query()->create([
@@ -54,6 +181,15 @@ class SubscriptionCheckoutController extends Controller
             ]);
             $organization->subscription_id = $subscription->id;
             $organization->save();
+        }
+
+        $settings = $organization->settings ?? [];
+        $existingPending = $settings['pending_plan_change'] ?? null;
+        if (is_array($existingPending) && ($existingPending['requestId'] ?? null) !== $data['requestId']) {
+            return response()->json([
+                'message' => 'A pending checkout is already in progress for this organization.',
+                'pendingChange' => $existingPending,
+            ], Response::HTTP_CONFLICT);
         }
 
         $frontendBase = (string) ($data['returnUrl'] ?? config('app.frontend_url', config('app.url')));
@@ -67,51 +203,57 @@ class SubscriptionCheckoutController extends Controller
         ]);
 
         $name = $user->name ?: $organization->name;
-        $amountInCentavos = (int) round(((float) $data['amount']) * 100);
-        $paymentMethodTypes = array_values(array_filter(array_map(
-            static fn ($method) => trim((string) $method),
-            config('services.paymongo.payment_methods', ['card'])
-        )));
+        $billingCycle = strtolower(trim((string) ($data['billingCycle'] ?? $subscription->billing_cycle ?? 'monthly'))) ?: 'monthly';
 
-        $response = Http::withBasicAuth($paymongoSecretKey, '')
-            ->acceptJson()
-            ->post('https://api.paymongo.com/v1/checkout_sessions', [
+        $amount = $organization->type === 'school'
+            ? (float) $planDefinition->school_price
+            : (float) $planDefinition->company_price;
+        $amountInCentavos = (int) round($amount * 100);
+        $paymentMethodTypes = $this->resolvePaymentMethodTypes();
+        $checkoutAttributes = [
+            'billing' => [
+                'name' => $name,
+                'email' => $user->email,
+            ],
+            'description' => sprintf('%s subscription upgrade to %s', ucfirst($data['role']), $planDefinition->name),
+            'line_items' => [
+                [
+                    'currency' => 'PHP',
+                    'amount' => $amountInCentavos,
+                    'name' => sprintf('%s Plan', $planDefinition->name),
+                    'quantity' => 1,
+                    'description' => sprintf(
+                        '%s subscription billed %s',
+                        ucfirst($planDefinition->name),
+                        $billingCycle
+                    ),
+                ],
+            ],
+            'send_email_receipt' => false,
+            'show_description' => true,
+            'show_line_items' => true,
+            'success_url' => $successUrl,
+            'cancel_url' => $cancelUrl,
+            'metadata' => [
+                'request_id' => $data['requestId'],
+                'target_plan' => $planDefinition->slug,
+                'billing_cycle' => $billingCycle,
+                'organization_id' => (string) $organization->id,
+                'organization_type' => $organization->type,
+                'user_id' => (string) $user->id,
+            ],
+        ];
+        $checkoutAttributes['payment_method_types'] = $paymentMethodTypes;
+
+        try {
+            $response = $this->paymongoHttp($paymongoSecretKey)->post('https://api.paymongo.com/v1/checkout_sessions', [
                 'data' => [
-                    'attributes' => [
-                        'billing' => [
-                            'name' => $name,
-                            'email' => $user->email,
-                        ],
-                        'description' => sprintf('%s subscription upgrade to %s', ucfirst($data['role']), $data['planName']),
-                        'line_items' => [
-                            [
-                                'currency' => 'PHP',
-                                'amount' => $amountInCentavos,
-                                'name' => sprintf('%s Plan', $data['planName']),
-                                'quantity' => 1,
-                                'description' => sprintf(
-                                    '%s subscription billed %s',
-                                    ucfirst($data['planName']),
-                                    $data['billingCycle'] ?: ($subscription->billing_cycle ?: 'monthly')
-                                ),
-                            ],
-                        ],
-                        'payment_method_types' => $paymentMethodTypes !== [] ? $paymentMethodTypes : ['card'],
-                        'send_email_receipt' => false,
-                        'show_description' => true,
-                        'show_line_items' => true,
-                        'success_url' => $successUrl,
-                        'cancel_url' => $cancelUrl,
-                        'metadata' => [
-                            'request_id' => $data['requestId'],
-                            'target_plan' => $data['planId'],
-                            'organization_id' => (string) $organization->id,
-                            'organization_type' => $organization->type,
-                            'user_id' => (string) $user->id,
-                        ],
-                    ],
+                    'attributes' => $checkoutAttributes,
                 ],
             ]);
+        } catch (ConnectionException $exception) {
+            return $this->paymongoSslErrorResponse($exception);
+        }
 
         if ($response->failed()) {
             $message = $response->json('errors.0.detail')
@@ -130,20 +272,26 @@ class SubscriptionCheckoutController extends Controller
 
         $pending = [
             'requestId' => $data['requestId'],
-            'targetPlan' => $data['planId'],
-            'amount' => (float) $data['amount'],
+            'targetPlan' => (string) $planDefinition->slug,
+            'planName' => (string) $planDefinition->name,
+            'amount' => (float) $amount,
             'currency' => 'PHP',
+            'billingCycle' => $billingCycle,
             'createdAt' => now()->toIso8601String(),
             'checkoutSessionId' => (string) ($checkout['id'] ?? ''),
             'checkoutUrl' => (string) ($attributes['checkout_url'] ?? ''),
             'checkoutStatus' => (string) ($attributes['status'] ?? 'active'),
-            'paymentMethods' => $paymentMethodTypes !== [] ? $paymentMethodTypes : ['card'],
+            'paymentMethods' => $paymentMethodTypes,
         ];
 
-        $settings = $organization->settings ?? [];
         $settings['pending_plan_change'] = $pending;
         $organization->settings = $settings;
         $organization->save();
+
+        $subscription->status = 'pending';
+        $subscription->billing_cycle = $billingCycle;
+        $subscription->save();
+        $this->subscriptionPlans->syncOrganizationCompliance($organization->fresh(['subscription', 'owner']));
 
         return response()->json([
             'requestId' => $pending['requestId'],
@@ -185,9 +333,17 @@ class SubscriptionCheckoutController extends Controller
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
-        $response = Http::withBasicAuth($paymongoSecretKey, '')
-            ->acceptJson()
-            ->get('https://api.paymongo.com/v1/checkout_sessions/'.$data['checkoutSessionId']);
+        if (($pending['checkoutSessionId'] ?? null) !== $data['checkoutSessionId']) {
+            return response()->json([
+                'message' => 'The checkout session does not match the pending plan change.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        try {
+            $response = $this->paymongoHttp($paymongoSecretKey)->get('https://api.paymongo.com/v1/checkout_sessions/'.$data['checkoutSessionId']);
+        } catch (ConnectionException $exception) {
+            return $this->paymongoSslErrorResponse($exception);
+        }
 
         if ($response->failed()) {
             $message = $response->json('errors.0.detail')
@@ -202,8 +358,17 @@ class SubscriptionCheckoutController extends Controller
         $payments = is_array($attributes['payments'] ?? null) ? $attributes['payments'] : [];
         $latestPayment = $payments[0]['attributes'] ?? null;
         $paymentStatus = is_array($latestPayment) ? ($latestPayment['status'] ?? null) : null;
+        $checkoutStatus = strtolower(trim((string) ($attributes['status'] ?? 'active')));
 
-        if ($paymentStatus !== 'paid') {
+        $paid = false;
+        if ($paymentStatus === 'paid') {
+            $paid = true;
+        }
+        if (in_array($checkoutStatus, ['paid', 'succeeded', 'complete', 'completed'], true)) {
+            $paid = true;
+        }
+
+        if (! $paid) {
             $settings = $organization->settings ?? [];
             $pending['checkoutStatus'] = (string) ($attributes['status'] ?? 'active');
             $settings['pending_plan_change'] = $pending;
@@ -214,7 +379,9 @@ class SubscriptionCheckoutController extends Controller
                 'verified' => false,
                 'checkoutStatus' => $pending['checkoutStatus'],
                 'paymentStatus' => $paymentStatus,
-                'message' => 'Payment is not completed yet in PayMongo test mode.',
+                'message' => in_array($checkoutStatus, ['cancelled', 'canceled', 'expired'], true)
+                    ? 'The PayMongo checkout session was cancelled or expired. Start a new checkout to continue.'
+                    : 'Payment is not completed yet in PayMongo test mode.',
             ]);
         }
 
@@ -231,6 +398,9 @@ class SubscriptionCheckoutController extends Controller
 
         $subscription->plan = (string) ($pending['targetPlan'] ?? $subscription->plan);
         $subscription->status = 'active';
+        if (! empty($pending['billingCycle'])) {
+            $subscription->billing_cycle = (string) $pending['billingCycle'];
+        }
         $subscription->save();
 
         $settings = $organization->settings ?? [];

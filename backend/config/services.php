@@ -37,7 +37,9 @@ return [
 
     'paymongo' => [
         'secret_key' => env('PAYMONGO_SECRET_KEY'),
-        'payment_methods' => array_filter(array_map('trim', explode(',', (string) env('PAYMONGO_PAYMENT_METHODS', 'card')))),
+        'payment_methods' => array_filter(array_map('trim', explode(',', (string) env('PAYMONGO_PAYMENT_METHODS', '')))),
+        'ca_bundle' => env('PAYMONGO_CA_BUNDLE'),
+        'verify_ssl' => filter_var(env('PAYMONGO_VERIFY_SSL', true), FILTER_VALIDATE_BOOL),
     ],
 
 ];

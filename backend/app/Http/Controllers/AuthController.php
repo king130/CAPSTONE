@@ -14,10 +14,12 @@ use App\Models\User;
 use App\Services\OrganizationAccountProvisioner;
 use App\Services\SubscriptionPlanService;
 use App\Services\TenantRoleService;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
 use Illuminate\Validation\Rule;
 use Throwable;
 
@@ -48,6 +50,27 @@ class AuthController extends Controller
             $role = $data['role'] ?? 'guest';
             $profile = $data['profile'] ?? [];
 
+            if ($role === 'school' || $role === 'company') {
+                $created = $this->organizationAccountProvisioner->create([
+                    'fullName' => $data['fullName'],
+                    'email' => $data['email'],
+                    'password' => $data['password'],
+                    'role' => $role,
+                    'profile' => $profile,
+                    'subscriptionPlan' => $data['subscriptionPlan'] ?? 'free',
+                    'billingCycle' => $data['billingCycle'] ?? 'monthly',
+                ]);
+
+                $user = $created['user'];
+                $this->loadUserRelations($user);
+                $token = $user->createToken('spa')->plainTextToken;
+
+                return response()->json([
+                    'token' => $token,
+                    'user' => $this->formatUserProfile($user),
+                ], Response::HTTP_CREATED);
+            }
+
             $school = null;
             if ($role === 'student' && ! empty($data['schoolSubscriptionCode'])) {
                 $school = School::query()
@@ -72,20 +95,6 @@ class AuthController extends Controller
                     'must_change_password' => false,
                     'profile_setup_complete' => in_array($role, ['student', 'school', 'company'], true),
                 ]);
-
-                if ($role === 'school' || $role === 'company') {
-                    $created = $this->organizationAccountProvisioner->create([
-                        'fullName' => $data['fullName'],
-                        'email' => $data['email'],
-                        'password' => $data['password'],
-                        'role' => $role,
-                        'profile' => $profile,
-                        'subscriptionPlan' => $data['subscriptionPlan'] ?? 'free',
-                        'billingCycle' => $data['billingCycle'] ?? 'monthly',
-                    ]);
-
-                    $user = $created['user'];
-                }
 
                 if ($role === 'student') {
                     $schoolId = null;
@@ -129,6 +138,25 @@ class AuthController extends Controller
                 'token' => $token,
                 'user' => $this->formatUserProfile($user),
             ], Response::HTTP_CREATED);
+        } catch (ValidationException $e) {
+            throw $e;
+        } catch (QueryException $e) {
+            $sqlState = (string) ($e->errorInfo[0] ?? '');
+            $driverCode = (string) ($e->errorInfo[1] ?? '');
+            $message = (string) $e->getMessage();
+
+            if (
+                $sqlState === '23000' &&
+                ($driverCode === '1062' || str_contains($message, 'Integrity constraint violation')) &&
+                (str_contains($message, 'users_email_unique') || str_contains($message, 'Duplicate entry'))
+            ) {
+                return response()->json([
+                    'message' => 'Email address is already registered.',
+                    'errors' => ['email' => ['Email address is already registered.']],
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+
+            throw $e;
         } catch (Throwable $e) {
             report($e);
 
