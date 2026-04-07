@@ -37,9 +37,9 @@ export default defineConfig(({ mode }) => {
       },
     },
     resolve: {
-      alias: {
-        '@': fileURLToPath(new URL('./src', import.meta.url)),
-      },
+      alias: [
+        { find: '@', replacement: fileURLToPath(new URL('./src', import.meta.url)) },
+      ],
     },
     test: {
       globals: true,

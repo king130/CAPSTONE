@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\School;
 use App\Models\SchoolReport;
+use App\Models\OrganizationMembership;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -62,12 +63,46 @@ class SchoolReportController extends Controller
 
     private function resolveSchool(?User $user): School
     {
-        $school = $user?->school;
-        if (! $school || $user?->role !== 'school') {
+        if (! $user) {
+            abort(Response::HTTP_UNAUTHORIZED);
+        }
+
+        $user->loadMissing('school:id,user_id,organization_id,institution_name');
+        if ($user->role === 'school' && $user->school) {
+            return $user->school;
+        }
+
+        $membership = $user->primaryOrganizationMembership();
+        $organization = $membership?->organization;
+
+        if (! $membership || ! $organization || $organization->type !== 'school') {
             abort(Response::HTTP_FORBIDDEN, 'Only schools can manage reports.');
         }
 
+        $membership->loadMissing(['role.permissions', 'organization']);
+        if (! $this->canViewReports($membership)) {
+            abort(Response::HTTP_FORBIDDEN, 'Only authorized school staff can manage reports.');
+        }
+
+        $school = School::query()
+            ->where('organization_id', $organization->id)
+            ->first();
+
+        if (! $school) {
+            abort(Response::HTTP_UNPROCESSABLE_ENTITY, 'This school organization is missing a School record.');
+        }
+
         return $school;
+    }
+
+    private function canViewReports(OrganizationMembership $membership): bool
+    {
+        $permissions = $membership->effectivePermissions();
+
+        return in_array('view_reports', $permissions, true)
+            || in_array('org.view_reports', $permissions, true)
+            || in_array('manage_contracts', $permissions, true)
+            || in_array('org.manage_contracts', $permissions, true);
     }
 
     /**
