@@ -4,7 +4,7 @@ import { useAuthStore } from '@/stores/auth'
 import { buildProfileAvatarUrl } from '@/services/profileMedia'
 import { subscribeActiveInternships, getInternship, type InternshipRecord } from '@/services/internships'
 import { submitApplication } from '@/services/applications'
-import Swal from 'sweetalert2'
+import Swal from '@/services/sweetalert2'
 import { 
   BellIcon,
   MapPinIcon,

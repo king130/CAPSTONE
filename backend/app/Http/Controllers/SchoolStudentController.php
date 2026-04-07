@@ -288,13 +288,48 @@ class SchoolStudentController extends Controller
 
     private function resolveSchool(?User $user): School
     {
-        $user?->loadMissing('school:id,user_id,organization_id,institution_name,subscription_code,official_school_email');
-        $school = $user?->school;
-        if (! $school || $user?->role !== 'school') {
+        if (! $user) {
+            abort(Response::HTTP_UNAUTHORIZED);
+        }
+
+        $user->loadMissing('school:id,user_id,organization_id,institution_name,subscription_code,official_school_email');
+        if ($user->role === 'school' && $user->school) {
+            return $user->school;
+        }
+
+        $membership = $user->primaryOrganizationMembership();
+        $organization = $membership?->organization;
+
+        if (! $membership || ! $organization || $organization->type !== 'school') {
             abort(Response::HTTP_FORBIDDEN, 'Only schools can manage student roster data.');
         }
 
+        $membership->loadMissing(['role.permissions', 'organization']);
+
+        if (! $this->canManageRoster($membership)) {
+            abort(Response::HTTP_FORBIDDEN, 'Only authorized school administrators can manage student roster data.');
+        }
+
+        $school = School::query()
+            ->where('organization_id', $organization->id)
+            ->first();
+
+        if (! $school) {
+            abort(Response::HTTP_UNPROCESSABLE_ENTITY, 'This school organization is missing a School record.');
+        }
+
         return $school;
+    }
+
+    private function canManageRoster(OrganizationMembership $membership): bool
+    {
+        $permissions = $membership->effectivePermissions();
+
+        return in_array('manage_users', $permissions, true)
+            || in_array('org.manage_members', $permissions, true)
+            || in_array('org.manage_roles', $permissions, true)
+            || in_array('manage_roles', $permissions, true)
+            || in_array('manage_permissions', $permissions, true);
     }
 
     private function ensureStudentBelongsToSchool(Student $student, School $school): void

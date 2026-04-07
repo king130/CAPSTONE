@@ -218,7 +218,10 @@ class TenantRbacController extends Controller
         }
 
         $temporaryPassword = 'Temp@'.strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
-        $legacyRole = $tenant->type === 'school' ? 'student' : $tenant->type;
+        $legacyRole = $tenant->type;
+        if ($tenant->type === 'school') {
+            $legacyRole = in_array($role->slug, ['intern', 'student_member'], true) ? 'student' : 'school';
+        }
 
         $profile = $tenant->type === 'school'
             ? [

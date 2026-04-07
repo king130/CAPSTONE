@@ -137,8 +137,22 @@ class User extends Authenticatable
         }
 
         $membership = $this->primaryOrganizationMembership();
-        if ($membership?->organization?->type === 'school' && $this->student) {
-            return 'student';
+        if ($membership?->organization?->type === 'school') {
+            $membershipRole = $membership?->role?->slug;
+
+            if (in_array($membershipRole, ['intern', 'student_member'], true)) {
+                return 'student';
+            }
+
+            if (! $membershipRole && $this->student) {
+                return 'student';
+            }
+
+            return 'school';
+        }
+
+        if ($membership?->organization?->type === 'company') {
+            return 'company';
         }
 
         return $this->role === 'guest' ? null : $this->role;

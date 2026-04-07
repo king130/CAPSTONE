@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, watch } from 'vue'
-import Swal from 'sweetalert2'
+import Swal from '@/services/sweetalert2'
 import { BriefcaseBusiness, Building2, CheckCircle2, FilePlus2, Layers3, LoaderCircle, Paperclip, RefreshCcw } from 'lucide-vue-next'
 
 import Button from '@/components/ui/button/Button.vue'

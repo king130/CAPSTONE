@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import Swal from 'sweetalert2'
+import Swal from '@/services/sweetalert2'
 import {
   AtSign,
   BookOpenText,
