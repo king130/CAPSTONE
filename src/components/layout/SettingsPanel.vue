@@ -534,20 +534,20 @@ async function initializeOrganizationCourseTomSelect() {
       ? 'Select one or more school courses'
       : 'Select one or more accepted courses',
     render: {
-      optgroup_header(data, escape) {
-        return `<div class="ts-program-header">${escape(data.label)}</div>`
+      optgroup_header(data: { label?: string }, escape: (s: string) => string) {
+        return `<div class="ts-program-header">${escape(data.label ?? '')}</div>`
       },
-      option(data, escape) {
-        return `<div class="ts-course-option">${escape(data.text)}</div>`
+      option(data: { text?: string }, escape: (s: string) => string) {
+        return `<div class="ts-course-option">${escape(data.text ?? '')}</div>`
       },
-      item(data, escape) {
-        return `<div>${escape(data.text)}</div>`
+      item(data: { text?: string }, escape: (s: string) => string) {
+        return `<div>${escape(data.text ?? '')}</div>`
       },
-      option_create(data, escape) {
-        return `<div class="create">Add custom course: <strong>${escape(data.input)}</strong></div>`
+      option_create(data: { input?: string }, escape: (s: string) => string) {
+        return `<div class="create">Add custom course: <strong>${escape(data.input ?? '')}</strong></div>`
       },
     },
-    onChange(value) {
+    onChange(value: string | string[]) {
       const values = Array.isArray(value) ? value : String(value || '')
         .split(',')
         .map((item) => item.trim())
@@ -559,7 +559,7 @@ async function initializeOrganizationCourseTomSelect() {
       organizationCourseTomSelect?.setTextboxValue('')
       organizationCourseTomSelect?.refreshOptions(false)
     },
-    createFilter(input) {
+    createFilter(input: string) {
       return input.trim().length > 0
     },
   })

@@ -14,7 +14,7 @@ vi.mock('*.svg', () => ({
 }))
 
 // Mock public folder assets
-Object.defineProperty(global, 'import', {
+Object.defineProperty(globalThis, 'import', {
   value: {
     meta: {
       env: {

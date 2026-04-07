@@ -434,10 +434,12 @@ onMounted(() => {
         :key="stat.label"
         role="button"
         tabindex="0"
-        :class="[
-          'border-border/80 shadow-sm transition hover:shadow-md focus:outline-none focus:ring-2 focus:ring-sky-500',
-          activeTab === stat.key ? 'ring-2 ring-sky-500' : '',
-        ]"
+        :class="
+          [
+            'border-border/80 shadow-sm transition hover:shadow-md focus:outline-none focus:ring-2 focus:ring-sky-500',
+            activeTab === stat.key ? 'ring-2 ring-sky-500' : '',
+          ].join(' ')
+        "
         @click="selectTab(stat.key)"
         @keydown.enter.prevent="selectTab(stat.key)"
         @keydown.space.prevent="selectTab(stat.key)"

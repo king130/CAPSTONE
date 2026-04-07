@@ -12,7 +12,8 @@ export type CheckoutVerificationResult = {
 }
 
 function syncAuthUser(raw: UserProfile | Record<string, unknown>): UserProfile {
-  const profile = 'uid' in raw ? mapApiUserToProfile(raw as Record<string, unknown>) : (raw as UserProfile)
+  const profile =
+    'uid' in raw ? mapApiUserToProfile(raw as Record<string, unknown>) : (raw as unknown as UserProfile)
   const authStore = useAuthStore()
   authStore.setUserProfile(profile)
   return profile

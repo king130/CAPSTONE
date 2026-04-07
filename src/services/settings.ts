@@ -10,7 +10,7 @@ export interface ProfileSettings {
   phone: string
   acceptedCourses?: string
   officialSchoolEmail?: string
-  [key: string]: string
+  [key: string]: string | undefined
 }
 
 export interface PasswordForm {

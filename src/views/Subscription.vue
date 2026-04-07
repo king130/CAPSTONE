@@ -94,8 +94,9 @@ function goBack() {
   void router.push('/guest')
 }
 
-function formatLimit(label: string, value: number): string {
-  const display = value >= 999 ? 'Unlimited' : value.toLocaleString()
+function formatLimit(label: string, value: number | undefined): string {
+  const n = value ?? 0
+  const display = n >= 999 ? 'Unlimited' : n.toLocaleString()
   return `${label}: ${display}`
 }
 
@@ -134,8 +135,13 @@ async function selectPlan(planName: PlanName, price: string) {
     return
   }
 
+  const role = selectedRole.value
+  if (!role) {
+    return
+  }
+
   void router.push({
-    path: registerPathForRole(selectedRole.value),
+    path: registerPathForRole(role),
     query: {
       plan: planName.toLowerCase(),
       billingCycle: 'monthly',
@@ -262,7 +268,7 @@ async function selectPlan(planName: PlanName, price: string) {
             :key="plan.name"
             class="overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white shadow-sm transition duration-200 hover:-translate-y-1 hover:shadow-[0_22px_55px_-28px_rgba(15,23,42,0.35)]"
             :class="[
-              plan.name === 'Standard' ? ['ring-2', roleInfo.ring] : '',
+              plan.name === 'Standard' ? `ring-2 ${roleInfo.ring}` : '',
               selectedPlan === plan.name ? 'border-emerald-200 ring-2 ring-emerald-200' : '',
             ]"
           >

@@ -207,9 +207,10 @@ const generatedEmail = computed(() => {
 const studentOverage = computed(() =>
   authStore.user?.subscription?.overages?.items?.find((item) => item.key === 'school.students') ?? null,
 )
-const selectedEmailFormat = computed(
-  () => EMAIL_FORMAT_OPTIONS.find((option) => option.value === studentForm.value.emailFormat) ?? EMAIL_FORMAT_OPTIONS[0],
-)
+const selectedEmailFormat = computed(() => {
+  const found = EMAIL_FORMAT_OPTIONS.find((option) => option.value === studentForm.value.emailFormat)
+  return found ?? EMAIL_FORMAT_OPTIONS[0]!
+})
 const selectedYearLevelLabel = computed(() => {
   if (studentForm.value.yearLevelChoice === CUSTOM_YEAR_LEVEL_VALUE) {
     return studentForm.value.customYearLevel || 'Other'

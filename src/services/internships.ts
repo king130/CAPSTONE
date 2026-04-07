@@ -12,9 +12,7 @@ export interface InternshipRecord {
   industry?: string
   schoolId?: string
   schoolName?: string
-  hostType?: 'company' | 'school'
   hostId?: string
-  hostName?: string
   location: string
   type: string
   duration: string

@@ -1,4 +1,4 @@
-import SwalBase from 'sweetalert2/dist/sweetalert2.esm.js'
+import SwalBase from 'sweetalert2'
 
 const Swal = SwalBase.mixin({
   buttonsStyling: false,
@@ -20,7 +20,6 @@ const Swal = SwalBase.mixin({
     denyButton: 'capstone-swal-deny',
     actions: 'capstone-swal-actions',
     input: 'capstone-swal-input',
-    select: 'capstone-swal-select',
   },
 })
 

@@ -88,16 +88,15 @@ const summaryMetrics = computed(() => {
     return []
   }
 
-  const roleLimits = current.limits[props.role]
   return props.role === 'school'
     ? [
-        { label: 'Coordinator Seats', value: formatLimit(roleLimits.coordinators), hint: 'active coordinators allowed' },
-        { label: 'Student Capacity', value: formatLimit(roleLimits.students), hint: 'managed intern accounts' },
+        { label: 'Coordinator Seats', value: formatLimit(current.limits.school.coordinators), hint: 'active coordinators allowed' },
+        { label: 'Student Capacity', value: formatLimit(current.limits.school.students), hint: 'managed intern accounts' },
         { label: 'Plan Status', value: capitalize(currentSubscription.value?.status ?? 'inactive'), hint: 'workspace access state' },
       ]
     : [
-        { label: 'Team Seats', value: formatLimit(roleLimits.accounts), hint: 'company users allowed' },
-        { label: 'Internship Posts', value: formatLimit(roleLimits.internships), hint: 'active opportunities capacity' },
+        { label: 'Team Seats', value: formatLimit(current.limits.company.accounts), hint: 'company users allowed' },
+        { label: 'Internship Posts', value: formatLimit(current.limits.company.internships), hint: 'active opportunities capacity' },
         { label: 'Plan Status', value: capitalize(currentSubscription.value?.status ?? 'inactive'), hint: 'billing state' },
       ]
 })
@@ -431,13 +430,17 @@ function reopenCheckout() {
           v-for="plan in plans"
           :key="plan.id"
           class="relative overflow-hidden border-slate-200 shadow-sm transition duration-200 hover:-translate-y-1 hover:shadow-lg"
-          :class="[
-            plan.id === recommendedPlanId ? ['ring-2', roleTheme.ring] : '',
-            isCurrentPlan(plan) ? 'border-emerald-200 ring-2 ring-emerald-200' : '',
-            isPendingPlan(plan) ? 'border-amber-200 ring-2 ring-amber-200' : '',
-          ]"
+          :class="
+            [
+              plan.id === recommendedPlanId ? `ring-2 ${roleTheme.ring}` : '',
+              isCurrentPlan(plan) ? 'border-emerald-200 ring-2 ring-emerald-200' : '',
+              isPendingPlan(plan) ? 'border-amber-200 ring-2 ring-amber-200' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')
+          "
         >
-          <div :class="['h-1.5 bg-gradient-to-r', roleTheme.accent]" />
+          <div :class="`h-1.5 bg-gradient-to-r ${roleTheme.accent}`" />
           <CardHeader class="space-y-4 p-6">
             <div class="flex items-start justify-between gap-3">
               <div>

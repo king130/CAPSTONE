@@ -130,7 +130,7 @@ const applicationData = ref({
 })
 
 // Internships from Firebase
-type InternshipDisplay = InternshipRecord & {
+type InternshipDisplay = Omit<InternshipRecord, 'schedule'> & {
   company?: string
   hostLabel?: string
   hostTypeLabel?: string
