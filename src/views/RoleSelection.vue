@@ -5,7 +5,7 @@ import { useAuthStore } from '@/stores/auth'
 import { apiFetch } from '@/services/http'
 import { mapApiUserToProfile } from '@/services/auth'
 import { ensurePublicProfile } from '@/services/profilesPublic'
-import Swal from '@/services/sweetalert2'
+import Swal from '@/services/swal'
 
 const router = useRouter()
 const authStore = useAuthStore()

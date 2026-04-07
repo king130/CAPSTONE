@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import Swal from '@/services/sweetalert2'
+import Swal from '@/services/swal'
 import { useAuthStore } from '@/stores/auth'
 import {
   createOrganizationMember,

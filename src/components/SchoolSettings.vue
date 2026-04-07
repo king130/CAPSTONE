@@ -6,7 +6,7 @@ import { apiFetch } from '@/services/http'
 import { mapApiUserToProfile, updateCurrentUserPassword } from '@/services/auth'
 import { buildProfileAvatarUrl, uploadProfileAvatar } from '@/services/profileMedia'
 import { ensurePublicProfile } from '@/services/profilesPublic'
-import Swal from '@/services/sweetalert2'
+import Swal from '@/services/swal'
 import { BellIcon } from '@heroicons/vue/24/outline'
 
 const authStore = useAuthStore()

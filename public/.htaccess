@@ -1,0 +1,6 @@
+# Apache (e.g. Hostinger): ensure module scripts get a JavaScript MIME type.
+# Without this, some hosts serve .js as text/plain and the browser rejects type="module".
+<IfModule mod_mime.c>
+  AddType application/javascript js mjs
+  AddType application/wasm wasm
+</IfModule>
