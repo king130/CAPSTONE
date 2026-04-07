@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AccountSetupToken;
 use App\Models\Company;
 use App\Models\Organization;
 use App\Models\OrganizationMembership;
@@ -9,178 +10,167 @@ use App\Models\Permission;
 use App\Models\Role;
 use App\Models\School;
 use App\Models\Student;
-use App\Models\Subscription;
 use App\Models\User;
+use App\Services\OrganizationAccountProvisioner;
+use App\Services\SubscriptionPlanService;
+use App\Services\TenantRoleService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
+use Throwable;
 
 class AuthController extends Controller
 {
+    public function __construct(
+        private readonly SubscriptionPlanService $subscriptionPlans,
+        private readonly TenantRoleService $tenantRoleService,
+        private readonly OrganizationAccountProvisioner $organizationAccountProvisioner,
+    )
+    {
+    }
+
     public function register(Request $request)
     {
-        $data = $request->validate([
-            'email' => ['required', 'email', 'max:255', 'unique:users,email'],
-            'password' => ['required', 'string', 'min:8'],
-            'fullName' => ['required', 'string', 'max:255'],
-            'role' => ['nullable', Rule::in(['student', 'school', 'company', 'guest', null])],
-            'profile' => ['nullable', 'array'],
-            'subscriptionPlan' => ['nullable', 'string'],
-            'billingCycle' => ['nullable', 'string'],
-            'schoolSubscriptionCode' => ['nullable', 'string'],
-        ]);
-
-        $role = $data['role'] ?? 'guest';
-        $profile = $data['profile'] ?? [];
-
-        $school = null;
-        if ($role === 'student' && ! empty($data['schoolSubscriptionCode'])) {
-            $school = School::query()
-                ->with('organization')
-                ->where('subscription_code', $data['schoolSubscriptionCode'])
-                ->whereHas('user', fn ($q) => $q->where('is_active', true))
-                ->first();
-            if (! $school) {
-                return response()->json(['message' => 'School subscription code is invalid or inactive.'], Response::HTTP_UNPROCESSABLE_ENTITY);
-            }
-        }
-
-        $user = DB::transaction(function () use ($data, $role, $profile, $school) {
-            $user = User::query()->create([
-                'name' => trim($data['fullName']),
-                'email' => strtolower(trim($data['email'])),
-                'password' => $data['password'],
-                'role' => $role === null ? 'guest' : $role,
-                'profile' => $profile,
-                'is_active' => true,
-                'is_temporary' => false,
-                'must_change_password' => false,
-                'profile_setup_complete' => in_array($role, ['student', 'school', 'company'], true),
+        try {
+            $data = $request->validate([
+                'email' => ['required', 'email', 'max:255', 'unique:users,email'],
+                'password' => ['required', 'string', 'min:8'],
+                'fullName' => ['required', 'string', 'max:255'],
+                'role' => ['nullable', Rule::in(['student', 'school', 'company', 'guest', null])],
+                'profile' => ['nullable', 'array'],
+                'subscriptionPlan' => ['nullable', 'string'],
+                'billingCycle' => ['nullable', 'string'],
+                'schoolSubscriptionCode' => ['nullable', 'string'],
             ]);
 
-            if ($role === 'school' || $role === 'company') {
-                $sub = Subscription::query()->create([
-                    'plan' => $data['subscriptionPlan'] ?? 'free',
-                    'status' => 'pending',
-                    'billing_cycle' => $data['billingCycle'] ?? 'monthly',
-                ]);
+            $role = $data['role'] ?? 'guest';
+            $profile = $data['profile'] ?? [];
 
-                $organization = Organization::query()->create([
-                    'name' => $role === 'school'
-                        ? (string) ($profile['institutionName'] ?? $user->name)
-                        : (string) ($profile['companyName'] ?? $user->name),
-                    'type' => $role,
-                    'subscription_id' => $sub->id,
-                    'owner_user_id' => $user->id,
-                    'settings' => [
-                        'purchase_confirmation_required' => true,
-                        'delegated_admin_enabled' => true,
-                    ],
+            $school = null;
+            if ($role === 'student' && ! empty($data['schoolSubscriptionCode'])) {
+                $school = School::query()
+                    ->with('organization')
+                    ->where('subscription_code', $data['schoolSubscriptionCode'])
+                    ->whereHas('user', fn ($q) => $q->where('is_active', true))
+                    ->first();
+                if (! $school) {
+                    return response()->json(['message' => 'School subscription code is invalid or inactive.'], Response::HTTP_UNPROCESSABLE_ENTITY);
+                }
+            }
+
+            $user = DB::transaction(function () use ($data, $role, $profile, $school) {
+                $user = User::query()->create([
+                    'name' => trim($data['fullName']),
+                    'email' => strtolower(trim($data['email'])),
+                    'password' => $data['password'],
+                    'role' => $role === null ? 'guest' : $role,
+                    'profile' => $profile,
                     'is_active' => true,
+                    'is_temporary' => false,
+                    'must_change_password' => false,
+                    'profile_setup_complete' => in_array($role, ['student', 'school', 'company'], true),
                 ]);
 
-                if ($role === 'school') {
-                    $schoolRecord = School::query()->create([
-                        'user_id' => $user->id,
-                        'subscription_id' => $sub->id,
-                        'organization_id' => $organization->id,
-                        'institution_name' => (string) ($profile['institutionName'] ?? $user->name),
-                        'subscription_code' => strtoupper(substr(bin2hex(random_bytes(3)), 0, 6).'-'.substr((string) time(), -4)),
+                if ($role === 'school' || $role === 'company') {
+                    $created = $this->organizationAccountProvisioner->create([
+                        'fullName' => $data['fullName'],
+                        'email' => $data['email'],
+                        'password' => $data['password'],
+                        'role' => $role,
+                        'profile' => $profile,
+                        'subscriptionPlan' => $data['subscriptionPlan'] ?? 'free',
+                        'billingCycle' => $data['billingCycle'] ?? 'monthly',
                     ]);
 
-                    $this->attachOrganizationMembership(
-                        $user,
-                        $organization,
-                        'school_admin',
-                        (string) ($profile['position'] ?? 'Primary Admin')
-                    );
-                } else {
-                    Company::query()->create([
+                    $user = $created['user'];
+                }
+
+                if ($role === 'student') {
+                    $schoolId = null;
+                    $organizationId = null;
+                    if (! empty($profile['schoolId'])) {
+                        $schoolId = (int) $profile['schoolId'];
+                    }
+                    if ($school) {
+                        $schoolId = $school->id;
+                        $organizationId = $school->organization_id;
+                    }
+                    Student::query()->create([
                         'user_id' => $user->id,
-                        'subscription_id' => $sub->id,
-                        'organization_id' => $organization->id,
-                        'company_name' => (string) ($profile['companyName'] ?? $user->name),
+                        'school_id' => $schoolId,
+                        'organization_id' => $organizationId,
+                        'student_id_number' => $profile['studentNumber'] ?? $profile['studentId'] ?? null,
+                        'school_name' => $profile['schoolName'] ?? null,
+                        'school_subscription_code' => $data['schoolSubscriptionCode'] ?? null,
+                        'course' => $profile['course'] ?? null,
+                        'year_level' => $profile['yearLevel'] ?? null,
                     ]);
 
-                    $this->attachOrganizationMembership(
-                        $user,
-                        $organization,
-                        'company_admin',
-                        (string) ($profile['contactPersonTitle'] ?? 'Primary Admin')
-                    );
+                    if ($school?->organization) {
+                        $this->tenantRoleService->ensureDefaultRoles($school->organization);
+                        $this->attachOrganizationMembership(
+                            $user,
+                            $school->organization,
+                            'intern',
+                            (string) ($profile['course'] ?? 'Student')
+                        );
+                    }
                 }
-            }
 
-            if ($role === 'student') {
-                $schoolId = null;
-                $organizationId = null;
-                if (! empty($profile['schoolId'])) {
-                    $schoolId = (int) $profile['schoolId'];
-                }
-                if ($school) {
-                    $schoolId = $school->id;
-                    $organizationId = $school->organization_id;
-                }
-                Student::query()->create([
-                    'user_id' => $user->id,
-                    'school_id' => $schoolId,
-                    'organization_id' => $organizationId,
-                    'student_id_number' => $profile['studentNumber'] ?? $profile['studentId'] ?? null,
-                    'school_name' => $profile['schoolName'] ?? null,
-                    'school_subscription_code' => $data['schoolSubscriptionCode'] ?? null,
-                    'course' => $profile['course'] ?? null,
-                    'year_level' => $profile['yearLevel'] ?? null,
-                ]);
+                return $user;
+            });
 
-                if ($school?->organization) {
-                    $this->attachOrganizationMembership(
-                        $user,
-                        $school->organization,
-                        'student_member',
-                        (string) ($profile['course'] ?? 'Student')
-                    );
-                }
-            }
+            $this->loadUserRelations($user);
+            $token = $user->createToken('spa')->plainTextToken;
 
-            return $user;
-        });
+            return response()->json([
+                'token' => $token,
+                'user' => $this->formatUserProfile($user),
+            ], Response::HTTP_CREATED);
+        } catch (Throwable $e) {
+            report($e);
 
-        $this->loadUserRelations($user);
-        $token = $user->createToken('spa')->plainTextToken;
-
-        return response()->json([
-            'token' => $token,
-            'user' => $this->formatUserProfile($user),
-        ], Response::HTTP_CREATED);
+            return response()->json([
+                'message' => 'Registration is temporarily unavailable. Please try again later.',
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
     }
 
     public function login(Request $request)
     {
-        $credentials = $request->validate([
-            'email' => ['required', 'email'],
-            'password' => ['required', 'string'],
-        ]);
+        try {
+            $credentials = $request->validate([
+                'email' => ['required', 'email'],
+                'password' => ['required', 'string'],
+            ]);
 
-        $email = strtolower(trim($credentials['email']));
+            $email = strtolower(trim($credentials['email']));
 
-        $user = User::query()->where('email', $email)->first();
-        if (! $user || ! Hash::check($credentials['password'], $user->password)) {
-            return response()->json(['message' => 'Invalid credentials.'], Response::HTTP_UNAUTHORIZED);
+            $user = User::query()->where('email', $email)->first();
+            if (! $user || ! Hash::check($credentials['password'], $user->password)) {
+                return response()->json(['message' => 'Invalid credentials.'], Response::HTTP_UNAUTHORIZED);
+            }
+
+            if (! $user->is_active) {
+                return response()->json(['message' => 'Account Disabled'], Response::HTTP_FORBIDDEN);
+            }
+
+            $this->loadUserRelations($user);
+            $token = $user->createToken('spa')->plainTextToken;
+
+            return response()->json([
+                'token' => $token,
+                'user' => $this->formatUserProfile($user),
+            ]);
+        } catch (Throwable $e) {
+            report($e);
+
+            return response()->json([
+                'message' => 'Login is temporarily unavailable. Please try again later.',
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
-
-        if (! $user->is_active) {
-            return response()->json(['message' => 'Account Disabled'], Response::HTTP_FORBIDDEN);
-        }
-
-        $this->loadUserRelations($user);
-        $token = $user->createToken('spa')->plainTextToken;
-
-        return response()->json([
-            'token' => $token,
-            'user' => $this->formatUserProfile($user),
-        ]);
     }
 
     public function logout(Request $request)
@@ -213,6 +203,72 @@ class AuthController extends Controller
         return response()->json(['message' => 'Password updated']);
     }
 
+    public function validateAccountSetupToken(Request $request)
+    {
+        $data = $request->validate([
+            'token' => ['required', 'string'],
+        ]);
+
+        $setupToken = $this->findValidAccountSetupToken($data['token']);
+        if (! $setupToken) {
+            return response()->json([
+                'message' => 'That account setup link is invalid or has expired.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $user = $setupToken->user;
+
+        return response()->json([
+            'data' => [
+                'email' => $user->email,
+                'displayName' => $user->name,
+                'expiresAt' => $setupToken->expires_at?->toIso8601String(),
+            ],
+        ]);
+    }
+
+    public function completeAccountSetup(Request $request)
+    {
+        $data = $request->validate([
+            'token' => ['required', 'string'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
+        ]);
+
+        $setupToken = $this->findValidAccountSetupToken($data['token']);
+        if (! $setupToken) {
+            return response()->json([
+                'message' => 'That account setup link is invalid or has expired.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $user = DB::transaction(function () use ($data, $setupToken) {
+            $setupToken->refresh();
+            $user = $setupToken->user()->firstOrFail();
+
+            $user->password = $data['password'];
+            $user->must_change_password = false;
+            $user->is_temporary = false;
+            $user->profile_setup_complete = true;
+            $user->email_verified_at = now();
+            $user->save();
+
+            AccountSetupToken::query()
+                ->where('user_id', $user->id)
+                ->whereNull('used_at')
+                ->update(['used_at' => now()]);
+
+            return $user;
+        });
+
+        $this->loadUserRelations($user);
+        $token = $user->createToken('spa')->plainTextToken;
+
+        return response()->json([
+            'token' => $token,
+            'user' => $this->formatUserProfile($user),
+        ]);
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -222,9 +278,12 @@ class AuthController extends Controller
         $primaryMembership = $user->primaryOrganizationMembership();
         $activeOrganization = $primaryMembership?->organization;
         $subscription = $activeOrganization?->subscription;
+        $planDefinition = $activeOrganization ? $this->subscriptionPlans->getPlanForOrganization($activeOrganization) : null;
+        $overages = $activeOrganization?->settings['subscription_overages'] ?? ['requiresAction' => false, 'items' => []];
 
         if ($user->relationLoaded('student') && $user->student) {
             $s = $user->student;
+            $profile['internCode'] = $s->intern_code;
             $profile['studentNumber'] = $s->student_id_number;
             $profile['studentId'] = $s->student_id_number;
             $profile['schoolName'] = $s->school_name;
@@ -314,6 +373,8 @@ class AuthController extends Controller
                 'status' => $subscription->status,
                 'subscriptionCode' => $user->school?->subscription_code,
                 'pendingChange' => $activeOrganization?->settings['pending_plan_change'] ?? null,
+                'limits' => $planDefinition ? $this->subscriptionPlans->serializePlan($planDefinition)['limits'] : null,
+                'overages' => $overages,
             ] : null,
             'createdAt' => $user->created_at?->toIso8601String(),
             'updatedAt' => $user->updated_at?->toIso8601String(),
@@ -332,9 +393,38 @@ class AuthController extends Controller
         ]);
     }
 
+    private function findValidAccountSetupToken(string $plainToken): ?AccountSetupToken
+    {
+        $tokenHash = hash('sha256', $plainToken);
+
+        return AccountSetupToken::query()
+            ->with('user')
+            ->where('token_hash', $tokenHash)
+            ->whereNull('used_at')
+            ->where('expires_at', '>', now())
+            ->first();
+    }
+
     private function attachOrganizationMembership(User $user, Organization $organization, string $roleSlug, string $title = ''): void
     {
-        $role = Role::query()->where('slug', $roleSlug)->first();
+        $this->tenantRoleService->ensureDefaultRoles($organization);
+
+        $role = Role::query()
+            ->where('tenant_id', $organization->id)
+            ->where('slug', $roleSlug)
+            ->first();
+
+        if (! $role && $roleSlug === 'intern') {
+            $role = Role::query()
+                ->where('tenant_id', $organization->id)
+                ->where('slug', 'student_member')
+                ->first();
+        }
+
+        if (! $role) {
+            $role = Role::query()->where('slug', $roleSlug)->whereNull('tenant_id')->first();
+        }
+
         if (! $role) {
             return;
         }
@@ -350,5 +440,10 @@ class AuthController extends Controller
                 'title' => $title ?: $role->name,
             ]
         );
+
+        $user->forceFill([
+            'tenant_id' => $organization->id,
+            'role_id' => $role->id,
+        ])->save();
     }
 }

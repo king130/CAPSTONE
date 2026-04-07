@@ -1,4 +1,5 @@
 import { apiFetch } from './http'
+import { createSharedPollingResource } from './sharedPolling'
 
 export interface ContractRecord {
   id: string
@@ -85,26 +86,16 @@ export interface CreateContractPayload {
   files?: File[]
 }
 
-function poll(load: () => Promise<void>, intervalMs: number): () => void {
-  let cancelled = false
-  load()
-  const id = window.setInterval(() => {
-    if (!cancelled) load()
-  }, intervalMs)
-  const refresh = () => {
-    if (!cancelled) load()
-  }
-  window.addEventListener('contracts:changed', refresh)
-  return () => {
-    cancelled = true
-    clearInterval(id)
-    window.removeEventListener('contracts:changed', refresh)
-  }
+async function loadAllContracts(): Promise<ContractRecord[]> {
+  const res = await apiFetch<{ data: ContractRecord[] }>('/contracts')
+  return res.data ?? []
 }
 
-function emitContractsChanged() {
-  window.dispatchEvent(new CustomEvent('contracts:changed'))
-}
+const contractsResource = createSharedPollingResource<ContractRecord[]>({
+  intervalMs: 15000,
+  load: loadAllContracts,
+  initialValue: [],
+})
 
 export async function createContractRequest(payload: CreateContractPayload): Promise<ContractRecord> {
   const form = new FormData()
@@ -159,7 +150,7 @@ export async function createContractRequest(payload: CreateContractPayload): Pro
     method: 'POST',
     body: form,
   })
-  emitContractsChanged()
+  await contractsResource.refresh()
   return res.data
 }
 
@@ -167,35 +158,25 @@ export function subscribeCompanyContracts(
   companyId: string,
   callback: (items: ContractRecord[]) => void
 ): () => void {
-  return poll(async () => {
-    try {
-      const res = await apiFetch<{ data: ContractRecord[] }>('/contracts')
-      callback((res.data ?? []).filter((item) => item.companyId === companyId))
-    } catch {
-      callback([])
-    }
-  }, 15000)
+  return contractsResource.subscribe((items) => {
+    callback(items.filter((item) => item.companyId === companyId))
+  })
 }
 
 export function subscribeSchoolContracts(
   schoolId: string,
   callback: (items: ContractRecord[]) => void
 ): () => void {
-  return poll(async () => {
-    try {
-      const res = await apiFetch<{ data: ContractRecord[] }>('/contracts')
-      callback((res.data ?? []).filter((item) => item.schoolId === schoolId))
-    } catch {
-      callback([])
-    }
-  }, 15000)
+  return contractsResource.subscribe((items) => {
+    callback(items.filter((item) => item.schoolId === schoolId))
+  })
 }
 
 export async function acceptContract(contractId: string): Promise<void> {
   await apiFetch(`/contracts/${contractId}/accept`, {
     method: 'PATCH',
   })
-  emitContractsChanged()
+  await contractsResource.refresh()
 }
 
 export async function rejectContract(contractId: string, reason?: string): Promise<void> {
@@ -203,7 +184,7 @@ export async function rejectContract(contractId: string, reason?: string): Promi
     method: 'PATCH',
     body: JSON.stringify({ reason }),
   })
-  emitContractsChanged()
+  await contractsResource.refresh()
 }
 
 export async function cancelContract(
@@ -215,5 +196,5 @@ export async function cancelContract(
     method: 'PATCH',
     body: JSON.stringify({ cancelledByRole, reason }),
   })
-  emitContractsChanged()
+  await contractsResource.refresh()
 }

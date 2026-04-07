@@ -13,6 +13,14 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [vue(), ...(enableVueDevTools ? [vueDevTools()] : [])],
     server: {
+      host: '127.0.0.1',
+      port: 5173,
+      strictPort: true,
+      hmr: {
+        host: '127.0.0.1',
+        port: 5173,
+        protocol: 'ws',
+      },
       proxy: {
         '/api': {
           target: 'http://127.0.0.1:8000',

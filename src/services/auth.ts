@@ -1,3 +1,5 @@
+import axios from 'axios'
+import apiClient from './apiClient'
 import { apiFetch, setToken, getToken } from './http'
 
 export type UserRole = 'student' | 'company' | 'school' | 'admin' | 'guest' | null
@@ -62,6 +64,23 @@ export interface UserProfile {
     billingCycle: string
     status: 'active' | 'pending' | 'inactive'
     subscriptionCode?: string
+    limits?: {
+      school?: { coordinators: number; students: number }
+      company?: { accounts: number; internships: number }
+    } | null
+    overages?: {
+      requiresAction: boolean
+      items: Array<{
+        key: string
+        scope: string
+        resource: string
+        label: string
+        limit: number
+        current: number
+        excess: number
+        message: string
+      }>
+    } | null
     pendingChange?: {
       requestId: string
       targetPlan: string
@@ -87,6 +106,29 @@ export interface UserProfile {
 interface AuthResponse {
   token: string
   user: Record<string, unknown>
+}
+
+function getAuthErrorMessage(
+  error: unknown,
+  fallback: string
+): string {
+  if (!axios.isAxiosError(error)) {
+    return fallback
+  }
+
+  const responseData = error.response?.data as
+    | { message?: string; errors?: Record<string, string[] | string> }
+    | undefined
+
+  const firstValidationMessage = responseData?.errors
+    ? Object.values(responseData.errors)[0]
+    : undefined
+
+  return (
+    responseData?.message ||
+    (Array.isArray(firstValidationMessage) ? firstValidationMessage[0] : firstValidationMessage) ||
+    fallback
+  )
 }
 
 export function mapApiUserToProfile(raw: Record<string, unknown>): UserProfile {
@@ -117,37 +159,49 @@ export async function validateSchoolSubscription(_code: string): Promise<string 
 }
 
 export async function registerUser(payload: RegisterPayload): Promise<UserProfile> {
-  const body = {
-    email: payload.email,
-    password: payload.password,
-    fullName: payload.fullName,
-    role: payload.role ?? null,
-    profile: payload.profile ?? {},
-    subscriptionPlan: payload.subscriptionPlan,
-    billingCycle: payload.billingCycle,
-    schoolSubscriptionCode: payload.schoolSubscriptionCode,
+  try {
+    const { data } = await apiClient.post<AuthResponse>('/auth/register', {
+      email: payload.email,
+      password: payload.password,
+      fullName: payload.fullName,
+      role: payload.role ?? null,
+      profile: payload.profile ?? {},
+      subscriptionPlan: payload.subscriptionPlan,
+      billingCycle: payload.billingCycle,
+      schoolSubscriptionCode: payload.schoolSubscriptionCode,
+    })
+    setToken(data.token)
+    return mapApiUserToProfile(data.user as Record<string, unknown>)
+  } catch (error) {
+    throw new Error(
+      getAuthErrorMessage(error, 'Unable to create your account right now. Please try again later.')
+    )
   }
-  const res = await apiFetch<AuthResponse>('/auth/register', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  })
-  setToken(res.token)
-  return mapApiUserToProfile(res.user as Record<string, unknown>)
 }
 
 export async function loginUser(email: string, password: string): Promise<UserProfile> {
-  const res = await apiFetch<AuthResponse>('/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
-  })
-  setToken(res.token)
-  return mapApiUserToProfile(res.user as Record<string, unknown>)
+  try {
+    const { data } = await apiClient.post<AuthResponse>('/auth/login', {
+      email: email.trim().toLowerCase(),
+      password,
+    })
+    setToken(data.token)
+    return mapApiUserToProfile(data.user as Record<string, unknown>)
+  } catch (error) {
+    throw new Error(
+      getAuthErrorMessage(error, 'Unable to sign in right now. Please try again later.')
+    )
+  }
 }
 
 export async function logoutUser(): Promise<void> {
   try {
     if (getToken()) {
       await apiFetch('/auth/logout', { method: 'POST', body: JSON.stringify({}) })
+    }
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== 'Unauthenticated.') {
+      throw error
     }
   } finally {
     setToken(null)
@@ -173,6 +227,33 @@ export async function updateCurrentUserPassword(newPassword: string): Promise<vo
     method: 'POST',
     body: JSON.stringify({ password: newPassword, password_confirmation: newPassword }),
   })
+}
+
+export async function validateAccountSetupToken(token: string): Promise<{ email: string; displayName: string; expiresAt?: string }> {
+  const response = await apiFetch<{ data: { email: string; displayName: string; expiresAt?: string } }>('/auth/account-setup/validate', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  })
+  return response.data
+}
+
+export async function completeAccountSetup(token: string, password: string): Promise<UserProfile> {
+  const response = await apiClient.post<AuthResponse>('/auth/account-setup/complete', {
+    token,
+    password,
+    password_confirmation: password,
+  })
+  setToken(response.data.token)
+  return mapApiUserToProfile(response.data.user as Record<string, unknown>)
+}
+
+export async function updateCurrentUserProfile(payload: {
+  displayName?: string
+  profile?: Record<string, unknown>
+  profileSetupComplete?: boolean
+}): Promise<UserProfile> {
+  const { data } = await apiClient.patch<Record<string, unknown>>('/profile', payload)
+  return mapApiUserToProfile(data)
 }
 
 /** @deprecated Realtime removed — use auth store + /auth/me */

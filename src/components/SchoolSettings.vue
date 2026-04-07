@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { caviteBarangaysByLocation, caviteLocationGroups, courseGroups } from '@/config/courseCatalog'
 import { useAuthStore } from '@/stores/auth'
 import { apiFetch } from '@/services/http'
 import { mapApiUserToProfile, updateCurrentUserPassword } from '@/services/auth'
@@ -54,10 +55,16 @@ const institutionInfo = ref({
   institutionType: '',
   address: '',
   city: '',
+  barangay: '',
   zipCode: ''
 })
 
+const accountSetup = ref({
+  officialSchoolEmail: '',
+})
+
 const courses = ref<string[]>([])
+const selectedCourse = ref('')
 const newCourse = ref('')
 
 const security = ref({
@@ -85,6 +92,10 @@ const profilePicture = computed(() => {
   return '/icons/profiles/alex-doe.jpg'
 })
 
+const availableBarangays = computed(() => {
+  return caviteBarangaysByLocation[institutionInfo.value.city] ?? []
+})
+
 watch(
   () => authStore.user,
   (user) => {
@@ -109,8 +120,11 @@ watch(
       institutionType: (profile?.institutionType as string) || '',
       address: (profile?.schoolAddress as string) || '',
       city: (profile?.cityMunicipality as string) || '',
+      barangay: (profile?.barangay as string) || '',
       zipCode: (profile?.zipCode as string) || ''
     }
+
+    accountSetup.value.officialSchoolEmail = (profile?.officialSchoolEmail as string) || ''
 
     courses.value = Array.isArray(profile?.courses) ? (profile?.courses as string[]) : []
 
@@ -125,6 +139,20 @@ watch(
     loading.value = false
   },
   { immediate: true }
+)
+
+watch(
+  () => institutionInfo.value.city,
+  (city) => {
+    if (!city) {
+      institutionInfo.value.barangay = ''
+      return
+    }
+
+    if (!availableBarangays.value.includes(institutionInfo.value.barangay)) {
+      institutionInfo.value.barangay = ''
+    }
+  }
 )
 
 // Functions
@@ -182,18 +210,35 @@ async function onProfilePictureSelected(event: Event) {
   }
 }
 
-function addCourse() {
-  const value = newCourse.value.trim()
+function addCourse(rawValue?: string) {
+  const value = (rawValue ?? newCourse.value).trim()
   if (!value) return
   const normalized = value.toUpperCase()
   if (!courses.value.some((c) => c.toUpperCase() === normalized)) {
     courses.value.push(value)
   }
+  selectedCourse.value = ''
   newCourse.value = ''
 }
 
 function removeCourse(course: string) {
   courses.value = courses.value.filter((c) => c !== course)
+}
+
+function normalizeSchoolEmailDomain(value: string) {
+  const trimmed = value.trim().toLowerCase()
+  if (!trimmed) return ''
+
+  if (trimmed.startsWith('@')) {
+    return trimmed
+  }
+
+  if (trimmed.includes('@')) {
+    const domain = trimmed.split('@')[1] ?? ''
+    return domain ? `@${domain}` : ''
+  }
+
+  return `@${trimmed}`
 }
 
 async function saveChanges() {
@@ -260,10 +305,12 @@ async function saveChanges() {
       department: personalInfo.value.department,
       position: personalInfo.value.position,
       officeLocation: personalInfo.value.officeLocation,
+      officialSchoolEmail: normalizeSchoolEmailDomain(accountSetup.value.officialSchoolEmail),
       institutionType: institutionInfo.value.institutionType,
       schoolAddress: institutionInfo.value.address,
       province: 'Cavite',
       cityMunicipality: institutionInfo.value.city,
+      barangay: institutionInfo.value.barangay,
       zipCode: institutionInfo.value.zipCode,
       courses: courses.value.map((c) => c.trim()).filter(Boolean),
       twoFactorAuth: security.value.twoFactorAuth,
@@ -530,27 +577,49 @@ function handleImageError(event: Event) {
                 />
                 <p class="form-help">All schools in this system are within Cavite.</p>
               </div>
+
+              <div class="form-group">
+                <label class="form-label">School Email Domain</label>
+                <input
+                  v-model="accountSetup.officialSchoolEmail"
+                  type="text"
+                  class="form-input"
+                  placeholder="@ncst.edu.ph"
+                />
+                <p class="form-help">
+                  Used when auto-generating student account emails. You can enter `@ncst.edu.ph` or a full school email and we will use the domain.
+                </p>
+              </div>
             </div>
           </div>
 
           <!-- Courses Card -->
           <div class="settings-card full-width">
             <div class="card-header">
-              <h3 class="card-title">Courses Offered</h3>
-              <p class="card-subtitle">Courses your school offers (used for contract course alignment)</p>
+              <h3 class="card-title">Accepted Courses</h3>
+              <p class="card-subtitle">Choose the courses or programs your school offers for student account creation and contract matching</p>
             </div>
             <div class="card-body">
               <div class="form-group">
-                <label class="form-label">Add Course</label>
+                <label class="form-label">Add Accepted Course</label>
                 <div class="course-entry">
+                  <select v-model="selectedCourse" class="form-input">
+                    <option value="">Select a course or program</option>
+                    <optgroup v-for="group in courseGroups" :key="group.label" :label="group.label">
+                      <option v-for="option in group.options" :key="option" :value="option">{{ option }}</option>
+                    </optgroup>
+                  </select>
+                  <button type="button" class="course-add-btn" @click="addCourse(selectedCourse)">Add</button>
+                </div>
+                <div class="course-entry" style="margin-top: 10px;">
                   <input
                     v-model="newCourse"
                     type="text"
                     class="form-input"
-                    placeholder="e.g., BSIT, BSHM, BSED"
-                    @keydown.enter.prevent="addCourse"
+                    placeholder="Or add a custom accepted course"
+                    @keydown.enter.prevent="addCourse()"
                   />
-                  <button type="button" class="course-add-btn" @click="addCourse">Add</button>
+                  <button type="button" class="course-add-btn" @click="addCourse()">Add Custom</button>
                 </div>
                 <div v-if="courses.length" class="course-chip-list">
                   <div v-for="c in courses" :key="c" class="course-chip">
@@ -567,30 +636,39 @@ function handleImageError(event: Event) {
           <div class="settings-card full-width">
             <div class="card-header">
               <h3 class="card-title">Address Information</h3>
-              <p class="card-subtitle">Complete institution address</p>
+              <p class="card-subtitle">School location within Cavite</p>
             </div>
             <div class="card-body">
               <div class="form-row">
                 <div class="form-group">
-                  <label class="form-label">Complete Address</label>
+                  <label class="form-label">Street Address / Building / Landmark</label>
                   <textarea 
                     v-model="institutionInfo.address"
                     class="form-textarea"
                     rows="2"
-                    placeholder="Enter complete address"
+                    placeholder="Enter street, subdivision, building, or landmark"
                   ></textarea>
                 </div>
               </div>
               <div class="form-row">
                 <div class="form-group">
                   <label class="form-label">City/Municipality in Cavite</label>
-                  <input 
-                    v-model="institutionInfo.city"
-                    type="text" 
-                    class="form-input"
-                    placeholder="Enter city/municipality"
-                  />
+                  <select v-model="institutionInfo.city" class="form-input">
+                    <option value="">Select a city or municipality</option>
+                    <optgroup v-for="group in caviteLocationGroups" :key="group.label" :label="group.label">
+                      <option v-for="option in group.options" :key="option" :value="option">{{ option }}</option>
+                    </optgroup>
+                  </select>
                 </div>
+                <div class="form-group">
+                  <label class="form-label">Barangay</label>
+                  <select v-model="institutionInfo.barangay" class="form-input" :disabled="!institutionInfo.city">
+                    <option value="">{{ availableBarangays.length ? 'Select a barangay' : 'Select a city or municipality first' }}</option>
+                    <option v-for="option in availableBarangays" :key="option" :value="option">{{ option }}</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row">
                 <div class="form-group">
                   <label class="form-label">Zip Code</label>
                   <input 

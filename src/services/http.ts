@@ -1,6 +1,18 @@
 /** API base URL, e.g. http://localhost:8000/api — or leave empty and use Vite proxy to /api */
 const TOKEN_KEY = 'capstone_auth_token'
 
+function tryParseJson(text: string): Record<string, unknown> | null {
+  if (!text.trim()) {
+    return null
+  }
+
+  try {
+    return JSON.parse(text) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
 }
@@ -15,6 +27,14 @@ export function apiBase(): string {
   if (b && String(b).trim() !== '') {
     return String(b).replace(/\/$/, '')
   }
+
+  if (import.meta.env.DEV && typeof window !== 'undefined') {
+    const hostname = window.location.hostname
+    if (hostname === '127.0.0.1' || hostname === 'localhost') {
+      return 'http://127.0.0.1:8000/api'
+    }
+  }
+
   return ''
 }
 
@@ -39,11 +59,19 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     return undefined as T
   }
   const text = await res.text()
-  const json = text ? (JSON.parse(text) as Record<string, unknown>) : null
+  const json = tryParseJson(text)
   if (!res.ok) {
     const msg = json?.message
-    const err = Array.isArray(msg) ? JSON.stringify(msg) : (msg as string) || res.statusText
+    const err =
+      Array.isArray(msg) ? JSON.stringify(msg)
+      : typeof msg === 'string' ? msg
+      : text.trim() || res.statusText
     throw new Error(typeof err === 'string' ? err : 'Request failed')
   }
-  return json as T
+
+  if (json !== null) {
+    return json as T
+  }
+
+  return text as T
 }

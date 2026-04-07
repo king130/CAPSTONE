@@ -7,6 +7,19 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Contract extends Model
 {
+    protected static function booted(): void
+    {
+        static::created(function (Contract $contract): void {
+            if (filled($contract->moa_reference_no)) {
+                return;
+            }
+
+            $contract->forceFill([
+                'moa_reference_no' => self::generateReferenceNumber($contract->id, $contract->created_at?->year),
+            ])->saveQuietly();
+        });
+    }
+
     protected $fillable = [
         'school_user_id',
         'school_name',
@@ -94,5 +107,12 @@ class Contract extends Model
     public function partnerUser(): BelongsTo
     {
         return $this->belongsTo(User::class, 'partner_user_id');
+    }
+
+    public static function generateReferenceNumber(int $contractId, ?int $year = null): string
+    {
+        $referenceYear = $year ?: (int) now()->year;
+
+        return sprintf('CTR-%d-%06d', $referenceYear, $contractId);
     }
 }

@@ -22,7 +22,43 @@ class ContractController extends Controller
         $schoolAccount = $user->organizationSchool() ?? $user->school;
         $companyAccount = $user->organizationCompany() ?? $user->company;
         $query = Contract::query()
-            ->with(['contractType', 'requesterOrganization', 'partnerOrganization'])
+            ->select([
+                'id',
+                'school_user_id',
+                'school_name',
+                'company_user_id',
+                'company_name',
+                'requested_by_role',
+                'status',
+                'subject',
+                'contract_type',
+                'contract_type_id',
+                'moa_reference_no',
+                'purpose',
+                'start_date',
+                'end_date',
+                'internship_slots',
+                'student_programs',
+                'course_allocations',
+                'company_responsibilities',
+                'school_responsibilities',
+                'terms',
+                'school_contact_name',
+                'school_contact_email',
+                'company_contact_name',
+                'company_contact_email',
+                'notes',
+                'dynamic_fields',
+                'schema_snapshot',
+                'metadata',
+                'attachments',
+                'rejected_reason',
+                'cancelled_reason',
+                'cancelled_at',
+                'cancelled_by_role',
+                'created_at',
+                'updated_at',
+            ])
             ->orderByDesc('created_at');
 
         if ($appRole === 'school' && $schoolAccount) {

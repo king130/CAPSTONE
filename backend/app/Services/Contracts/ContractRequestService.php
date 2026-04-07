@@ -33,7 +33,7 @@ class ContractRequestService
 
         $contractType = null;
         if (! empty($payload['contract_type_id'])) {
-            $contractType = $this->resolveContractType((int) $payload['contract_type_id'], $requesterOrg, $partnerOrg);
+            $contractType = $this->resolveContractType($actor, (int) $payload['contract_type_id'], $requesterOrg, $partnerOrg);
         }
 
         $dynamicFields = $this->normalizeDynamicFields($payload['dynamic_fields'] ?? []);
@@ -114,9 +114,9 @@ class ContractRequestService
         return $partner;
     }
 
-    private function resolveContractType(int $id, ?Organization $requester, ?Organization $partner): ContractType
+    private function resolveContractType(User $actor, int $id, ?Organization $requester, ?Organization $partner): ContractType
     {
-        $resolved = $this->resolver->forOrganizations($requester, $partner)->firstWhere('id', $id);
+        $resolved = $this->resolver->forUser($actor, $requester, $partner)->firstWhere('id', $id);
         if (! $resolved) {
             throw ValidationException::withMessages([
                 'contract_type_id' => 'The selected contract type is not available for the chosen partner.',

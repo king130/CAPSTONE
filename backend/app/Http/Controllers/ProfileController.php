@@ -10,11 +10,20 @@ use App\Models\School;
 use App\Models\Student;
 use App\Models\Subscription;
 use App\Models\User;
+use App\Services\SubscriptionPlanService;
+use App\Services\TenantRoleService;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
 class ProfileController extends Controller
 {
+    public function __construct(
+        private readonly SubscriptionPlanService $subscriptionPlans,
+        private readonly TenantRoleService $tenantRoleService,
+    )
+    {
+    }
+
     public function update(Request $request)
     {
         /** @var User $user */
@@ -75,7 +84,7 @@ class ProfileController extends Controller
                 if (! $subscription) {
                     $subscription = Subscription::query()->create([
                         'plan' => 'free',
-                        'status' => 'inactive',
+                        'status' => 'active',
                         'billing_cycle' => 'monthly',
                     ]);
                     $activeOrganization->subscription_id = $subscription->id;
@@ -128,6 +137,10 @@ class ProfileController extends Controller
                     $activeOrganization->settings = $settings;
                     $activeOrganization->save();
                 }
+
+                if ($subscriptionUpdates !== [] || $settingsChanged) {
+                    $this->subscriptionPlans->syncOrganizationCompliance($activeOrganization->fresh(['subscription', 'owner']));
+                }
             }
         }
 
@@ -142,7 +155,7 @@ class ProfileController extends Controller
             'organizationMemberships.organization.subscription',
         ]);
 
-        $auth = new AuthController;
+        $auth = app(AuthController::class);
 
         return response()->json($auth->formatUserProfile($freshUser));
     }
@@ -193,10 +206,13 @@ class ProfileController extends Controller
         }
 
         if ($user->role === 'student' && $user->student) {
+            $resolvedSchool = $this->resolveStudentSchoolFromProfile($profile, $user->student);
             $user->student->fill([
+                'school_id' => $resolvedSchool?->id ?? $user->student->school_id,
+                'organization_id' => $resolvedSchool?->organization_id ?? $user->student->organization_id,
                 'student_id_number' => $profile['studentNumber'] ?? $profile['studentId'] ?? $user->student->student_id_number,
-                'school_name' => $profile['schoolName'] ?? $user->student->school_name,
-                'school_subscription_code' => $profile['schoolSubscriptionCode'] ?? $user->student->school_subscription_code,
+                'school_name' => $resolvedSchool?->institution_name ?? $profile['schoolName'] ?? $user->student->school_name,
+                'school_subscription_code' => $resolvedSchool?->subscription_code ?? $profile['schoolSubscriptionCode'] ?? $user->student->school_subscription_code,
                 'course' => $profile['course'] ?? $user->student->course,
                 'year_level' => $profile['yearLevel'] ?? $user->student->year_level,
                 'preferred_field' => $profile['preferredField'] ?? $user->student->preferred_field,
@@ -204,6 +220,43 @@ class ProfileController extends Controller
             ]);
             $user->student->save();
         }
+    }
+
+    /**
+     * @param array<string, mixed> $profile
+     */
+    private function resolveStudentSchoolFromProfile(array $profile, Student $student): ?School
+    {
+        $schoolId = isset($profile['schoolId']) ? (int) $profile['schoolId'] : (int) ($student->school_id ?? 0);
+        if ($schoolId > 0) {
+            $school = School::query()->find($schoolId);
+            if ($school) {
+                return $school;
+            }
+        }
+
+        $organizationId = isset($profile['organizationId']) ? (int) $profile['organizationId'] : (int) ($student->organization_id ?? 0);
+        if ($organizationId > 0) {
+            $school = School::query()->where('organization_id', $organizationId)->first();
+            if ($school) {
+                return $school;
+            }
+        }
+
+        $subscriptionCode = trim((string) ($profile['schoolSubscriptionCode'] ?? $student->school_subscription_code ?? ''));
+        if ($subscriptionCode !== '') {
+            $school = School::query()->where('subscription_code', $subscriptionCode)->first();
+            if ($school) {
+                return $school;
+            }
+        }
+
+        $schoolName = trim((string) ($profile['schoolName'] ?? $student->school_name ?? ''));
+        if ($schoolName !== '') {
+            return School::query()->where('institution_name', $schoolName)->first();
+        }
+
+        return null;
     }
 
     private function promoteGuestRole(User $user, string $newRole): void
@@ -229,7 +282,7 @@ class ProfileController extends Controller
             if (! $user->company) {
                 $sub = Subscription::query()->create([
                     'plan' => 'free',
-                    'status' => 'pending',
+                    'status' => 'active',
                     'billing_cycle' => 'monthly',
                 ]);
                 $organization = Organization::query()->create([
@@ -242,6 +295,7 @@ class ProfileController extends Controller
                         'delegated_admin_enabled' => true,
                     ],
                 ]);
+                $this->tenantRoleService->ensureDefaultRoles($organization);
                 Company::query()->create([
                     'user_id' => $user->id,
                     'subscription_id' => $sub->id,
@@ -259,7 +313,7 @@ class ProfileController extends Controller
             if (! $user->school) {
                 $sub = Subscription::query()->create([
                     'plan' => 'free',
-                    'status' => 'pending',
+                    'status' => 'active',
                     'billing_cycle' => 'monthly',
                 ]);
                 $organization = Organization::query()->create([
@@ -272,6 +326,7 @@ class ProfileController extends Controller
                         'delegated_admin_enabled' => true,
                     ],
                 ]);
+                $this->tenantRoleService->ensureDefaultRoles($organization);
                 School::query()->create([
                     'user_id' => $user->id,
                     'subscription_id' => $sub->id,
@@ -287,7 +342,17 @@ class ProfileController extends Controller
 
     private function attachOrganizationMembership(User $user, Organization $organization, string $roleSlug, string $title = ''): void
     {
-        $role = Role::query()->where('slug', $roleSlug)->first();
+        $this->tenantRoleService->ensureDefaultRoles($organization);
+
+        $role = Role::query()
+            ->where('tenant_id', $organization->id)
+            ->where('slug', $roleSlug)
+            ->first();
+
+        if (! $role) {
+            $role = Role::query()->whereNull('tenant_id')->where('slug', $roleSlug)->first();
+        }
+
         if (! $role) {
             return;
         }
@@ -303,5 +368,10 @@ class ProfileController extends Controller
                 'title' => $title ?: $role->name,
             ]
         );
+
+        $user->forceFill([
+            'tenant_id' => $organization->id,
+            'role_id' => $role->id,
+        ])->save();
     }
 }

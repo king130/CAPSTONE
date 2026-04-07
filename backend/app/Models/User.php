@@ -23,6 +23,8 @@ class User extends Authenticatable
         'password',
         'role',
         'platform_role_id',
+        'tenant_id',
+        'role_id',
         'profile',
         'is_active',
         'is_temporary',
@@ -66,6 +68,16 @@ class User extends Authenticatable
     public function platformRole(): BelongsTo
     {
         return $this->belongsTo(Role::class, 'platform_role_id');
+    }
+
+    public function tenant(): BelongsTo
+    {
+        return $this->belongsTo(Organization::class, 'tenant_id');
+    }
+
+    public function assignedRole(): BelongsTo
+    {
+        return $this->belongsTo(Role::class, 'role_id');
     }
 
     public function organizationMemberships(): HasMany

@@ -14,6 +14,7 @@ class ContractType extends Model
         'scope',
         'organization_id',
         'organization_type',
+        'created_by_user_id',
         'base_contract_type_id',
         'description',
         'fields_schema',
@@ -37,6 +38,11 @@ class ContractType extends Model
     public function organization(): BelongsTo
     {
         return $this->belongsTo(Organization::class);
+    }
+
+    public function creator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by_user_id');
     }
 
     public function baseContractType(): BelongsTo

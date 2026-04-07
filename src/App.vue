@@ -1,31 +1,29 @@
 <script setup lang="ts">
-import { RouterView } from 'vue-router'
-import { watch } from 'vue'
-import { useAuthStore } from '@/stores/auth'
-import { useNotificationStore } from '@/stores/notifications'
-import { AUTH_DISABLED } from '@/config/auth'
+  import { defineAsyncComponent, computed } from 'vue'
+  import { RouterView } from 'vue-router'
+  import { Toaster } from 'vue-sonner'
 
-const authStore = useAuthStore()
-const notificationStore = useNotificationStore()
+  import { useTheme } from '@/composables/useTheme'
+  import { useAuthStore } from '@/stores/auth'
 
-watch(
-  () => authStore.user?.uid,
-  (uid) => {
-    if (AUTH_DISABLED) return // Skip notifications when auth disabled (avoids Firestore index errors)
-    if (uid) {
-      try {
-        notificationStore.start(uid)
-      } catch {
-        // Ignore - index may still be building
-      }
-    } else {
-      notificationStore.stop()
-    }
-  },
-  { immediate: true },
-)
+  const FloatingChatWidget = defineAsyncComponent(() => import('@/components/FloatingChatWidget.vue'))
+
+  const { isDark } = useTheme()
+  const toasterTheme = computed(() => (isDark.value ? 'dark' : 'light'))
+  const authStore = useAuthStore()
+  const showChat = computed(() => {
+    const role = authStore.user?.role
+    return role === 'student' || role === 'school' || role === 'company'
+  })
 </script>
 
 <template>
   <RouterView />
+  <FloatingChatWidget v-if="showChat" />
+  <Toaster
+    close-button
+    rich-colors
+    position="top-right"
+    :theme="toasterTheme"
+  />
 </template>

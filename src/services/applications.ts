@@ -1,10 +1,13 @@
-import { apiFetch } from './http'
+import { apiFetch, getToken } from './http'
+import { createSharedPollingResource } from './sharedPolling'
 
 export interface ApplicationRecord {
   id: string
   internshipId: string
   studentId: string
   companyId?: string
+  companyName?: string
+  schoolName?: string
   internshipTitle?: string
   studentName?: string
   studentEmail?: string
@@ -17,31 +20,34 @@ export interface ApplicationRecord {
   updatedAt?: string
 }
 
-function poll(load: () => Promise<void>, intervalMs: number): () => void {
-  let cancelled = false
-  load()
-  const id = window.setInterval(() => {
-    if (!cancelled) load()
-  }, intervalMs)
-  return () => {
-    cancelled = true
-    clearInterval(id)
-  }
+async function loadAllApplications(): Promise<ApplicationRecord[]> {
+  if (!getToken()) return []
+  const res = await apiFetch<{ data: ApplicationRecord[] }>('/applications')
+  return res.data ?? []
+}
+
+const applicationsResource = createSharedPollingResource<ApplicationRecord[]>({
+  intervalMs: 12000,
+  load: loadAllApplications,
+  initialValue: [],
+})
+
+export function subscribeAllApplications(callback: (items: ApplicationRecord[]) => void): () => void {
+  return applicationsResource.subscribe(callback)
 }
 
 export function subscribeApplications(
   userId: string,
   callback: (items: ApplicationRecord[]) => void
 ): () => void {
-  return poll(async () => {
-    try {
-      const res = await apiFetch<{ data: ApplicationRecord[] }>('/applications')
-      const mine = (res.data ?? []).filter((a) => a.studentId === userId)
-      callback(mine)
-    } catch {
-      callback([])
-    }
-  }, 12000)
+  return subscribeAllApplications((items) => {
+    callback(items.filter((application) => application.studentId === userId))
+  })
+}
+
+export async function listApplications(): Promise<ApplicationRecord[]> {
+  await applicationsResource.refresh()
+  return applicationsResource.getSnapshot()
 }
 
 export function subscribeCompanyApplications(
@@ -49,16 +55,19 @@ export function subscribeCompanyApplications(
   callback: (items: ApplicationRecord[]) => void,
   onError?: (err: Error) => void
 ): () => void {
-  return poll(async () => {
+  return subscribeAllApplications((items) => {
     try {
-      const res = await apiFetch<{ data: ApplicationRecord[] }>('/applications')
-      const mine = (res.data ?? []).filter((a) => a.companyId === companyId)
-      callback(mine)
+      if (!getToken()) {
+        callback([])
+        return
+      }
+
+      callback(items.filter((application) => application.companyId === companyId))
     } catch (err) {
       onError?.(err instanceof Error ? err : new Error('applications'))
       callback([])
     }
-  }, 12000)
+  })
 }
 
 export function subscribeCompanyApplicationsByInternships(
@@ -71,16 +80,19 @@ export function subscribeCompanyApplicationsByInternships(
     return () => {}
   }
   const set = new Set(internshipIds.map(String))
-  return poll(async () => {
+  return subscribeAllApplications((items) => {
     try {
-      const res = await apiFetch<{ data: ApplicationRecord[] }>('/applications')
-      const filtered = (res.data ?? []).filter((a) => set.has(String(a.internshipId)))
-      callback(filtered)
+      if (!getToken()) {
+        callback([])
+        return
+      }
+
+      callback(items.filter((application) => set.has(String(application.internshipId))))
     } catch (err) {
       onError?.(err instanceof Error ? err : new Error('applications'))
       callback([])
     }
-  }, 12000)
+  })
 }
 
 export async function submitApplication(payload: Omit<ApplicationRecord, 'id'>): Promise<string> {
@@ -92,6 +104,7 @@ export async function submitApplication(payload: Omit<ApplicationRecord, 'id'>):
       documents: payload.documents ?? undefined,
     }),
   })
+  await applicationsResource.refresh()
   return res.data?.id ?? ''
 }
 
@@ -100,6 +113,7 @@ export async function updateApplicationStatus(applicationId: string, status: str
     method: 'PATCH',
     body: JSON.stringify({ status }),
   })
+  await applicationsResource.refresh()
 }
 
 export async function updateApplicationDocuments(

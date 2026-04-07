@@ -56,7 +56,7 @@ class ProfileAvatarController extends Controller
             'organizationMemberships.organization.subscription',
         ]);
 
-        $auth = new AuthController;
+        $auth = app(AuthController::class);
 
         return response()->json([
             'message' => 'Profile picture uploaded successfully.',

@@ -4,6 +4,7 @@ namespace App\Services\Contracts;
 
 use App\Models\ContractType;
 use App\Models\Organization;
+use App\Models\User;
 use Illuminate\Support\Collection;
 
 class ContractTypeResolver
@@ -11,16 +12,20 @@ class ContractTypeResolver
     /**
      * @return Collection<int, ContractType>
      */
-    public function forOrganizations(?Organization $requester, ?Organization $partner): Collection
+    public function forUser(User $actor, ?Organization $requester, ?Organization $partner): Collection
     {
         $organizationIds = collect([$requester?->id, $partner?->id])->filter()->values();
 
         $types = ContractType::query()
             ->where('is_active', true)
-            ->where(function ($query) use ($organizationIds) {
+            ->where(function ($query) use ($actor, $organizationIds) {
                 $query->where('scope', 'global');
                 if ($organizationIds->isNotEmpty()) {
-                    $query->orWhereIn('organization_id', $organizationIds);
+                    $query->orWhere(function ($organizationQuery) use ($actor, $organizationIds) {
+                        $organizationQuery
+                            ->whereIn('organization_id', $organizationIds)
+                            ->where('created_by_user_id', $actor->id);
+                    });
                 }
             })
             ->orderBy('sort_order')

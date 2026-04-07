@@ -113,9 +113,9 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function logout() {
-    await logoutUser()
     user.value = null
     blockedReason.value = null
+    await logoutUser()
   }
 
   function setUserProfile(profile: UserProfile | null) {

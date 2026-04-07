@@ -20,6 +20,14 @@ export interface DynamicContractType {
   fieldsSchema: ContractFieldSchema[]
   defaultValues: Record<string, unknown>
   settings?: Record<string, unknown>
+  baseContractTypeId?: string | null
+  isActive?: boolean
+  sortOrder?: number
+}
+
+export interface ManagedContractTypesResponse {
+  customTypes: DynamicContractType[]
+  globalTypes: DynamicContractType[]
 }
 
 export interface ContractSubmitPayload {
@@ -38,6 +46,13 @@ export interface ContractSubmitPayload {
   files?: File[]
 }
 
+export interface SubmittedContractResponse {
+  data: {
+    id: string
+    moaReferenceNo?: string
+  }
+}
+
 export async function fetchContractTypes(partnerUserId: string) {
   const response = await apiClient.get<{ data: DynamicContractType[] }>('/contract-types', {
     params: { partnerUserId },
@@ -45,7 +60,42 @@ export async function fetchContractTypes(partnerUserId: string) {
   return response.data.data ?? []
 }
 
-export async function submitDynamicContract(payload: ContractSubmitPayload) {
+export async function fetchManagedContractTypes() {
+  const response = await apiClient.get<{ data: ManagedContractTypesResponse }>('/contract-types/manage')
+  return response.data.data
+}
+
+export async function createContractType(payload: {
+  name: string
+  description?: string
+  baseContractTypeId?: string | null
+  fieldsSchema: ContractFieldSchema[]
+  defaultValues?: Record<string, unknown>
+  isActive?: boolean
+}) {
+  const response = await apiClient.post<{ data: DynamicContractType }>('/contract-types', payload)
+  return response.data.data
+}
+
+export async function updateContractType(
+  contractTypeId: string,
+  payload: {
+    name: string
+    description?: string
+    fieldsSchema: ContractFieldSchema[]
+    defaultValues?: Record<string, unknown>
+    isActive?: boolean
+  },
+) {
+  const response = await apiClient.patch<{ data: DynamicContractType }>(`/contract-types/${contractTypeId}`, payload)
+  return response.data.data
+}
+
+export async function deleteContractType(contractTypeId: string) {
+  await apiClient.delete(`/contract-types/${contractTypeId}`)
+}
+
+export async function submitDynamicContract(payload: ContractSubmitPayload): Promise<SubmittedContractResponse> {
   const form = new FormData()
   form.append('requestedByRole', payload.requestedByRole)
   form.append('subject', payload.subject)
@@ -66,7 +116,7 @@ export async function submitDynamicContract(payload: ContractSubmitPayload) {
     form.append('files[]', file)
   }
 
-  const response = await apiClient.post('/contracts', form, {
+  const response = await apiClient.post<SubmittedContractResponse>('/contracts', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
 

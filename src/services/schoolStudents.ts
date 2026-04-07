@@ -1,3 +1,4 @@
+import { createSharedPollingResource } from './sharedPolling'
 import { apiBase, apiFetch, getToken } from './http'
 
 export type SchoolStudentRecord = SchoolStudentRow
@@ -5,49 +6,36 @@ export type SchoolStudentRecord = SchoolStudentRow
 export interface SchoolStudentRow {
   id: string
   schoolId: string
+  internCode?: string
   email: string
   studentName?: string
   studentNumber?: string
   course?: string
   yearLevel?: string
   status?: string
-  defaultPassword?: string
+  inviteSent?: boolean
+  setupLinkExpiresAt?: string
   createdAt?: unknown
 }
 
-function poll(load: () => Promise<void>, intervalMs: number): () => void {
-  let cancelled = false
-  load()
-  const id = window.setInterval(() => {
-    if (!cancelled) load()
-  }, intervalMs)
-  const refresh = () => {
-    if (!cancelled) load()
-  }
-  window.addEventListener('school-students:changed', refresh)
-  return () => {
-    cancelled = true
-    clearInterval(id)
-    window.removeEventListener('school-students:changed', refresh)
-  }
-}
+const schoolStudentsResource = createSharedPollingResource<SchoolStudentRow[]>({
+  intervalMs: 15000,
+  initialValue: [],
+  load: async () => {
+    if (!getToken()) {
+      return []
+    }
 
-function emitSchoolStudentsChanged() {
-  window.dispatchEvent(new CustomEvent('school-students:changed'))
-}
+    const response = await apiFetch<{ data?: SchoolStudentRow[] }>('/school-students')
+    return response.data ?? []
+  },
+})
 
 export function subscribeSchoolStudents(
   _schoolId: string,
   callback: (items: SchoolStudentRow[]) => void
 ): () => void {
-  return poll(async () => {
-    try {
-      const response = await apiFetch<{ data?: SchoolStudentRow[] }>('/school-students')
-      callback(response.data ?? [])
-    } catch {
-      callback([])
-    }
-  }, 15000)
+  return schoolStudentsResource.subscribe(callback)
 }
 
 export async function addSchoolStudent(
@@ -62,8 +50,17 @@ export async function addSchoolStudent(
       ...extra,
     }),
   })
-  emitSchoolStudentsChanged()
+  await schoolStudentsResource.refresh()
   return response.data
+}
+
+export async function resendSchoolStudentSetupLink(id: string): Promise<{ sent: boolean; expiresAt?: string | null; errorMessage?: string }> {
+  const response = await apiFetch<{ invite?: { sent: boolean; expiresAt?: string | null; errorMessage?: string } }>(`/school-students/${id}/resend-setup-link`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+  await schoolStudentsResource.refresh()
+  return response.invite ?? { sent: false }
 }
 
 export async function updateSchoolStudent(id: string, patch: Record<string, unknown>): Promise<void> {
@@ -71,19 +68,24 @@ export async function updateSchoolStudent(id: string, patch: Record<string, unkn
     method: 'PATCH',
     body: JSON.stringify(patch),
   })
-  emitSchoolStudentsChanged()
+  await schoolStudentsResource.refresh()
 }
 
 export async function removeSchoolStudent(id: string): Promise<void> {
   await apiFetch(`/school-students/${id}`, {
     method: 'DELETE',
   })
-  emitSchoolStudentsChanged()
+  await schoolStudentsResource.refresh()
 }
 
 export async function findSchoolStudentByEmail(email: string): Promise<SchoolStudentRow | null> {
-  const response = await apiFetch<{ data?: SchoolStudentRow[] }>('/school-students')
-  return (response.data ?? []).find((student) => student.email.toLowerCase() === email.trim().toLowerCase()) ?? null
+  let students = schoolStudentsResource.getSnapshot()
+  if (!students.length) {
+    await schoolStudentsResource.refresh()
+    students = schoolStudentsResource.getSnapshot()
+  }
+
+  return students.find((student) => student.email.toLowerCase() === email.trim().toLowerCase()) ?? null
 }
 
 export async function exportSchoolStudentsCsv(_schoolId: string): Promise<Blob> {

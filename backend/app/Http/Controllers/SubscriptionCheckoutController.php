@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Subscription;
 use App\Models\User;
+use App\Services\SubscriptionPlanService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Http;
@@ -11,6 +12,10 @@ use Illuminate\Validation\Rule;
 
 class SubscriptionCheckoutController extends Controller
 {
+    public function __construct(private readonly SubscriptionPlanService $subscriptionPlans)
+    {
+    }
+
     public function create(Request $request)
     {
         /** @var User $user */
@@ -44,7 +49,7 @@ class SubscriptionCheckoutController extends Controller
         if (! $subscription) {
             $subscription = Subscription::query()->create([
                 'plan' => 'free',
-                'status' => 'inactive',
+                'status' => 'active',
                 'billing_cycle' => 'monthly',
             ]);
             $organization->subscription_id = $subscription->id;
@@ -217,7 +222,7 @@ class SubscriptionCheckoutController extends Controller
         if (! $subscription) {
             $subscription = Subscription::query()->create([
                 'plan' => 'free',
-                'status' => 'inactive',
+                'status' => 'active',
                 'billing_cycle' => 'monthly',
             ]);
             $organization->subscription_id = $subscription->id;
@@ -232,6 +237,7 @@ class SubscriptionCheckoutController extends Controller
         unset($settings['pending_plan_change']);
         $organization->settings = $settings;
         $organization->save();
+        $this->subscriptionPlans->syncOrganizationCompliance($organization->fresh(['subscription', 'owner']));
 
         $user->refresh();
         $user->load([
@@ -243,7 +249,7 @@ class SubscriptionCheckoutController extends Controller
             'organizationMemberships.organization.subscription',
         ]);
 
-        $auth = new AuthController;
+        $auth = app(AuthController::class);
 
         return response()->json([
             'verified' => true,

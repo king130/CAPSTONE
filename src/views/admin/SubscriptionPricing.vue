@@ -1,974 +1,867 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import Swal from 'sweetalert2'
-import { 
-  CurrencyDollarIcon,
-  BuildingOfficeIcon,
+import {
   AcademicCapIcon,
-  PencilIcon,
-  CheckIcon,
-  XMarkIcon
+  BuildingOfficeIcon,
+  ClipboardDocumentListIcon,
+  PlusIcon,
+  SparklesIcon,
+  TrashIcon,
 } from '@heroicons/vue/24/outline'
-import { getSubscriptionPlans, updatePlanPricing, updatePlanLimits, formatPrice, type SubscriptionPlan } from '@/services/subscriptionPricing'
 
-const plans = ref<SubscriptionPlan[]>([])
-const editingPlan = ref<string | null>(null)
-const editingField = ref<string | null>(null)
-const tempValue = ref<number>(0)
+import {
+  formatPrice,
+  getSubscriptionPlans,
+  updateSubscriptionPlan,
+  type SubscriptionPlan,
+} from '@/services/subscriptionPricing'
+
+type PlanSideEditor = {
+  price: number
+  features: string[]
+  limits: {
+    first: number
+    second: number
+  }
+}
+
+type PlanEditor = {
+  id: string
+  name: string
+  description: string
+  school: PlanSideEditor
+  company: PlanSideEditor
+}
+
 const loading = ref(false)
+const savingPlanId = ref<string | null>(null)
+const originalPlans = ref<SubscriptionPlan[]>([])
+const planEditors = ref<PlanEditor[]>([])
 
-// Editing states for limits
-const editingLimit = ref<{ planId: string; field: string } | null>(null)
-const tempLimitValue = ref<number>(0)
+const planCountLabel = computed(() => `${planEditors.value.length} plans ready to edit`)
 
 onMounted(() => {
-  loadPricing()
+  loadPlans()
 })
 
-async function loadPricing() {
+async function loadPlans() {
   loading.value = true
   try {
-    plans.value = await getSubscriptionPlans()
+    const plans = await getSubscriptionPlans()
+    originalPlans.value = plans
+    planEditors.value = plans.map(createEditor)
   } catch (error) {
-    console.error('Failed to load pricing:', error)
+    console.error('Failed to load subscription plans:', error)
     await Swal.fire({
       icon: 'error',
       title: 'Loading Failed',
-      text: 'Failed to load subscription pricing. Please try again.',
-      confirmButtonColor: '#2563eb'
+      text: 'Unable to load subscription plans right now.',
+      confirmButtonColor: '#2563eb',
     })
   } finally {
     loading.value = false
   }
 }
 
-function startEdit(planId: string, field: 'schoolPrice' | 'companyPrice') {
-  editingPlan.value = planId
-  editingField.value = field
-  const plan = plans.value.find(p => p.id === planId)
-  if (plan) {
-    tempValue.value = plan[field]
+function createEditor(plan: SubscriptionPlan): PlanEditor {
+  return {
+    id: plan.id,
+    name: plan.name,
+    description: plan.description,
+    school: {
+      price: plan.schoolPrice,
+      features: [...plan.features.school],
+      limits: {
+        first: plan.limits.school.coordinators,
+        second: plan.limits.school.students,
+      },
+    },
+    company: {
+      price: plan.companyPrice,
+      features: [...plan.features.company],
+      limits: {
+        first: plan.limits.company.accounts,
+        second: plan.limits.company.internships,
+      },
+    },
   }
 }
 
-function cancelEdit() {
-  editingPlan.value = null
-  editingField.value = null
-  tempValue.value = 0
-  editingLimit.value = null
-  tempLimitValue.value = 0
-}
+function resetPlan(planId: string) {
+  const original = originalPlans.value.find((plan) => plan.id === planId)
+  const index = planEditors.value.findIndex((plan) => plan.id === planId)
 
-async function savePrice(planId: string, field: 'schoolPrice' | 'companyPrice') {
-  if (tempValue.value < 0) {
-    await Swal.fire({
-      icon: 'error',
-      title: 'Invalid Price',
-      text: 'Price cannot be negative.',
-      confirmButtonColor: '#2563eb'
-    })
+  if (!original || index === -1) {
     return
   }
 
-  try {
-    loading.value = true
-    
-    // Update via service
-    await updatePlanPricing(planId, { [field]: tempValue.value })
-    
-    // Update local state
-    const plan = plans.value.find(p => p.id === planId)
-    if (plan) {
-      plan[field] = tempValue.value
-    }
-    
-    cancelEdit()
-    
-    await Swal.fire({
-      icon: 'success',
-      title: 'Price Updated',
-      text: 'Subscription price has been updated successfully.',
-      confirmButtonColor: '#2563eb',
-      timer: 2000,
-      showConfirmButton: false
-    })
-    
-  } catch (error) {
-    console.error('Failed to update price:', error)
-    await Swal.fire({
-      icon: 'error',
-      title: 'Update Failed',
-      text: 'Failed to update subscription price. Please try again.',
-      confirmButtonColor: '#2563eb'
-    })
-  } finally {
-    loading.value = false
-  }
+  planEditors.value[index] = createEditor(original)
 }
 
-function formatPriceDisplay(price: number): string {
+function addFeature(plan: PlanEditor, side: 'school' | 'company') {
+  plan[side].features.push('')
+}
+
+function removeFeature(plan: PlanEditor, side: 'school' | 'company', index: number) {
+  if (plan[side].features.length === 1) {
+    plan[side].features[0] = ''
+    return
+  }
+
+  plan[side].features.splice(index, 1)
+}
+
+function cleanFeatureList(features: string[]) {
+  return features.map((feature) => feature.trim()).filter(Boolean)
+}
+
+function duplicateFeatures(plan: PlanEditor, from: 'school' | 'company', to: 'school' | 'company') {
+  plan[to].features = [...plan[from].features]
+}
+
+function applyUnlimited(plan: PlanEditor, side: 'school' | 'company') {
+  plan[side].limits.first = 999
+  plan[side].limits.second = 999
+}
+
+function applyStarter(plan: PlanEditor, side: 'school' | 'company') {
+  if (side === 'school') {
+    plan.school.limits.first = 1
+    plan.school.limits.second = 20
+    return
+  }
+
+  plan.company.limits.first = 1
+  plan.company.limits.second = 5
+}
+
+function formatPreview(price: number) {
   return formatPrice(price)
 }
 
-// Limit editing functions
-function startEditLimit(planId: string, field: string, currentValue: number) {
-  editingLimit.value = { planId, field }
-  tempLimitValue.value = currentValue
+function featureCountLabel(features: string[]) {
+  return `${cleanFeatureList(features).length} features`
 }
 
-function cancelEditLimit() {
-  editingLimit.value = null
-  tempLimitValue.value = 0
-}
+async function savePlan(plan: PlanEditor) {
+  const schoolFeatures = cleanFeatureList(plan.school.features)
+  const companyFeatures = cleanFeatureList(plan.company.features)
 
-async function saveLimit(planId: string, field: string) {
-  if (tempLimitValue.value < 0) {
+  if (!plan.description.trim()) {
     await Swal.fire({
       icon: 'error',
-      title: 'Invalid Limit',
-      text: 'Limit cannot be negative.',
-      confirmButtonColor: '#2563eb'
+      title: 'Description Needed',
+      text: 'Please add a short description for this plan.',
+      confirmButtonColor: '#2563eb',
     })
     return
   }
 
-  try {
-    loading.value = true
-    
-    // Map field names to service parameters
-    const updates: any = {}
-    switch (field) {
-      case 'schoolCoordinators':
-        updates.schoolCoordinators = tempLimitValue.value
-        break
-      case 'schoolStudents':
-        updates.schoolStudents = tempLimitValue.value
-        break
-      case 'companyAccounts':
-        updates.companyAccounts = tempLimitValue.value
-        break
-      case 'companyInternships':
-        updates.companyInternships = tempLimitValue.value
-        break
-    }
-    
-    // Update via service
-    await updatePlanLimits(planId, updates)
-    
-    // Update local state
-    const plan = plans.value.find(p => p.id === planId)
-    if (plan) {
-      switch (field) {
-        case 'schoolCoordinators':
-          plan.limits.school.coordinators = tempLimitValue.value
-          break
-        case 'schoolStudents':
-          plan.limits.school.students = tempLimitValue.value
-          break
-        case 'companyAccounts':
-          plan.limits.company.accounts = tempLimitValue.value
-          break
-        case 'companyInternships':
-          plan.limits.company.internships = tempLimitValue.value
-          break
-      }
-    }
-    
-    cancelEditLimit()
-    
-    await Swal.fire({
-      icon: 'success',
-      title: 'Limit Updated',
-      text: 'Plan limit has been updated successfully.',
-      confirmButtonColor: '#2563eb',
-      timer: 2000,
-      showConfirmButton: false
-    })
-    
-  } catch (error) {
-    console.error('Failed to update limit:', error)
+  if (
+    plan.school.price < 0 ||
+    plan.company.price < 0 ||
+    plan.school.limits.first < 0 ||
+    plan.school.limits.second < 0 ||
+    plan.company.limits.first < 0 ||
+    plan.company.limits.second < 0
+  ) {
     await Swal.fire({
       icon: 'error',
-      title: 'Update Failed',
-      text: 'Failed to update plan limit. Please try again.',
-      confirmButtonColor: '#2563eb'
+      title: 'Invalid Values',
+      text: 'Prices and limits must be zero or higher.',
+      confirmButtonColor: '#2563eb',
+    })
+    return
+  }
+
+  if (schoolFeatures.length === 0 || companyFeatures.length === 0) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Missing Features',
+      text: 'Add at least one feature for both school and company before saving.',
+      confirmButtonColor: '#2563eb',
+    })
+    return
+  }
+
+  savingPlanId.value = plan.id
+  try {
+    await updateSubscriptionPlan(plan.id, {
+      description: plan.description.trim(),
+      schoolPrice: plan.school.price,
+      companyPrice: plan.company.price,
+      schoolFeatures,
+      companyFeatures,
+      limits: {
+        school: {
+          coordinators: plan.school.limits.first,
+          students: plan.school.limits.second,
+        },
+        company: {
+          accounts: plan.company.limits.first,
+          internships: plan.company.limits.second,
+        },
+      },
+    })
+
+    const updatedPlans = await getSubscriptionPlans()
+    originalPlans.value = updatedPlans
+    planEditors.value = updatedPlans.map(createEditor)
+
+    await Swal.fire({
+      icon: 'success',
+      title: 'Plan Updated',
+      text: `${plan.name} was saved successfully.`,
+      confirmButtonColor: '#2563eb',
+      timer: 1600,
+      showConfirmButton: false,
+    })
+  } catch (error) {
+    console.error('Failed to save plan:', error)
+    await Swal.fire({
+      icon: 'error',
+      title: 'Save Failed',
+      text: 'The subscription plan could not be updated. Please try again.',
+      confirmButtonColor: '#2563eb',
     })
   } finally {
-    loading.value = false
+    savingPlanId.value = null
   }
-}
-
-function formatLimit(value: number): string {
-  return value === 999 ? 'Unlimited' : value.toString()
 }
 </script>
 
 <template>
-  <div class="subscription-pricing">
-    <div class="pricing-header">
-      <div class="header-content">
-        <div class="header-info">
-          <CurrencyDollarIcon class="header-icon" />
-          <div>
-            <h1 class="header-title">Subscription Pricing</h1>
-            <p class="header-subtitle">Manage subscription plan pricing for schools and companies</p>
-          </div>
-        </div>
-        <button @click="loadPricing" class="refresh-btn" :disabled="loading">
-          <svg class="refresh-icon" :class="{ 'spinning': loading }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-          </svg>
-          Refresh
+  <section class="subscription-editor">
+    <header class="page-header">
+      <div class="header-copy">
+        <p class="eyebrow">Admin Controls</p>
+        <h1>Subscription Plans</h1>
+        <p class="subtitle">
+          Edit prices, limits, and features with quick actions so you do less typing and fewer repetitive updates.
+        </p>
+      </div>
+
+      <div class="header-actions">
+        <span class="plan-count">{{ planCountLabel }}</span>
+        <button class="refresh-button" type="button" :disabled="loading" @click="loadPlans">
+          {{ loading ? 'Refreshing...' : 'Refresh' }}
         </button>
       </div>
+    </header>
+
+    <section class="tip-banner">
+      <SparklesIcon class="tip-icon" />
+      <div>
+        <strong>Less typing, faster edits.</strong>
+        <p>Use Add Feature, Copy Features, Starter Limits, and Unlimited to update plans with just a few clicks.</p>
+      </div>
+    </section>
+
+    <div v-if="loading && !planEditors.length" class="empty-state">
+      Loading subscription plans...
     </div>
 
-    <div class="pricing-content">
-      <div class="plans-grid">
-        <div v-for="plan in plans" :key="plan.id" class="plan-card" :class="{ 'featured': plan.id === 'standard' }">
-          <!-- Plan Header -->
-          <div class="plan-header">
-            <div class="plan-badge" v-if="plan.id === 'standard'">Most Popular</div>
-            <h3 class="plan-name">{{ plan.name }}</h3>
-            <p class="plan-description">{{ plan.description }}</p>
+    <div v-else class="plan-grid">
+      <article v-for="plan in planEditors" :key="plan.id" class="plan-card">
+        <div class="plan-top">
+          <div>
+            <p class="plan-id">{{ plan.id }}</p>
+            <h2>{{ plan.name }}</h2>
+            <p class="plan-preview">
+              School: {{ formatPreview(plan.school.price) }} | Company: {{ formatPreview(plan.company.price) }}
+            </p>
           </div>
 
-          <!-- Pricing Section -->
-          <div class="pricing-section">
-            <!-- School Pricing -->
-            <div class="price-row">
-              <div class="price-label">
-                <AcademicCapIcon class="price-icon school" />
-                <span>School Price</span>
+          <div class="card-actions top-actions">
+            <button class="secondary-button" type="button" @click="resetPlan(plan.id)">Reset</button>
+            <button
+              class="primary-button"
+              type="button"
+              :disabled="savingPlanId === plan.id"
+              @click="savePlan(plan)"
+            >
+              {{ savingPlanId === plan.id ? 'Saving...' : 'Save Plan' }}
+            </button>
+          </div>
+        </div>
+
+        <label class="field-group">
+          <span class="field-label">Short Description</span>
+          <input
+            v-model="plan.description"
+            class="field-input"
+            type="text"
+            placeholder="Example: Ideal for growing organizations"
+          />
+        </label>
+
+        <div class="editor-columns">
+          <section class="editor-panel school-panel">
+            <div class="panel-header">
+              <div class="panel-title">
+                <AcademicCapIcon class="panel-icon school" />
+                <span>School Plan</span>
               </div>
-              <div class="price-value">
-                <div v-if="editingPlan === plan.id && editingField === 'schoolPrice'" class="price-edit">
-                  <div class="edit-input-group">
-                    <span class="currency-symbol">₱</span>
-                    <input 
-                      v-model.number="tempValue" 
-                      type="number" 
-                      min="0" 
-                      class="price-input"
-                      @keyup.enter="savePrice(plan.id, 'schoolPrice')"
-                      @keyup.escape="cancelEdit"
-                    />
-                  </div>
-                  <div class="edit-actions">
-                    <button @click="savePrice(plan.id, 'schoolPrice')" class="save-btn">
-                      <CheckIcon class="btn-icon" />
-                    </button>
-                    <button @click="cancelEdit" class="cancel-btn">
-                      <XMarkIcon class="btn-icon" />
-                    </button>
-                  </div>
+              <span class="feature-counter">{{ featureCountLabel(plan.school.features) }}</span>
+            </div>
+
+            <label class="field-group">
+              <span class="field-label">Price</span>
+              <div class="price-input-wrap">
+                <span class="prefix">PHP</span>
+                <input v-model.number="plan.school.price" class="field-input price-input" type="number" min="0" />
+              </div>
+            </label>
+
+            <div class="limits-box">
+              <div class="limits-header">
+                <span class="field-label">Quick Limits</span>
+                <div class="mini-actions">
+                  <button class="mini-button" type="button" @click="applyStarter(plan, 'school')">Starter Limits</button>
+                  <button class="mini-button" type="button" @click="applyUnlimited(plan, 'school')">Unlimited</button>
                 </div>
-                <div v-else class="price-display">
-                  <span class="price-text">{{ formatPriceDisplay(plan.schoolPrice) }}</span>
-                  <button @click="startEdit(plan.id, 'schoolPrice')" class="edit-btn">
-                    <PencilIcon class="edit-icon" />
+              </div>
+
+              <div class="limit-grid">
+                <label class="field-group">
+                  <span class="field-label">Coordinators</span>
+                  <input v-model.number="plan.school.limits.first" class="field-input" type="number" min="0" />
+                </label>
+                <label class="field-group">
+                  <span class="field-label">Students</span>
+                  <input v-model.number="plan.school.limits.second" class="field-input" type="number" min="0" />
+                </label>
+              </div>
+            </div>
+
+            <div class="features-box">
+              <div class="features-header">
+                <span class="field-label">School Features</span>
+                <div class="mini-actions">
+                  <button class="mini-button" type="button" @click="duplicateFeatures(plan, 'company', 'school')">
+                    Copy Company Features
+                  </button>
+                  <button class="mini-button primary-mini" type="button" @click="addFeature(plan, 'school')">
+                    <PlusIcon class="mini-icon" />
+                    Add Feature
+                  </button>
+                </div>
+              </div>
+
+              <div class="feature-list">
+                <div v-for="(feature, index) in plan.school.features" :key="`school-${plan.id}-${index}`" class="feature-row">
+                  <input
+                    v-model="plan.school.features[index]"
+                    class="field-input feature-input"
+                    type="text"
+                    :placeholder="`School feature ${index + 1}`"
+                  />
+                  <button class="icon-button" type="button" @click="removeFeature(plan, 'school', index)">
+                    <TrashIcon class="trash-icon" />
                   </button>
                 </div>
               </div>
             </div>
+          </section>
 
-            <!-- Company Pricing -->
-            <div class="price-row">
-              <div class="price-label">
-                <BuildingOfficeIcon class="price-icon company" />
-                <span>Company Price</span>
+          <section class="editor-panel company-panel">
+            <div class="panel-header">
+              <div class="panel-title">
+                <BuildingOfficeIcon class="panel-icon company" />
+                <span>Company Plan</span>
               </div>
-              <div class="price-value">
-                <div v-if="editingPlan === plan.id && editingField === 'companyPrice'" class="price-edit">
-                  <div class="edit-input-group">
-                    <span class="currency-symbol">₱</span>
-                    <input 
-                      v-model.number="tempValue" 
-                      type="number" 
-                      min="0" 
-                      class="price-input"
-                      @keyup.enter="savePrice(plan.id, 'companyPrice')"
-                      @keyup.escape="cancelEdit"
-                    />
-                  </div>
-                  <div class="edit-actions">
-                    <button @click="savePrice(plan.id, 'companyPrice')" class="save-btn">
-                      <CheckIcon class="btn-icon" />
-                    </button>
-                    <button @click="cancelEdit" class="cancel-btn">
-                      <XMarkIcon class="btn-icon" />
-                    </button>
-                  </div>
+              <span class="feature-counter">{{ featureCountLabel(plan.company.features) }}</span>
+            </div>
+
+            <label class="field-group">
+              <span class="field-label">Price</span>
+              <div class="price-input-wrap">
+                <span class="prefix">PHP</span>
+                <input v-model.number="plan.company.price" class="field-input price-input" type="number" min="0" />
+              </div>
+            </label>
+
+            <div class="limits-box">
+              <div class="limits-header">
+                <span class="field-label">Quick Limits</span>
+                <div class="mini-actions">
+                  <button class="mini-button" type="button" @click="applyStarter(plan, 'company')">Starter Limits</button>
+                  <button class="mini-button" type="button" @click="applyUnlimited(plan, 'company')">Unlimited</button>
                 </div>
-                <div v-else class="price-display">
-                  <span class="price-text">{{ formatPriceDisplay(plan.companyPrice) }}</span>
-                  <button @click="startEdit(plan.id, 'companyPrice')" class="edit-btn">
-                    <PencilIcon class="edit-icon" />
+              </div>
+
+              <div class="limit-grid">
+                <label class="field-group">
+                  <span class="field-label">Accounts</span>
+                  <input v-model.number="plan.company.limits.first" class="field-input" type="number" min="0" />
+                </label>
+                <label class="field-group">
+                  <span class="field-label">Internships</span>
+                  <input v-model.number="plan.company.limits.second" class="field-input" type="number" min="0" />
+                </label>
+              </div>
+            </div>
+
+            <div class="features-box">
+              <div class="features-header">
+                <span class="field-label">Company Features</span>
+                <div class="mini-actions">
+                  <button class="mini-button" type="button" @click="duplicateFeatures(plan, 'school', 'company')">
+                    Copy School Features
+                  </button>
+                  <button class="mini-button primary-mini" type="button" @click="addFeature(plan, 'company')">
+                    <PlusIcon class="mini-icon" />
+                    Add Feature
+                  </button>
+                </div>
+              </div>
+
+              <div class="feature-list">
+                <div v-for="(feature, index) in plan.company.features" :key="`company-${plan.id}-${index}`" class="feature-row">
+                  <input
+                    v-model="plan.company.features[index]"
+                    class="field-input feature-input"
+                    type="text"
+                    :placeholder="`Company feature ${index + 1}`"
+                  />
+                  <button class="icon-button" type="button" @click="removeFeature(plan, 'company', index)">
+                    <TrashIcon class="trash-icon" />
                   </button>
                 </div>
               </div>
             </div>
-          </div>
-
-          <!-- Plan Limits -->
-          <div class="limits-section">
-            <h4 class="limits-title">Plan Limits</h4>
-            <div class="limits-grid">
-              <!-- School Limits -->
-              <div class="limit-item">
-                <AcademicCapIcon class="limit-icon school" />
-                <div class="limit-details">
-                  <span class="limit-label">School</span>
-                  <div class="limit-values">
-                    <!-- Coordinators -->
-                    <div class="limit-value-row">
-                      <span class="limit-type">Coordinators:</span>
-                      <div v-if="editingLimit?.planId === plan.id && editingLimit?.field === 'schoolCoordinators'" class="limit-edit">
-                        <input 
-                          v-model.number="tempLimitValue" 
-                          type="number" 
-                          min="0" 
-                          max="999"
-                          class="limit-input"
-                          @keyup.enter="saveLimit(plan.id, 'schoolCoordinators')"
-                          @keyup.escape="cancelEditLimit"
-                        />
-                        <div class="limit-edit-actions">
-                          <button @click="saveLimit(plan.id, 'schoolCoordinators')" class="save-btn">
-                            <CheckIcon class="btn-icon" />
-                          </button>
-                          <button @click="cancelEditLimit" class="cancel-btn">
-                            <XMarkIcon class="btn-icon" />
-                          </button>
-                        </div>
-                      </div>
-                      <div v-else class="limit-display">
-                        <span class="limit-text">{{ formatLimit(plan.limits.school.coordinators) }}</span>
-                        <button @click="startEditLimit(plan.id, 'schoolCoordinators', plan.limits.school.coordinators)" class="edit-limit-btn">
-                          <PencilIcon class="edit-icon" />
-                        </button>
-                      </div>
-                    </div>
-                    
-                    <!-- Students -->
-                    <div class="limit-value-row">
-                      <span class="limit-type">Students:</span>
-                      <div v-if="editingLimit?.planId === plan.id && editingLimit?.field === 'schoolStudents'" class="limit-edit">
-                        <input 
-                          v-model.number="tempLimitValue" 
-                          type="number" 
-                          min="0" 
-                          max="999"
-                          class="limit-input"
-                          @keyup.enter="saveLimit(plan.id, 'schoolStudents')"
-                          @keyup.escape="cancelEditLimit"
-                        />
-                        <div class="limit-edit-actions">
-                          <button @click="saveLimit(plan.id, 'schoolStudents')" class="save-btn">
-                            <CheckIcon class="btn-icon" />
-                          </button>
-                          <button @click="cancelEditLimit" class="cancel-btn">
-                            <XMarkIcon class="btn-icon" />
-                          </button>
-                        </div>
-                      </div>
-                      <div v-else class="limit-display">
-                        <span class="limit-text">{{ formatLimit(plan.limits.school.students) }}</span>
-                        <button @click="startEditLimit(plan.id, 'schoolStudents', plan.limits.school.students)" class="edit-limit-btn">
-                          <PencilIcon class="edit-icon" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              
-              <!-- Company Limits -->
-              <div class="limit-item">
-                <BuildingOfficeIcon class="limit-icon company" />
-                <div class="limit-details">
-                  <span class="limit-label">Company</span>
-                  <div class="limit-values">
-                    <!-- Accounts -->
-                    <div class="limit-value-row">
-                      <span class="limit-type">Accounts:</span>
-                      <div v-if="editingLimit?.planId === plan.id && editingLimit?.field === 'companyAccounts'" class="limit-edit">
-                        <input 
-                          v-model.number="tempLimitValue" 
-                          type="number" 
-                          min="0" 
-                          max="999"
-                          class="limit-input"
-                          @keyup.enter="saveLimit(plan.id, 'companyAccounts')"
-                          @keyup.escape="cancelEditLimit"
-                        />
-                        <div class="limit-edit-actions">
-                          <button @click="saveLimit(plan.id, 'companyAccounts')" class="save-btn">
-                            <CheckIcon class="btn-icon" />
-                          </button>
-                          <button @click="cancelEditLimit" class="cancel-btn">
-                            <XMarkIcon class="btn-icon" />
-                          </button>
-                        </div>
-                      </div>
-                      <div v-else class="limit-display">
-                        <span class="limit-text">{{ formatLimit(plan.limits.company.accounts) }}</span>
-                        <button @click="startEditLimit(plan.id, 'companyAccounts', plan.limits.company.accounts)" class="edit-limit-btn">
-                          <PencilIcon class="edit-icon" />
-                        </button>
-                      </div>
-                    </div>
-                    
-                    <!-- Internships -->
-                    <div class="limit-value-row">
-                      <span class="limit-type">Internships:</span>
-                      <div v-if="editingLimit?.planId === plan.id && editingLimit?.field === 'companyInternships'" class="limit-edit">
-                        <input 
-                          v-model.number="tempLimitValue" 
-                          type="number" 
-                          min="0" 
-                          max="999"
-                          class="limit-input"
-                          @keyup.enter="saveLimit(plan.id, 'companyInternships')"
-                          @keyup.escape="cancelEditLimit"
-                        />
-                        <div class="limit-edit-actions">
-                          <button @click="saveLimit(plan.id, 'companyInternships')" class="save-btn">
-                            <CheckIcon class="btn-icon" />
-                          </button>
-                          <button @click="cancelEditLimit" class="cancel-btn">
-                            <XMarkIcon class="btn-icon" />
-                          </button>
-                        </div>
-                      </div>
-                      <div v-else class="limit-display">
-                        <span class="limit-text">{{ formatLimit(plan.limits.company.internships) }}</span>
-                        <button @click="startEditLimit(plan.id, 'companyInternships', plan.limits.company.internships)" class="edit-limit-btn">
-                          <PencilIcon class="edit-icon" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          </section>
         </div>
-      </div>
 
-      <!-- Info Card -->
-      <div class="info-card">
-        <h3 class="info-title">Pricing & Limits Management</h3>
-        <p class="info-text">
-          Click the edit icon next to any price or limit to modify it. Changes will be reflected immediately on the guest registration page and subscription selection.
-        </p>
-        <div class="info-notes">
-          <div class="note-item">
-            <span class="note-label">Pricing:</span>
-            <span class="note-text">Set different prices for schools and companies</span>
-          </div>
-          <div class="note-item">
-            <span class="note-label">Limits:</span>
-            <span class="note-text">Control account and resource limits for each plan</span>
-          </div>
-          <div class="note-item">
-            <span class="note-label">Unlimited:</span>
-            <span class="note-text">Set limit to 999 for unlimited access</span>
-          </div>
+        <div class="footer-note">
+          <ClipboardDocumentListIcon class="footer-icon" />
+          <span>Tip: set a limit to `999` when you want it to behave like unlimited access.</span>
         </div>
-      </div>
+      </article>
     </div>
-  </div>
+  </section>
 </template>
 
 <style scoped>
-.subscription-pricing {
+.subscription-editor {
   padding: 24px;
-  max-width: 1400px;
+  max-width: 1440px;
   margin: 0 auto;
 }
 
-.pricing-header {
-  margin-bottom: 32px;
-}
-
-.header-content {
+.page-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 16px;
+  align-items: flex-start;
+  gap: 20px;
+  margin-bottom: 20px;
 }
 
-.header-info {
-  display: flex;
-  align-items: center;
-  gap: 16px;
+.header-copy {
+  max-width: 800px;
 }
 
-.header-icon {
-  width: 32px;
-  height: 32px;
+.eyebrow {
+  margin: 0 0 8px;
   color: #2563eb;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
 
-.header-title {
-  font-size: 28px;
-  font-weight: 700;
-  color: #1f2937;
-  margin: 0 0 4px 0;
-}
-
-.header-subtitle {
-  font-size: 16px;
-  color: #6b7280;
+.page-header h1 {
   margin: 0;
+  font-size: 32px;
+  color: #0f172a;
 }
 
-.refresh-btn {
+.subtitle {
+  margin: 10px 0 0;
+  color: #475569;
+  line-height: 1.6;
+}
+
+.header-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
-  background: #2563eb;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
+  gap: 12px;
 }
 
-.refresh-btn:hover:not(:disabled) {
-  background: #1d4ed8;
-  transform: translateY(-1px);
+.plan-count {
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1e3a8a;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
-.refresh-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.refresh-icon {
-  width: 16px;
-  height: 16px;
-}
-
-.refresh-icon.spinning {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-.pricing-content {
+.tip-banner {
   display: flex;
-  flex-direction: column;
-  gap: 32px;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 18px 20px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%);
+  border: 1px solid #bfdbfe;
+  margin-bottom: 24px;
 }
 
-.plans-grid {
+.tip-banner p {
+  margin: 4px 0 0;
+  color: #475569;
+}
+
+.tip-icon {
+  width: 22px;
+  height: 22px;
+  color: #2563eb;
+  flex-shrink: 0;
+}
+
+.empty-state {
+  padding: 48px 24px;
+  text-align: center;
+  border-radius: 18px;
+  background: #f8fafc;
+  color: #475569;
+}
+
+.plan-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
   gap: 24px;
 }
 
 .plan-card {
-  background: white;
-  border-radius: 12px;
   padding: 24px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-  border: 1px solid #e5e7eb;
-  position: relative;
-  transition: all 0.2s ease;
+  border-radius: 24px;
+  border: 1px solid #dbeafe;
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.12), transparent 25%),
+    linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.08);
 }
 
-.plan-card:hover {
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+.plan-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 18px;
 }
 
-.plan-card.featured {
-  border: 2px solid #2563eb;
-  box-shadow: 0 8px 24px rgba(37, 99, 235, 0.15);
-}
-
-.plan-header {
-  text-align: center;
-  margin-bottom: 24px;
-  position: relative;
-  padding-top: 16px;
-}
-
-.plan-badge {
-  position: absolute;
-  top: -12px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-  color: white;
-  padding: 4px 16px;
-  border-radius: 12px;
+.plan-id {
+  margin: 0 0 8px;
+  color: #2563eb;
   font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.plan-top h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 28px;
+}
+
+.plan-preview {
+  margin: 8px 0 0;
+  color: #475569;
   font-weight: 600;
 }
 
-.plan-name {
-  font-size: 24px;
-  font-weight: 700;
-  color: #1f2937;
-  margin: 20px 0 8px 0;
+.editor-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin-top: 18px;
 }
 
-.plan-description {
-  font-size: 14px;
-  color: #6b7280;
-  margin: 0;
+.editor-panel {
+  padding: 18px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid #dbeafe;
 }
 
-.pricing-section {
-  margin-bottom: 24px;
-}
-
-.price-row {
+.panel-header,
+.features-header,
+.limits-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 0;
-  border-bottom: 1px solid #f3f4f6;
+  gap: 12px;
 }
 
-.price-row:last-child {
-  border-bottom: none;
+.panel-header {
+  margin-bottom: 16px;
 }
 
-.price-label {
+.panel-title {
   display: flex;
   align-items: center;
-  gap: 12px;
-  font-weight: 600;
-  color: #374151;
+  gap: 10px;
+  font-weight: 800;
+  color: #0f172a;
+  min-height: 24px;
 }
 
-.price-icon {
+.panel-icon {
   width: 20px;
   height: 20px;
+  flex-shrink: 0;
+  display: block;
 }
 
-.price-icon.school {
+.panel-icon.school {
   color: #2563eb;
 }
 
-.price-icon.company {
+.panel-icon.company {
   color: #059669;
 }
 
-.price-value {
-  display: flex;
+.feature-counter {
+  display: inline-flex;
   align-items: center;
-}
-
-.price-display {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.price-text {
-  font-size: 18px;
+  justify-content: center;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
   font-weight: 700;
-  color: #1f2937;
-  min-width: 100px;
-  text-align: right;
 }
 
-.edit-btn {
-  padding: 4px;
-  background: transparent;
-  border: none;
-  color: #6b7280;
-  cursor: pointer;
-  border-radius: 4px;
-  transition: all 0.2s ease;
-}
-
-.edit-btn:hover {
-  background: #f3f4f6;
-  color: #374151;
-}
-
-.edit-icon {
-  width: 16px;
-  height: 16px;
-}
-
-.price-edit {
+.field-group {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
+  margin-bottom: 16px;
 }
 
-.edit-input-group {
+.field-label {
+  color: #334155;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.field-input {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 14px;
+  padding: 12px 14px;
+  font: inherit;
+  color: #0f172a;
+  background: #fff;
+}
+
+.field-input:focus {
+  outline: 2px solid rgba(37, 99, 235, 0.18);
+  border-color: #2563eb;
+}
+
+.price-input-wrap {
   display: flex;
   align-items: center;
-  background: white;
-  border: 2px solid #2563eb;
-  border-radius: 6px;
-  padding: 0 8px;
+  gap: 10px;
 }
 
-.currency-symbol {
-  color: #6b7280;
-  font-weight: 600;
+.prefix {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 800;
 }
 
 .price-input {
-  border: none;
-  outline: none;
-  padding: 8px 4px;
-  width: 100px;
-  font-size: 16px;
-  font-weight: 600;
+  flex: 1;
 }
 
-.edit-actions {
+.limits-box,
+.features-box {
+  padding: 16px;
+  border-radius: 18px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  margin-bottom: 16px;
+}
+
+.limits-header,
+.features-header {
+  margin-bottom: 14px;
+}
+
+.limit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.mini-actions {
   display: flex;
-  gap: 4px;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-.save-btn, .cancel-btn {
-  padding: 6px;
+.refresh-button,
+.secondary-button,
+.primary-button,
+.mini-button,
+.icon-button {
   border: none;
-  border-radius: 4px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: transform 0.2s ease, opacity 0.2s ease, background 0.2s ease;
 }
 
-.save-btn {
-  background: #10b981;
-  color: white;
+.refresh-button,
+.secondary-button {
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: #e2e8f0;
+  color: #0f172a;
+  font-weight: 700;
 }
 
-.save-btn:hover {
-  background: #059669;
+.primary-button {
+  padding: 12px 18px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  color: #fff;
+  font-weight: 800;
+  box-shadow: 0 12px 22px rgba(37, 99, 235, 0.2);
 }
 
-.cancel-btn {
-  background: #ef4444;
-  color: white;
+.mini-button {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #e2e8f0;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 700;
 }
 
-.cancel-btn:hover {
-  background: #dc2626;
+.primary-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #dbeafe;
+  color: #1d4ed8;
 }
 
-.btn-icon {
+.mini-icon {
   width: 14px;
   height: 14px;
 }
 
-.limits-section {
-  border-top: 1px solid #f3f4f6;
-  padding-top: 16px;
+.icon-button {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #fee2e2;
+  color: #dc2626;
 }
 
-.limits-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: #374151;
-  margin: 0 0 12px 0;
+.trash-icon {
+  width: 18px;
+  height: 18px;
 }
 
-.limits-grid {
+.refresh-button:hover:not(:disabled),
+.secondary-button:hover,
+.primary-button:hover:not(:disabled),
+.mini-button:hover,
+.icon-button:hover {
+  transform: translateY(-1px);
+}
+
+.refresh-button:disabled,
+.primary-button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.feature-list {
+  display: grid;
+  gap: 10px;
+}
+
+.feature-row {
   display: flex;
-  flex-direction: column;
-  gap: 20px;
+  align-items: center;
+  gap: 10px;
 }
 
-.limit-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 16px;
-  background: #f8fafc;
-  border-radius: 8px;
-  border: 1px solid #e2e8f0;
-}
-
-.limit-icon {
-  width: 20px;
-  height: 20px;
-  margin-top: 2px;
-  flex-shrink: 0;
-}
-
-.limit-icon.school {
-  color: #2563eb;
-}
-
-.limit-icon.company {
-  color: #059669;
-}
-
-.limit-details {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.feature-input {
+  padding-leftt: 2rem;
   flex: 1;
 }
 
-.limit-label {
-  font-size: 16px;
-  font-weight: 600;
-  color: #374151;
+.feature-row .icon-button {
+  margin-left: auto;
 }
 
-.limit-values {
+.card-actions {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
-.limit-value-row {
+.footer-note {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 8px 0;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.limit-value-row:last-child {
-  border-bottom: none;
-}
-
-.limit-type {
+  gap: 10px;
+  margin-top: 8px;
+  color: #475569;
   font-size: 14px;
-  color: #6b7280;
-  font-weight: 500;
-  min-width: 100px;
 }
 
-.limit-display {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.footer-icon {
+  width: 18px;
+  height: 18px;
+  color: #2563eb;
+  flex-shrink: 0;
 }
 
-.limit-text {
-  font-size: 14px;
-  font-weight: 600;
-  color: #374151;
-  min-width: 80px;
-  text-align: right;
-}
-
-.edit-limit-btn {
-  padding: 4px;
-  background: transparent;
-  border: none;
-  color: #6b7280;
-  cursor: pointer;
-  border-radius: 4px;
-  transition: all 0.2s ease;
-}
-
-.edit-limit-btn:hover {
-  background: #f3f4f6;
-  color: #374151;
-}
-
-.limit-edit {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.limit-input {
-  width: 80px;
-  padding: 6px 8px;
-  border: 2px solid #2563eb;
-  border-radius: 4px;
-  font-size: 14px;
-  font-weight: 600;
-  text-align: center;
-  outline: none;
-}
-
-.limit-edit-actions {
-  display: flex;
-  gap: 4px;
-}
-
-.info-card {
-  background: white;
-  border-radius: 12px;
-  padding: 24px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-  border: 1px solid #e5e7eb;
-}
-
-.info-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: #1f2937;
-  margin: 0 0 12px 0;
-}
-
-.info-text {
-  font-size: 14px;
-  color: #6b7280;
-  line-height: 1.6;
-  margin: 0 0 16px 0;
-}
-
-.info-notes {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.note-item {
-  display: flex;
-  gap: 8px;
-}
-
-.note-label {
-  font-size: 14px;
-  font-weight: 600;
-  color: #374151;
-  min-width: 100px;
-}
-
-.note-text {
-  font-size: 14px;
-  color: #6b7280;
-}
-
-/* Responsive Design */
-@media (max-width: 768px) {
-  .subscription-pricing {
-    padding: 16px;
+@media (max-width: 960px) {
+  .page-header,
+  .plan-top,
+  .panel-header,
+  .features-header,
+  .limits-header {
+    flex-direction: column;
+    align-items: stretch;
   }
-  
-  .plans-grid {
+
+  .header-actions,
+  .top-actions,
+  .editor-columns,
+  .limit-grid {
+    width: 100%;
+  }
+
+  .editor-columns,
+  .limit-grid {
     grid-template-columns: 1fr;
   }
-  
-  .header-content {
-    flex-direction: column;
-    align-items: flex-start;
+
+  .header-actions > *,
+  .top-actions > * {
+    flex: 1;
   }
-  
-  .price-row {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-  }
-  
-  .price-text {
-    text-align: left;
-    min-width: auto;
+
+  .feature-row {
+    align-items: stretch;
   }
 }
 </style>

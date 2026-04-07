@@ -29,9 +29,7 @@ const props = defineProps<{
 // State management
 const authStore = useAuthStore()
 const isOpen = ref(false)
-const isMinimized = ref(false)
 const unreadCount = ref(0)
-const showGroupInfo = ref(true)
 const newMessage = ref('')
 
 type ConversationItem = {
@@ -68,54 +66,21 @@ const startingChat = ref(false)
 /** Cache of uid -> display name for chat members (used when chat doc has no memberNames) */
 const memberNamesCache = ref<Record<string, string>>({})
 
-// Group info data
-const groupInfo = ref({
-  name: 'OJT Intern Path',
-  subtitle: 'Group - 12Members',
-  description: 'This group serves as a central communication hub for all participants in the OJT Intern Path program. Here, you can connect with fellow interns, mentors, and coordinators to share experiences, ask questions, and collaborate on projects.',
-  link: 'https://bit.ly/ojt-intern-path',
-  notifications: true,
-  members: [
-    { name: 'Runing Jagan', subtitle: 'Software Engineer', time: '30m', avatar: '/icons/profiles/robert-taylor.jpg' },
-    { name: 'Maria Santos', subtitle: 'UI/UX Designer', time: '45m', avatar: '/icons/profiles/maria-santos.jpg' },
-    { name: 'John Smith', subtitle: 'Project Manager', time: '1h', avatar: '/icons/profiles/john-smith.jpg' },
-    { name: 'Emily Johnson', subtitle: 'Frontend Developer', time: '2h', avatar: '/icons/profiles/emily-johnson.jpg' },
-    { name: 'David Kim', subtitle: 'Backend Developer', time: '3h', avatar: '/icons/profiles/david-kim.jpg' },
-    { name: 'Sophia Martinez', subtitle: 'Data Analyst', time: '4h', avatar: '/icons/profiles/sophia-martinez.jpg' }
-  ],
-  media: [
-    '/icons/profiles/alex-doe.jpg',
-    '/icons/profiles/maria-santos.jpg',
-    '/icons/profiles/emily-johnson.jpg',
-    '/icons/profiles/robert-taylor.jpg',
-    '/icons/profiles/david-kim.jpg',
-    '/icons/profiles/james-wilson.jpg',
-    '/icons/profiles/john-smith.jpg',
-    '/icons/profiles/sophia-martinez.jpg',
-    '/icons/profiles/alex-doe.jpg'
-  ]
-})
-
 // Functions
 function toggleChat() {
   isOpen.value = !isOpen.value
   if (isOpen.value) {
-    isMinimized.value = false
     unreadCount.value = 0
   }
 }
 
-function minimizeChat() {
-  isMinimized.value = true
-}
-
-function maximizeChat() {
-  isMinimized.value = false
-}
-
 function closeChat() {
   isOpen.value = false
-  isMinimized.value = false
+}
+
+function openChat() {
+  isOpen.value = true
+  unreadCount.value = 0
 }
 
 function selectConversation(id: string) {
@@ -150,6 +115,15 @@ function getOtherPartyName(thread: ChatThread): string {
   const fromDoc = thread.memberNames?.[otherId]
   const fromCache = memberNamesCache.value[otherId]
   return fromDoc || fromCache || 'User'
+}
+
+function currentUserDisplayName(): string {
+  const profile = authStore.user?.profile as Record<string, unknown> | undefined
+  const institutionName = typeof profile?.institutionName === 'string' ? profile.institutionName : ''
+  const companyName = typeof profile?.companyName === 'string' ? profile.companyName : ''
+  const displayName = authStore.user?.displayName || ''
+  const emailName = authStore.user?.email?.split('@')[0] || ''
+  return institutionName || companyName || displayName || emailName || 'User'
 }
 
 function mapThread(thread: ChatThread): ConversationItem {
@@ -234,7 +208,6 @@ async function sendMessage() {
 
 async function startChatListeners() {
   if (!currentUserId.value) {
-    console.log('FloatingChatWidget: No user ID, loading mock data')
     loadMockConversations()
     return
   }
@@ -244,34 +217,61 @@ async function startChatListeners() {
     unsubChats.value = subscribeToChats(
       currentUserId.value,
       async (threads) => {
-        console.log('FloatingChatWidget: Received threads from Firebase:', threads)
         if (threads.length === 0) {
           loadMockConversations()
         } else {
-          threads.forEach((t) => {
-            threadsMap.value[t.id] = t
-          })
-          for (const t of threads) {
-            if (t.members.length === 2) {
-              const otherId = t.members.find((m) => m !== currentUserId.value)
-              if (otherId && !t.memberNames?.[otherId] && !memberNamesCache.value[otherId]) {
-                const profile = await getPublicProfile(otherId)
-                if (profile) {
-                  const name = profile.orgName || profile.displayName
-                  memberNamesCache.value = {
-                    ...memberNamesCache.value,
-                    [otherId]: name,
-                  }
-                  mergeChatMemberNames(t.id, { [otherId]: name }).catch(() => {})
-                }
+          threadsMap.value = Object.fromEntries(threads.map((thread) => [thread.id, thread]))
+
+          const directThreadsMissingNames = threads
+            .map((thread) => {
+              if (thread.members.length !== 2) return null
+
+              const otherId = thread.members.find((member) => member !== currentUserId.value)
+              if (!otherId || thread.memberNames?.[otherId] || memberNamesCache.value[otherId]) {
+                return null
               }
+
+              return { threadId: thread.id, otherId }
+            })
+            .filter((item): item is { threadId: string; otherId: string } => item !== null)
+
+          const uniqueOtherIds = [...new Set(directThreadsMissingNames.map((item) => item.otherId))]
+          const fetchedProfiles = await Promise.all(
+            uniqueOtherIds.map(async (otherId) => ({
+              otherId,
+              profile: await getPublicProfile(otherId),
+            }))
+          )
+
+          const fetchedNames = Object.fromEntries(
+            fetchedProfiles
+              .filter((entry) => entry.profile)
+              .map((entry) => [entry.otherId, entry.profile?.orgName || entry.profile?.displayName || 'User'])
+          )
+
+          if (Object.keys(fetchedNames).length > 0) {
+            memberNamesCache.value = {
+              ...memberNamesCache.value,
+              ...fetchedNames,
             }
+
+            void Promise.all(
+              directThreadsMissingNames.map(async ({ threadId, otherId }) => {
+                const name = fetchedNames[otherId]
+                if (name) {
+                  await mergeChatMemberNames(threadId, { [otherId]: name }).catch(() => {})
+                }
+              })
+            )
           }
+
           conversations.value = threads.map(mapThread)
           if (!selectedConversation.value && conversations.value.length > 0) {
             const initial = conversations.value.find((chat) => chat.id === defaultChatId) || conversations.value[0]
-            selectedConversation.value = initial.id
-            startMessageListener(initial.id)
+            if (initial) {
+              selectedConversation.value = initial.id
+              startMessageListener(initial.id)
+            }
           }
         }
       },
@@ -332,9 +332,10 @@ function loadMockConversations() {
   ]
   
   // Auto-select first conversation
-  if (conversations.value.length > 0) {
-    selectedConversation.value = conversations.value[0].id
-    loadMockMessages(conversations.value[0].id)
+  const firstConversation = conversations.value[0]
+  if (firstConversation) {
+    selectedConversation.value = firstConversation.id
+    loadMockMessages(firstConversation.id)
   }
 }
 
@@ -369,6 +370,7 @@ function loadMockMessages(conversationId: string) {
 
 onMounted(() => {
   startChatListeners()
+  window.addEventListener('chat:open', openChat)
 })
 
 watch(currentUserId, () => {
@@ -390,11 +392,8 @@ watch(currentUserId, () => {
 onUnmounted(() => {
   if (unsubChats.value) unsubChats.value()
   if (unsubMessages.value) unsubMessages.value()
+  window.removeEventListener('chat:open', openChat)
 })
-
-function toggleGroupInfo() {
-  showGroupInfo.value = !showGroupInfo.value
-}
 
 async function openNewChatPanel() {
   const role = props.userType || authStore.user?.role
@@ -418,12 +417,7 @@ async function startChatWith(partner: PublicProfile) {
   const uid = currentUserId.value
   if (!uid || uid === partner.uid) return
   startingChat.value = true
-  const myName =
-    (authStore.user?.profile as Record<string, unknown>)?.institutionName ||
-    (authStore.user?.profile as Record<string, unknown>)?.companyName ||
-    authStore.user?.displayName ||
-    authStore.user?.email?.split('@')[0] ||
-    'User'
+  const myName = currentUserDisplayName()
   const partnerName = partner.orgName || partner.displayName
   try {
     const chatId = await createOrGetDirectChat(uid, partner.uid, {
@@ -498,7 +492,7 @@ function handleImageError(event: Event) {
   </div>
 
   <!-- Full Screen Chat Widget -->
-  <div v-if="isOpen" class="floating-chat-widget" :class="{ minimized: isMinimized }">
+  <div v-if="isOpen" class="floating-chat-widget">
     <!-- Main Chat Header -->
     <div class="main-chat-header">
       <div class="header-left">
@@ -699,10 +693,6 @@ function handleImageError(event: Event) {
   flex-direction: column;
   z-index: 1001;
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-}
-
-.floating-chat-widget.minimized {
-  display: none;
 }
 
 /* Main Chat Header */

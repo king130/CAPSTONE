@@ -11,6 +11,16 @@ class RbacSeeder extends Seeder
     public function run(): void
     {
         $permissionMap = [
+            'manage_users' => ['scope' => 'organization', 'description' => 'Manage users inside a tenant'],
+            'manage_roles' => ['scope' => 'organization', 'description' => 'Create, edit, and delete tenant roles'],
+            'manage_permissions' => ['scope' => 'organization', 'description' => 'Assign permissions to tenant roles'],
+            'view_reports' => ['scope' => 'organization', 'description' => 'View tenant reports'],
+            'upload_files' => ['scope' => 'organization', 'description' => 'Upload files and documents'],
+            'manage_subscription' => ['scope' => 'organization', 'description' => 'Manage tenant subscription settings'],
+            'manage_profile' => ['scope' => 'organization', 'description' => 'Update tenant profile details'],
+            'manage_internships' => ['scope' => 'organization', 'description' => 'Create and manage internships'],
+            'manage_contracts' => ['scope' => 'organization', 'description' => 'Create and manage contracts'],
+            'review_applications' => ['scope' => 'organization', 'description' => 'Review incoming applications'],
             'platform.manage_users' => ['scope' => 'platform', 'description' => 'Manage all users across the platform'],
             'platform.manage_subscriptions' => ['scope' => 'platform', 'description' => 'Approve and manage subscriptions'],
             'platform.manage_pricing' => ['scope' => 'platform', 'description' => 'Manage subscription pricing'],
@@ -33,6 +43,17 @@ class RbacSeeder extends Seeder
         }
 
         $roles = [
+            'system_admin' => [
+                'name' => 'System Admin',
+                'scope' => 'platform',
+                'organization_type' => null,
+                'permissions' => [
+                    'platform.manage_users',
+                    'platform.manage_subscriptions',
+                    'platform.manage_pricing',
+                    'platform.view_reports',
+                ],
+            ],
             'platform_super_admin' => [
                 'name' => 'Platform Super Admin',
                 'scope' => 'platform',

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { caviteBarangaysByLocation, caviteLocationGroups, courseGroups } from '@/config/courseCatalog'
 import { useAuthStore } from '@/stores/auth'
 import { apiFetch } from '@/services/http'
 import { mapApiUserToProfile, updateCurrentUserPassword } from '@/services/auth'
@@ -93,6 +94,7 @@ const addressInfo = ref({
 })
 
 const courses = ref<string[]>([])
+const selectedCourse = ref('')
 const newCourse = ref('')
 
 const security = ref({
@@ -118,6 +120,10 @@ const profilePicture = computed(() => {
   }
 
   return '/icons/profiles/john-smith.jpg'
+})
+
+const availableBarangays = computed(() => {
+  return caviteBarangaysByLocation[addressInfo.value.city] ?? []
 })
 
 watch(
@@ -161,6 +167,20 @@ watch(
     loading.value = false
   },
   { immediate: true }
+)
+
+watch(
+  () => addressInfo.value.city,
+  (city) => {
+    if (!city) {
+      addressInfo.value.barangay = ''
+      return
+    }
+
+    if (!availableBarangays.value.includes(addressInfo.value.barangay)) {
+      addressInfo.value.barangay = ''
+    }
+  }
 )
 
 function updateProfilePicture() {
@@ -217,13 +237,14 @@ async function onProfilePictureSelected(event: Event) {
   }
 }
 
-function addCourse() {
-  const value = newCourse.value.trim()
+function addCourse(rawValue?: string) {
+  const value = (rawValue ?? newCourse.value).trim()
   if (!value) return
   const normalized = value.toUpperCase()
   if (!courses.value.some((c) => c.toUpperCase() === normalized)) {
     courses.value.push(value)
   }
+  selectedCourse.value = ''
   newCourse.value = ''
 }
 
@@ -578,17 +599,17 @@ function handleImageError(event: Event) {
           <div class="settings-card full-width">
             <div class="card-header">
               <h3 class="card-title">Address Information</h3>
-              <p class="card-subtitle">Complete company address</p>
+              <p class="card-subtitle">Company location within Cavite</p>
             </div>
             <div class="card-body">
               <div class="form-row">
                 <div class="form-group">
-                  <label class="form-label">Complete Address</label>
+                  <label class="form-label">Street Address / Building / Landmark</label>
                   <textarea 
                     v-model="addressInfo.address"
                     class="form-textarea"
                     rows="2"
-                    placeholder="Enter complete address"
+                    placeholder="Enter street, subdivision, building, or landmark"
                   ></textarea>
                 </div>
               </div>
@@ -607,21 +628,19 @@ function handleImageError(event: Event) {
               <div class="form-row">
                 <div class="form-group">
                   <label class="form-label">City/Municipality in Cavite</label>
-                  <input 
-                    v-model="addressInfo.city"
-                    type="text" 
-                    class="form-input"
-                    placeholder="Enter city/municipality"
-                  />
+                  <select v-model="addressInfo.city" class="form-input">
+                    <option value="">Select a city or municipality</option>
+                    <optgroup v-for="group in caviteLocationGroups" :key="group.label" :label="group.label">
+                      <option v-for="option in group.options" :key="option" :value="option">{{ option }}</option>
+                    </optgroup>
+                  </select>
                 </div>
                 <div class="form-group">
                   <label class="form-label">Barangay</label>
-                  <input 
-                    v-model="addressInfo.barangay"
-                    type="text" 
-                    class="form-input"
-                    placeholder="Enter barangay"
-                  />
+                  <select v-model="addressInfo.barangay" class="form-input" :disabled="!addressInfo.city">
+                    <option value="">{{ availableBarangays.length ? 'Select a barangay' : 'Select a city or municipality first' }}</option>
+                    <option v-for="option in availableBarangays" :key="option" :value="option">{{ option }}</option>
+                  </select>
                 </div>
               </div>
               <div class="form-row">
@@ -638,24 +657,33 @@ function handleImageError(event: Event) {
             </div>
           </div>
 
-          <!-- Courses Card -->
+          <!-- Accepted Courses Card -->
           <div class="settings-card full-width">
             <div class="card-header">
-              <h3 class="card-title">Programs Accepted</h3>
-              <p class="card-subtitle">Programs your company accepts for internships (visible to schools for contract alignment)</p>
+              <h3 class="card-title">Accepted Courses</h3>
+              <p class="card-subtitle">Choose the courses or programs your company accepts for internships</p>
             </div>
             <div class="card-body">
               <div class="form-group">
-                <label class="form-label">Add Program</label>
+                <label class="form-label">Add Accepted Course</label>
                 <div class="course-entry">
+                  <select v-model="selectedCourse" class="form-input">
+                    <option value="">Select a course or program</option>
+                    <optgroup v-for="group in courseGroups" :key="group.label" :label="group.label">
+                      <option v-for="option in group.options" :key="option" :value="option">{{ option }}</option>
+                    </optgroup>
+                  </select>
+                  <button type="button" class="course-add-btn" @click="addCourse(selectedCourse)">Add</button>
+                </div>
+                <div class="course-entry" style="margin-top: 10px;">
                   <input
                     v-model="newCourse"
                     type="text"
                     class="form-input"
-                    placeholder="e.g., BSIT, BSHM, BSED"
-                    @keydown.enter.prevent="addCourse"
+                    placeholder="Or add a custom accepted course"
+                    @keydown.enter.prevent="addCourse()"
                   />
-                  <button type="button" class="course-add-btn" @click="addCourse">Add</button>
+                  <button type="button" class="course-add-btn" @click="addCourse()">Add Custom</button>
                 </div>
                 <div v-if="courses.length" class="course-chip-list">
                   <div v-for="c in courses" :key="c" class="course-chip">
@@ -663,7 +691,7 @@ function handleImageError(event: Event) {
                     <button type="button" class="course-chip-remove" @click="removeCourse(c)">x</button>
                   </div>
                 </div>
-                <p v-else class="bulk-import-hint">No courses added yet.</p>
+                <p v-else class="bulk-import-hint">No accepted courses added yet.</p>
               </div>
             </div>
           </div>

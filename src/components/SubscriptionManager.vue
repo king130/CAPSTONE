@@ -1,980 +1,606 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import Swal from 'sweetalert2'
-import { useAuthStore } from '@/stores/auth'
-import { getSubscriptionPlans, formatPrice, type SubscriptionPlan } from '@/services/subscriptionPricing'
+import {
+  ArrowRight,
+  BadgeCheck,
+  Building2,
+  CreditCard,
+  ExternalLink,
+  GraduationCap,
+  LoaderCircle,
+  RefreshCcw,
+  ShieldCheck,
+} from 'lucide-vue-next'
+
+import Card from '@/components/ui/card/Card.vue'
+import CardContent from '@/components/ui/card/CardContent.vue'
+import CardHeader from '@/components/ui/card/CardHeader.vue'
+import { getSubscriptionPlans, type SubscriptionPlan } from '@/services/subscriptionPricing'
 import {
   clearPendingPlanChange,
   createPaymongoCheckoutSession,
   updateUserSubscription,
   verifyPaymongoCheckoutSession,
-  type SubscriptionStatus,
 } from '@/services/subscriptions'
-
-type Role = 'company' | 'school'
+import { useAuthStore } from '@/stores/auth'
 
 const props = defineProps<{
-  role: Role
+  role: 'school' | 'company'
 }>()
 
 const authStore = useAuthStore()
-const loading = ref(true)
-const savingPlanId = ref<string | null>(null)
-const verifyingPayment = ref(false)
+const route = useRoute()
+const router = useRouter()
+
 const plans = ref<SubscriptionPlan[]>([])
-const copied = ref(false)
+const loading = ref(true)
+const actionPlanId = ref<string | null>(null)
+const verifying = ref(false)
 
-const planRank = (id: string) => (id === 'free' ? 0 : id === 'standard' ? 1 : id === 'premium' ? 2 : -1)
+const roleLabel = computed(() => (props.role === 'school' ? 'School' : 'Company'))
+const roleIcon = computed(() => (props.role === 'school' ? GraduationCap : Building2))
+const roleTheme = computed(() =>
+  props.role === 'school'
+    ? {
+        panel: 'border-sky-200 bg-sky-50/80',
+        badge: 'bg-sky-100 text-sky-700',
+        accent: 'from-sky-600 via-cyan-600 to-emerald-500',
+        ring: 'ring-sky-200',
+        button: 'bg-sky-600 hover:bg-sky-700',
+        soft: 'bg-sky-100 text-sky-700',
+      }
+    : {
+        panel: 'border-emerald-200 bg-emerald-50/80',
+        badge: 'bg-emerald-100 text-emerald-700',
+        accent: 'from-emerald-600 via-teal-600 to-cyan-500',
+        ring: 'ring-emerald-200',
+        button: 'bg-emerald-600 hover:bg-emerald-700',
+        soft: 'bg-emerald-100 text-emerald-700',
+      },
+)
 
-const subscription = computed(() => authStore.user?.subscription)
-const subscriptionPlanId = computed(() => (subscription.value?.plan || 'free').toLowerCase())
-const subscriptionStatus = computed<SubscriptionStatus>(() => (subscription.value?.status || 'inactive') as SubscriptionStatus)
-const billingCycle = computed(() => subscription.value?.billingCycle || 'monthly')
-const schoolCode = computed(() => subscription.value?.subscriptionCode || '')
-const pendingChange = computed(() => subscription.value?.pendingChange || null)
-const currentPlan = computed(() => plans.value.find((p) => p.id === subscriptionPlanId.value) || null)
-const pendingTargetPlan = computed(() => {
-  const targetId = pendingChange.value?.targetPlan
-  return targetId ? plans.value.find((p) => p.id === targetId) || null : null
+const currentSubscription = computed(() => authStore.user?.subscription ?? null)
+const currentPlanId = computed(() => normalizePlanId(currentSubscription.value?.plan))
+const pendingChange = computed(() => currentSubscription.value?.pendingChange ?? null)
+
+const currentPlan = computed(() => plans.value.find((plan) => plan.id === currentPlanId.value) ?? null)
+const recommendedPlanId = computed(() => {
+  const standard = plans.value.find((plan) => plan.id === 'standard')
+  return standard?.id ?? plans.value[0]?.id ?? 'free'
 })
 
-const headerTitle = computed(() => (props.role === 'school' ? 'School Subscription' : 'Company Subscription'))
-const hasActiveSubscription = computed(() => subscriptionStatus.value === 'active')
-const hasPendingChange = computed(() => !!pendingChange.value)
-const hasPaymongoCheckout = computed(() => !!pendingChange.value?.checkoutUrl && !!pendingChange.value?.checkoutSessionId)
-const activeSummary = computed(() => {
-  if (hasPendingChange.value && pendingTargetPlan.value) {
-    return `Pending ${pendingTargetPlan.value.name}`
+const statusTone = computed(() => {
+  switch (currentSubscription.value?.status) {
+    case 'active':
+      return 'bg-emerald-100 text-emerald-700'
+    case 'pending':
+      return 'bg-amber-100 text-amber-700'
+    default:
+      return 'bg-slate-200 text-slate-700'
   }
-  return currentPlan.value?.name || 'Free'
 })
 
-const sandboxHints = computed(() => {
-  const methods = pendingChange.value?.paymentMethods?.length
-    ? pendingChange.value.paymentMethods
-    : ['card']
-  return methods.map((method) => {
-    if (method === 'card') return 'Use PayMongo test mode card details only. No real charge is created.'
-    if (method === 'gcash') return 'Use a PayMongo test GCash flow if your account has it enabled.'
-    if (method === 'maya') return 'Use a PayMongo test Maya flow if your account has it enabled.'
-    return `Use PayMongo test mode for ${method}.`
-  })
+const summaryMetrics = computed(() => {
+  const current = currentPlan.value
+  if (!current) {
+    return []
+  }
+
+  const roleLimits = current.limits[props.role]
+  return props.role === 'school'
+    ? [
+        { label: 'Coordinator Seats', value: formatLimit(roleLimits.coordinators), hint: 'active coordinators allowed' },
+        { label: 'Student Capacity', value: formatLimit(roleLimits.students), hint: 'managed intern accounts' },
+        { label: 'Plan Status', value: capitalize(currentSubscription.value?.status ?? 'inactive'), hint: 'workspace access state' },
+      ]
+    : [
+        { label: 'Team Seats', value: formatLimit(roleLimits.accounts), hint: 'company users allowed' },
+        { label: 'Internship Posts', value: formatLimit(roleLimits.internships), hint: 'active opportunities capacity' },
+        { label: 'Plan Status', value: capitalize(currentSubscription.value?.status ?? 'inactive'), hint: 'billing state' },
+      ]
 })
+
+const compactFeatures = computed(() =>
+  plans.value.reduce<Record<string, string[]>>((accumulator, plan) => {
+    accumulator[plan.id] = plan.features[props.role].slice(0, 5)
+    return accumulator
+  }, {}),
+)
 
 onMounted(async () => {
+  await loadPlans()
+
+  if (route.query.paymongo === 'success' && pendingChange.value?.checkoutSessionId && pendingChange.value?.requestId) {
+    await verifyPendingPayment()
+  }
+})
+
+async function loadPlans() {
+  loading.value = true
   try {
     plans.value = await getSubscriptionPlans()
-    await maybeVerifyReturn()
+  } catch (error) {
+    console.error('Failed to load plans:', error)
+    await Swal.fire({
+      icon: 'error',
+      title: 'Unable to load plans',
+      text: 'The subscription catalog could not be loaded right now.',
+      confirmButtonColor: '#0f766e',
+    })
   } finally {
     loading.value = false
   }
-})
+}
 
-async function maybeVerifyReturn() {
-  if (typeof window === 'undefined') return
-  const url = new URL(window.location.href)
-  const paymongoState = url.searchParams.get('paymongo')
-  const requestId = url.searchParams.get('requestId')
-  const pending = pendingChange.value
+function normalizePlanId(plan: string | undefined): string {
+  return (plan ?? 'free').toString().trim().toLowerCase()
+}
 
-  if (!paymongoState || !requestId || !pending || pending.requestId !== requestId) return
+function priceForRole(plan: SubscriptionPlan): number {
+  return props.role === 'school' ? plan.schoolPrice : plan.companyPrice
+}
 
-  url.searchParams.delete('paymongo')
-  url.searchParams.delete('requestId')
-  window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+function formatPrice(amount: number): string {
+  return amount === 0 ? 'Free' : `PHP ${amount.toLocaleString()}`
+}
 
-  if (paymongoState === 'success' && pending.checkoutSessionId) {
-    await verifyPendingCheckout({ silentOnPending: false })
+function formatPriceAmount(amount: number): string {
+  return amount.toLocaleString()
+}
+
+function formatLimit(value: number): string {
+  return value >= 999 ? 'Unlimited' : value.toLocaleString()
+}
+
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+function isCurrentPlan(plan: SubscriptionPlan): boolean {
+  return currentPlanId.value === plan.id && !pendingChange.value
+}
+
+function isPendingPlan(plan: SubscriptionPlan): boolean {
+  return normalizePlanId(pendingChange.value?.targetPlan) === plan.id
+}
+
+function isBusy(planId: string): boolean {
+  return actionPlanId.value === planId
+}
+
+function badgeLabel(plan: SubscriptionPlan): string | null {
+  if (isCurrentPlan(plan)) return 'Current Plan'
+  if (isPendingPlan(plan)) return 'Pending Verification'
+  if (plan.id === recommendedPlanId.value) return 'Recommended'
+  return null
+}
+
+async function handlePlanAction(plan: SubscriptionPlan) {
+  if (!authStore.user?.uid) {
     return
   }
 
-  if (paymongoState === 'cancel') {
-    await Swal.fire({
-      icon: 'info',
-      title: 'Checkout closed',
-      text: 'Your PayMongo test checkout is still saved. You can reopen it anytime from the pending payment card.',
-      confirmButtonColor: '#2563eb',
-    })
-  }
-}
-
-const rolePrice = (plan: SubscriptionPlan) => (props.role === 'school' ? plan.schoolPrice : plan.companyPrice)
-const roleFeatures = (plan: SubscriptionPlan) => (props.role === 'school' ? plan.features.school : plan.features.company)
-
-function actionLabel(targetId: string) {
-  if (subscriptionStatus.value !== 'active') return `Choose ${labelForPlan(targetId)}`
-  const diff = planRank(targetId) - planRank(subscriptionPlanId.value)
-  if (diff > 0) return `Upgrade to ${labelForPlan(targetId)}`
-  if (diff < 0) return `Downgrade to ${labelForPlan(targetId)}`
-  return 'Current Plan'
-}
-
-function labelForPlan(planId: string) {
-  if (planId === 'free') return 'Free'
-  if (planId === 'standard') return 'Standard'
-  if (planId === 'premium') return 'Premium'
-  return planId
-}
-
-function requiresPayment(current: SubscriptionPlan | null, target: SubscriptionPlan) {
-  const currentAmount = current ? rolePrice(current) : 0
-  const targetAmount = rolePrice(target)
-  if (targetAmount <= 0) return false
-  if (subscriptionStatus.value !== 'active') return true
-  return targetAmount > currentAmount
-}
-
-function planDeltaLabel(target: SubscriptionPlan) {
-  if (!hasActiveSubscription.value) return requiresPayment(currentPlan.value, target) ? 'Starts with PayMongo test checkout' : 'Activates immediately'
-  const diff = planRank(target.id) - planRank(subscriptionPlanId.value)
-  if (diff > 0) return requiresPayment(currentPlan.value, target) ? 'Pay in PayMongo test mode' : 'Upgrade instantly'
-  if (diff < 0) return 'Downgrade without checkout'
-  return 'Already active'
-}
-
-function canSelectPlan(target: SubscriptionPlan) {
-  if (savingPlanId.value || verifyingPayment.value) return false
-  if (target.id === subscriptionPlanId.value && !hasPendingChange.value) return false
-  if (hasPendingChange.value && target.id !== 'free') return false
-  return true
-}
-
-function disabledReason(target: SubscriptionPlan) {
-  if (savingPlanId.value || verifyingPayment.value) return 'Please wait while billing is updating.'
-  if (target.id === subscriptionPlanId.value && !hasPendingChange.value) return 'This is your current plan.'
-  if (hasPendingChange.value && target.id !== 'free') return 'Finish or cancel the current PayMongo checkout first.'
-  return ''
-}
-
-function generateRequestId() {
-  try {
-    return `PM-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
-  } catch {
-    return `PM-${Math.random().toString(16).slice(2, 10).toUpperCase()}`
-  }
-}
-
-async function copySchoolCode() {
-  if (!schoolCode.value) return
-  try {
-    await navigator.clipboard.writeText(schoolCode.value)
-    copied.value = true
-    setTimeout(() => {
-      copied.value = false
-    }, 1400)
-  } catch {
-    copied.value = false
-  }
-}
-
-async function setPlan(planId: string) {
-  if (!authStore.user?.uid || savingPlanId.value) return
-  const target = plans.value.find((p) => p.id === planId)
-  if (!target) return
-
-  if (hasPendingChange.value && planId !== 'free') {
-    await Swal.fire({
-      icon: 'info',
-      title: 'Pending PayMongo checkout',
-      text: 'Finish or cancel the current test checkout before selecting another paid plan.',
-      confirmButtonColor: '#2563eb',
-    })
+  if (isCurrentPlan(plan)) {
     return
   }
 
-  const result = await Swal.fire({
-    icon: 'question',
-    title: `${actionLabel(planId)}?`,
-    html: `
-      <div style="text-align:left;">
-        <p><strong>Plan:</strong> ${target.name}</p>
-        <p><strong>Price:</strong> ${formatPrice(rolePrice(target))}${rolePrice(target) > 0 ? `/${billingCycle.value}` : ''}</p>
-        <p><strong>Flow:</strong> ${requiresPayment(currentPlan.value, target) ? 'PayMongo test checkout' : 'Direct update'}</p>
-      </div>
-    `,
-    showCancelButton: true,
-    confirmButtonText: requiresPayment(currentPlan.value, target) ? 'Open PayMongo checkout' : 'Apply plan',
-    cancelButtonText: 'Cancel',
-    confirmButtonColor: '#2563eb',
-  })
-  if (!result.isConfirmed) return
+  const amount = priceForRole(plan)
+  actionPlanId.value = plan.id
 
-  savingPlanId.value = planId
   try {
-    if (requiresPayment(currentPlan.value, target)) {
-      const requestId = generateRequestId()
-      const checkout = await createPaymongoCheckoutSession(authStore.user.uid, {
-        requestId,
-        planId: target.id,
-        planName: target.name,
-        role: props.role,
-        amount: rolePrice(target),
-        billingCycle: billingCycle.value,
-        returnUrl: typeof window !== 'undefined' ? window.location.href : '',
+    if (amount === 0) {
+      await updateUserSubscription(authStore.user.uid, {
+        plan: plan.id,
+        status: 'active',
+        billingCycle: 'monthly',
       })
-      if (checkout.checkoutUrl) {
-        window.open(checkout.checkoutUrl, '_blank', 'noopener,noreferrer')
-      }
-
+      await clearPendingPlanChange(authStore.user.uid).catch(() => null)
       await authStore.refreshUser()
-
       await Swal.fire({
         icon: 'success',
-        title: 'PayMongo test checkout ready',
-        html: `
-          <div style="text-align:left;">
-            <p>Your test checkout was created successfully.</p>
-            <p><strong>Request ID:</strong> ${checkout.requestId}</p>
-            <p><strong>Next step:</strong> finish the test payment in PayMongo, then click <strong>Verify payment</strong> on this page.</p>
-          </div>
-        `,
-        confirmButtonColor: '#2563eb',
+        title: 'Plan updated',
+        text: 'Your workspace has been moved to the free plan.',
+        confirmButtonColor: '#0f766e',
       })
       return
     }
 
-    await updateUserSubscription(authStore.user.uid, { plan: target.id, status: 'active' })
+    const requestId = `plan_${plan.id}_${Date.now()}`
+    const result = await createPaymongoCheckoutSession(authStore.user.uid, {
+      requestId,
+      planId: plan.id,
+      planName: plan.name,
+      role: props.role,
+      amount,
+      billingCycle: 'monthly',
+      returnUrl: window.location.href.split('?')[0],
+    })
+
+    await authStore.refreshUser()
+
     await Swal.fire({
       icon: 'success',
-      title: 'Subscription updated',
-      text: `Your plan is now ${target.name}.`,
-      confirmButtonColor: '#2563eb',
+      title: 'PayMongo checkout ready',
+      text: 'You will be sent to PayMongo test checkout. Return here after payment to verify the upgrade.',
+      confirmButtonText: 'Open Checkout',
+      confirmButtonColor: props.role === 'school' ? '#0284c7' : '#059669',
     })
+
+    window.open(result.checkoutUrl, '_blank', 'noopener,noreferrer')
   } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to start checkout right now.'
     await Swal.fire({
       icon: 'error',
-      title: 'Billing update failed',
-      text: error instanceof Error ? error.message : 'Could not update your subscription.',
-      confirmButtonColor: '#2563eb',
+      title: 'Checkout unavailable',
+      text: message,
+      confirmButtonColor: '#dc2626',
     })
   } finally {
-    savingPlanId.value = null
+    actionPlanId.value = null
   }
 }
 
-async function cancelToFree() {
-  if (!authStore.user?.uid || savingPlanId.value) return
-
-  const result = await Swal.fire({
-    icon: 'warning',
-    title: 'Move to Free plan?',
-    text: 'This will switch your account to Free and remove any pending PayMongo checkout.',
-    showCancelButton: true,
-    confirmButtonText: 'Move to Free',
-    cancelButtonText: 'Keep current plan',
-    confirmButtonColor: '#dc2626',
-  })
-  if (!result.isConfirmed) return
-
-  savingPlanId.value = 'free'
-  try {
-    await updateUserSubscription(authStore.user.uid, { plan: 'free', status: 'active' })
-    await clearPendingPlanChange(authStore.user.uid).catch(() => {})
-    await Swal.fire({
-      icon: 'success',
-      title: 'Free plan active',
-      text: 'Your subscription has been moved to the Free plan.',
-      confirmButtonColor: '#2563eb',
-    })
-  } catch (error) {
-    await Swal.fire({
-      icon: 'error',
-      title: 'Cancellation failed',
-      text: error instanceof Error ? error.message : 'Could not update your subscription.',
-      confirmButtonColor: '#2563eb',
-    })
-  } finally {
-    savingPlanId.value = null
+async function verifyPendingPayment() {
+  if (!authStore.user?.uid || !pendingChange.value?.checkoutSessionId || !pendingChange.value?.requestId) {
+    return
   }
-}
 
-async function cancelPendingRequest() {
-  if (!authStore.user?.uid || !pendingChange.value || savingPlanId.value) return
+  verifying.value = true
 
-  const result = await Swal.fire({
-    icon: 'warning',
-    title: 'Cancel pending PayMongo checkout?',
-    text: 'This keeps your current plan and removes the saved test checkout session from the app.',
-    showCancelButton: true,
-    confirmButtonText: 'Cancel checkout',
-    cancelButtonText: 'Keep checkout',
-    confirmButtonColor: '#dc2626',
-  })
-  if (!result.isConfirmed) return
-
-  savingPlanId.value = 'pending-cancel'
-  try {
-    await clearPendingPlanChange(authStore.user.uid)
-    await Swal.fire({
-      icon: 'success',
-      title: 'Pending checkout removed',
-      confirmButtonColor: '#2563eb',
-    })
-  } finally {
-    savingPlanId.value = null
-  }
-}
-
-function openPendingCheckout() {
-  const url = pendingChange.value?.checkoutUrl
-  if (!url) return
-  window.open(url, '_blank', 'noopener,noreferrer')
-}
-
-async function verifyPendingCheckout(options: { silentOnPending?: boolean } = {}) {
-  if (!authStore.user?.uid || !pendingChange.value?.checkoutSessionId || verifyingPayment.value) return
-
-  verifyingPayment.value = true
   try {
     const result = await verifyPaymongoCheckoutSession(authStore.user.uid, {
       requestId: pendingChange.value.requestId,
       checkoutSessionId: pendingChange.value.checkoutSessionId,
     })
 
+    await authStore.refreshUser()
+
     if (result.verified) {
       await Swal.fire({
         icon: 'success',
         title: 'Payment verified',
-        text: 'Your PayMongo test payment is complete and the subscription is now active.',
-        confirmButtonColor: '#2563eb',
+        text: 'Your organization subscription is now active.',
+        confirmButtonColor: props.role === 'school' ? '#0284c7' : '#059669',
       })
+      await router.replace({ path: route.path, query: {} })
       return
     }
 
-    if (!options.silentOnPending) {
-      await Swal.fire({
-        icon: 'info',
-        title: 'Still waiting for payment',
-        text: result.message || 'The test payment is not marked as paid yet. Finish the PayMongo checkout first, then verify again.',
-        confirmButtonColor: '#2563eb',
-      })
-    }
+    await Swal.fire({
+      icon: 'info',
+      title: 'Still waiting on payment',
+      text: result.message ?? 'The PayMongo checkout has not completed yet.',
+      confirmButtonColor: '#0f766e',
+    })
   } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to verify payment right now.'
     await Swal.fire({
       icon: 'error',
       title: 'Verification failed',
-      text: error instanceof Error ? error.message : 'Could not verify your PayMongo checkout.',
-      confirmButtonColor: '#2563eb',
+      text: message,
+      confirmButtonColor: '#dc2626',
     })
   } finally {
-    verifyingPayment.value = false
-    await authStore.refreshUser().catch(() => {})
+    verifying.value = false
   }
+}
+
+function reopenCheckout() {
+  if (!pendingChange.value?.checkoutUrl) {
+    return
+  }
+
+  window.open(pendingChange.value.checkoutUrl, '_blank', 'noopener,noreferrer')
 }
 </script>
 
 <template>
-  <div class="subscription-manager">
-    <header class="hero-card" :class="`hero-${props.role}`">
-      <div>
-        <div class="eyebrow">Billing</div>
-        <h1>{{ headerTitle }}</h1>
-        <p class="hero-copy">
-          Pick a plan, launch a PayMongo test checkout for paid upgrades, and verify the sandbox payment without using real money.
-        </p>
-      </div>
-      <div class="hero-status">
-        <span class="status-chip" :class="`status-${subscriptionStatus}`">{{ subscriptionStatus }}</span>
-        <span class="hero-plan">{{ activeSummary }}</span>
-      </div>
-    </header>
+  <div class="space-y-6">
+    <Card class="overflow-hidden border-slate-200 shadow-sm">
+      <div class="grid gap-0 xl:grid-cols-[1.5fr_0.9fr]">
+        <div class="relative overflow-hidden border-b border-slate-200 bg-slate-950 px-6 py-7 text-white xl:border-b-0 xl:border-r">
+          <div class="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.3),_transparent_45%),radial-gradient(circle_at_bottom_right,_rgba(16,185,129,0.28),_transparent_42%)]" />
+          <div class="relative space-y-5">
+            <div class="flex flex-wrap items-center gap-3">
+              <span class="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-slate-100">
+                <component :is="roleIcon" class="h-4 w-4" />
+                {{ roleLabel }} Billing
+              </span>
+              <span class="inline-flex rounded-full px-3 py-1 text-xs font-semibold" :class="statusTone">
+                {{ capitalize(currentSubscription?.status ?? 'inactive') }}
+              </span>
+            </div>
 
-    <div v-if="loading" class="loading-card">
-      Loading billing details...
-    </div>
+            <div class="space-y-3">
+              <h2 class="max-w-2xl text-3xl font-semibold tracking-tight sm:text-4xl">
+                A cleaner billing workspace for plan changes, checkout, and verification.
+              </h2>
+              <p class="max-w-2xl text-sm leading-6 text-slate-200/90">
+                Pick the right subscription for your {{ props.role === 'school' ? 'school operations' : 'internship program' }},
+                launch PayMongo test checkout for paid upgrades, and verify the payment back inside the platform.
+              </p>
+            </div>
 
-    <div v-else class="billing-layout">
-      <section class="summary-grid">
-        <article class="summary-card primary">
-          <div class="summary-label">Current plan</div>
-          <div class="summary-value">{{ currentPlan?.name || 'Free' }}</div>
-          <div class="summary-subtext">
-            {{ formatPrice(currentPlan ? rolePrice(currentPlan) : 0) }}
-            <span v-if="currentPlan && rolePrice(currentPlan) > 0">/{{ billingCycle }}</span>
-          </div>
-        </article>
-
-        <article class="summary-card">
-          <div class="summary-label">Billing cycle</div>
-          <div class="summary-value capitalize">{{ billingCycle }}</div>
-          <div class="summary-subtext">Applies to the active organization subscription.</div>
-        </article>
-
-        <article class="summary-card" v-if="role === 'school' && schoolCode">
-          <div class="summary-label">School code</div>
-          <div class="summary-value code-text">{{ schoolCode }}</div>
-          <button class="subtle-btn" type="button" @click="copySchoolCode">{{ copied ? 'Copied' : 'Copy code' }}</button>
-        </article>
-      </section>
-
-      <section v-if="pendingChange" class="pending-panel">
-        <div class="pending-head">
-          <div>
-            <div class="panel-title">Pending PayMongo Test Checkout</div>
-            <div class="panel-copy">
-              {{ pendingTargetPlan?.name || pendingChange.targetPlan }} for {{ formatPrice(pendingChange.amount) }}
+            <div class="grid gap-3 sm:grid-cols-3">
+              <div
+                v-for="metric in summaryMetrics"
+                :key="metric.label"
+                class="rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur-sm"
+              >
+                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">{{ metric.label }}</p>
+                <p class="mt-3 text-2xl font-semibold text-white">{{ metric.value }}</p>
+                <p class="mt-1 text-xs text-slate-300">{{ metric.hint }}</p>
+              </div>
             </div>
           </div>
-          <div class="pending-badge">{{ pendingChange.checkoutStatus || 'waiting' }}</div>
         </div>
 
-        <div class="pending-grid">
-          <div class="pending-item">
-            <span class="pending-label">Request ID</span>
-            <strong>{{ pendingChange.requestId }}</strong>
+        <div class="space-y-4 bg-white px-6 py-7">
+          <div :class="['rounded-2xl border p-5', roleTheme.panel]">
+            <div class="flex items-start gap-3">
+              <div :class="['rounded-2xl p-3', roleTheme.soft]">
+                <CreditCard class="h-5 w-5" />
+              </div>
+              <div class="space-y-2">
+                <p class="text-sm font-semibold text-slate-950">PayMongo temporary checkout</p>
+                <p class="text-sm leading-6 text-slate-600">
+                  Use PayMongo as the temporary payment mode while you validate the subscription flow.
+                  Paid plans open an external checkout, then return here for verification.
+                </p>
+              </div>
+            </div>
           </div>
-          <div class="pending-item" v-if="pendingChange.checkoutSessionId">
-            <span class="pending-label">Checkout session</span>
-            <strong class="mono">{{ pendingChange.checkoutSessionId }}</strong>
+
+          <div class="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+            <div class="flex items-start gap-3">
+              <div class="rounded-2xl bg-emerald-100 p-3 text-emerald-700">
+                <ShieldCheck class="h-5 w-5" />
+              </div>
+              <div class="space-y-2">
+                <p class="text-sm font-semibold text-slate-950">Verification stays in-app</p>
+                <p class="text-sm leading-6 text-slate-600">
+                  After paying, use the verification action below. That keeps plan activation aligned with the organization inside this workspace.
+                </p>
+              </div>
+            </div>
           </div>
-          <div class="pending-item">
-            <span class="pending-label">Sandbox mode</span>
-            <strong>No real money is charged</strong>
-          </div>
-        </div>
 
-        <div class="sandbox-box">
-          <div class="sandbox-title">PayMongo test mode notes</div>
-          <ul class="sandbox-list">
-            <li v-for="hint in sandboxHints" :key="hint">{{ hint }}</li>
-            <li>Open the checkout, finish the test payment there, then return here and click `Verify payment`.</li>
-          </ul>
-        </div>
-
-        <div class="pending-actions">
-          <button v-if="hasPaymongoCheckout" class="primary-btn" type="button" :disabled="verifyingPayment" @click="openPendingCheckout">
-            Open checkout
-          </button>
-          <button class="primary-btn verify" type="button" :disabled="verifyingPayment" @click="verifyPendingCheckout()">
-            {{ verifyingPayment ? 'Verifying...' : 'Verify payment' }}
-          </button>
-          <button class="ghost-btn danger" type="button" :disabled="!!savingPlanId || verifyingPayment" @click="cancelPendingRequest">
-            Cancel pending checkout
-          </button>
-        </div>
-      </section>
-
-      <section class="plans-section">
-        <div class="section-head">
-          <div>
-            <h2>Plans</h2>
-            <p>Paid upgrades now go through PayMongo test checkout instead of manual receipt entry.</p>
-          </div>
-          <button
-            v-if="subscriptionPlanId !== 'free' || subscriptionStatus !== 'active'"
-            class="ghost-btn danger"
-            type="button"
-            :disabled="!!savingPlanId || verifyingPayment"
-            @click="cancelToFree"
-          >
-            Move to Free
-          </button>
-        </div>
-
-        <div class="plans-grid">
-          <article
-            v-for="plan in plans"
-            :key="plan.id"
-            class="plan-card"
-            :class="{
-              active: plan.id === subscriptionPlanId && !hasPendingChange,
-              recommended: plan.id === 'standard' && plan.id !== subscriptionPlanId,
-            }"
-          >
-            <div class="plan-head">
-              <div class="plan-topline">
-                <div class="plan-name">{{ plan.name }}</div>
-                <div class="plan-tags">
-                  <span v-if="plan.id === subscriptionPlanId && !hasPendingChange" class="tag current">Current</span>
-                  <span v-else-if="plan.id === 'standard'" class="tag rec">Recommended</span>
-                  <span v-if="requiresPayment(currentPlan, plan)" class="tag paymongo">PayMongo</span>
+          <div v-if="pendingChange" class="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+            <div class="flex flex-col gap-4">
+              <div class="flex items-start gap-3">
+                <div class="rounded-2xl bg-amber-100 p-3 text-amber-700">
+                  <RefreshCcw class="h-5 w-5" />
+                </div>
+                <div>
+                  <p class="text-sm font-semibold text-slate-950">Pending plan upgrade</p>
+                  <p class="mt-1 text-sm leading-6 text-slate-600">
+                    {{
+                      `A ${capitalize(pendingChange.targetPlan)} plan checkout is waiting for verification.`
+                    }}
+                  </p>
                 </div>
               </div>
-              <div class="plan-price">
-                {{ formatPrice(rolePrice(plan)) }}
-                <span v-if="rolePrice(plan) > 0" class="per">/{{ billingCycle }}</span>
+
+              <div class="grid gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  class="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
+                  :disabled="verifying"
+                  @click="verifyPendingPayment"
+                >
+                  <LoaderCircle v-if="verifying" class="h-4 w-4 animate-spin" />
+                  <BadgeCheck v-else class="h-4 w-4" />
+                  Verify Payment
+                </button>
+
+                <button
+                  v-if="pendingChange.checkoutUrl"
+                  type="button"
+                  class="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+                  @click="reopenCheckout"
+                >
+                  <ExternalLink class="h-4 w-4" />
+                  Reopen Checkout
+                </button>
               </div>
-              <p class="plan-description">{{ plan.description }}</p>
-              <p class="plan-delta">{{ planDeltaLabel(plan) }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Card>
+
+    <div v-if="loading" class="grid gap-4 lg:grid-cols-3">
+      <Card v-for="index in 3" :key="index" class="border-slate-200 shadow-sm">
+        <CardContent class="space-y-4 p-6">
+          <div class="h-4 w-24 animate-pulse rounded bg-slate-200" />
+          <div class="h-9 w-40 animate-pulse rounded bg-slate-200" />
+          <div class="space-y-2">
+            <div class="h-3 animate-pulse rounded bg-slate-200" />
+            <div class="h-3 animate-pulse rounded bg-slate-200" />
+            <div class="h-3 w-5/6 animate-pulse rounded bg-slate-200" />
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+
+    <div v-else class="space-y-6">
+      <div class="grid gap-5 xl:grid-cols-3">
+        <Card
+          v-for="plan in plans"
+          :key="plan.id"
+          class="relative overflow-hidden border-slate-200 shadow-sm transition duration-200 hover:-translate-y-1 hover:shadow-lg"
+          :class="[
+            plan.id === recommendedPlanId ? ['ring-2', roleTheme.ring] : '',
+            isCurrentPlan(plan) ? 'border-emerald-200 ring-2 ring-emerald-200' : '',
+            isPendingPlan(plan) ? 'border-amber-200 ring-2 ring-amber-200' : '',
+          ]"
+        >
+          <div :class="['h-1.5 bg-gradient-to-r', roleTheme.accent]" />
+          <CardHeader class="space-y-4 p-6">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="text-lg font-semibold text-slate-950">{{ plan.name }}</p>
+                <p class="mt-1 line-clamp-2 min-h-[2.75rem] text-sm text-slate-600">{{ plan.description }}</p>
+              </div>
+              <span
+                v-if="badgeLabel(plan)"
+                class="inline-flex rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em]"
+                :class="
+                  isCurrentPlan(plan)
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : isPendingPlan(plan)
+                      ? 'bg-amber-100 text-amber-700'
+                      : roleTheme.badge
+                "
+              >
+                {{ badgeLabel(plan) }}
+              </span>
             </div>
 
-            <ul class="plan-features">
-              <li v-for="feature in roleFeatures(plan)" :key="feature">{{ feature }}</li>
+            <div class="space-y-1">
+              <template v-if="priceForRole(plan) === 0">
+                <p class="text-4xl font-semibold tracking-tight text-slate-950">
+                  {{ formatPrice(priceForRole(plan)) }}
+                </p>
+              </template>
+              <div v-else class="flex flex-wrap items-end gap-x-2 gap-y-1">
+                <span class="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">PHP</span>
+                <p class="text-[2.45rem] font-semibold leading-none tracking-tight text-slate-950 sm:text-[2.7rem]">
+                  {{ formatPriceAmount(priceForRole(plan)) }}
+                </p>
+                <span class="pb-1 text-sm text-slate-500">/month</span>
+              </div>
+              <p class="text-sm text-slate-500">
+                {{ priceForRole(plan) === 0 ? 'No monthly charge' : 'Monthly billing via PayMongo test checkout' }}
+              </p>
+            </div>
+          </CardHeader>
+
+          <CardContent class="space-y-5 p-6 pt-0">
+            <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Capacity</p>
+              <div class="mt-3 grid grid-cols-2 gap-3">
+                <template v-if="props.role === 'school'">
+                  <div class="rounded-xl bg-white px-3 py-3">
+                    <p class="text-xs font-medium uppercase tracking-[0.14em] text-slate-500">Coordinators</p>
+                    <p class="mt-2 text-xl font-semibold text-slate-950">{{ formatLimit(plan.limits.school.coordinators) }}</p>
+                  </div>
+                  <div class="rounded-xl bg-white px-3 py-3">
+                    <p class="text-xs font-medium uppercase tracking-[0.14em] text-slate-500">Students</p>
+                    <p class="mt-2 text-xl font-semibold text-slate-950">{{ formatLimit(plan.limits.school.students) }}</p>
+                  </div>
+                </template>
+                <template v-else>
+                  <div class="rounded-xl bg-white px-3 py-3">
+                    <p class="text-xs font-medium uppercase tracking-[0.14em] text-slate-500">Accounts</p>
+                    <p class="mt-2 text-xl font-semibold text-slate-950">{{ formatLimit(plan.limits.company.accounts) }}</p>
+                  </div>
+                  <div class="rounded-xl bg-white px-3 py-3">
+                    <p class="text-xs font-medium uppercase tracking-[0.14em] text-slate-500">Internships</p>
+                    <p class="mt-2 text-xl font-semibold text-slate-950">{{ formatLimit(plan.limits.company.internships) }}</p>
+                  </div>
+                </template>
+              </div>
+            </div>
+
+            <ul class="space-y-2.5">
+              <li
+                v-for="feature in compactFeatures[plan.id] ?? []"
+                :key="feature"
+                class="flex items-start gap-3 text-sm leading-6 text-slate-700"
+              >
+                <span class="mt-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+                  <BadgeCheck class="h-3.5 w-3.5" />
+                </span>
+                <span>{{ feature }}</span>
+              </li>
             </ul>
 
-            <button
-              class="plan-action"
-              type="button"
-              :disabled="!canSelectPlan(plan)"
-              :title="disabledReason(plan)"
-              @click="setPlan(plan.id)"
+            <p
+              v-if="(plan.features[props.role]?.length ?? 0) > 5"
+              class="text-xs font-medium uppercase tracking-[0.16em] text-slate-500"
             >
-              {{ savingPlanId === plan.id ? 'Processing...' : actionLabel(plan.id) }}
+              + {{ plan.features[props.role].length - 5 }} more included features
+            </p>
+
+            <button
+              type="button"
+              class="inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-70"
+              :class="isCurrentPlan(plan) ? 'bg-emerald-600 hover:bg-emerald-600' : roleTheme.button"
+              :disabled="isCurrentPlan(plan) || isBusy(plan.id)"
+              @click="handlePlanAction(plan)"
+            >
+              <LoaderCircle v-if="isBusy(plan.id)" class="h-4 w-4 animate-spin" />
+              <BadgeCheck v-else-if="isCurrentPlan(plan)" class="h-4 w-4" />
+              <ArrowRight v-else class="h-4 w-4" />
+              {{
+                isCurrentPlan(plan)
+                  ? 'Current Plan'
+                  : priceForRole(plan) === 0
+                    ? 'Switch to Free'
+                    : 'Choose and Pay'
+              }}
             </button>
-          </article>
-        </div>
-      </section>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div class="grid gap-5 xl:grid-cols-2">
+        <Card class="border-slate-200 shadow-sm">
+          <CardHeader class="space-y-2 p-6">
+            <p class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">Current Subscription</p>
+            <h3 class="text-xl font-semibold text-slate-950">
+              {{ currentPlan ? `${currentPlan.name} Plan` : 'No Active Plan Yet' }}
+            </h3>
+          </CardHeader>
+          <CardContent class="space-y-4 p-6 pt-0">
+            <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div class="flex items-center justify-between gap-3">
+                <span class="text-sm text-slate-500">Billing cycle</span>
+                <span class="font-medium text-slate-900">{{ capitalize(currentSubscription?.billingCycle ?? 'monthly') }}</span>
+              </div>
+              <div class="mt-3 flex items-center justify-between gap-3">
+                <span class="text-sm text-slate-500">Status</span>
+                <span class="inline-flex rounded-full px-3 py-1 text-xs font-semibold" :class="statusTone">
+                  {{ capitalize(currentSubscription?.status ?? 'inactive') }}
+                </span>
+              </div>
+              <div class="mt-3 flex items-center justify-between gap-3">
+                <span class="text-sm text-slate-500">Subscription code</span>
+                <span class="font-medium text-slate-900">
+                  {{ currentSubscription?.subscriptionCode || 'Auto-generated after activation' }}
+                </span>
+              </div>
+            </div>
+
+            <div class="rounded-2xl border border-slate-200 bg-white p-4">
+              <p class="text-sm font-semibold text-slate-950">What happens after checkout</p>
+              <ol class="mt-3 space-y-3 text-sm leading-6 text-slate-600">
+                <li>1. Choose a paid plan and open the PayMongo checkout page.</li>
+                <li>2. Finish the temporary payment flow in PayMongo.</li>
+                <li>3. Return here and verify the payment to activate the upgrade.</li>
+              </ol>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card class="border-slate-200 shadow-sm">
+          <CardHeader class="space-y-2 p-6">
+            <p class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">Payment Notes</p>
+            <h3 class="text-xl font-semibold text-slate-950">Designed for your current rollout</h3>
+          </CardHeader>
+          <CardContent class="space-y-3 p-6 pt-0 text-sm leading-6 text-slate-600">
+            <p>
+              This version is intentionally built around PayMongo as a temporary payment mode so you can keep shipping the platform while the final billing setup is still evolving.
+            </p>
+            <p>
+              The upgrade flow is separated into checkout and verification on purpose, which makes it easier to recover pending payments without manually editing subscription data.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   </div>
 </template>
-
-<style scoped>
-.subscription-manager {
-  padding: 28px;
-  min-height: calc(100vh - 40px);
-  background:
-    radial-gradient(1000px 480px at 8% 0%, rgba(14, 165, 233, 0.12), transparent 60%),
-    radial-gradient(760px 420px at 94% 2%, rgba(16, 185, 129, 0.11), transparent 58%),
-    #f8fafc;
-}
-
-.hero-card {
-  display: flex;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 22px;
-  border-radius: 22px;
-  border: 1px solid rgba(148, 163, 184, 0.28);
-  background: rgba(255, 255, 255, 0.86);
-  backdrop-filter: blur(8px);
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
-}
-
-.hero-school {
-  box-shadow: 0 18px 40px rgba(37, 99, 235, 0.1);
-}
-
-.hero-company {
-  box-shadow: 0 18px 40px rgba(5, 150, 105, 0.1);
-}
-
-.eyebrow {
-  font-size: 11px;
-  font-weight: 900;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: #64748b;
-}
-
-.hero-card h1 {
-  margin: 6px 0 0;
-  font-size: 26px;
-  font-weight: 900;
-  color: #0f172a;
-}
-
-.hero-copy {
-  margin: 10px 0 0;
-  max-width: 700px;
-  color: #475569;
-  line-height: 1.55;
-}
-
-.hero-status {
-  min-width: 180px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 10px;
-}
-
-.status-chip {
-  padding: 7px 12px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 900;
-  text-transform: capitalize;
-}
-
-.status-active {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.status-pending {
-  background: #fef3c7;
-  color: #92400e;
-}
-
-.status-inactive {
-  background: #e2e8f0;
-  color: #334155;
-}
-
-.hero-plan {
-  font-size: 14px;
-  font-weight: 800;
-  color: #0f172a;
-}
-
-.loading-card,
-.summary-card,
-.pending-panel,
-.plans-section {
-  background: white;
-  border: 1px solid #e2e8f0;
-  border-radius: 18px;
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
-}
-
-.loading-card {
-  margin-top: 18px;
-  padding: 24px;
-  color: #475569;
-}
-
-.billing-layout {
-  display: grid;
-  gap: 18px;
-  margin-top: 18px;
-}
-
-.summary-grid {
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
-.summary-card {
-  padding: 18px;
-}
-
-.summary-card.primary {
-  background: linear-gradient(135deg, #eff6ff, #ffffff);
-}
-
-.summary-label {
-  font-size: 12px;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #64748b;
-}
-
-.summary-value {
-  margin-top: 8px;
-  font-size: 24px;
-  font-weight: 900;
-  color: #0f172a;
-}
-
-.summary-subtext {
-  margin-top: 6px;
-  color: #64748b;
-  font-size: 14px;
-}
-
-.capitalize {
-  text-transform: capitalize;
-}
-
-.code-text {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-  font-size: 20px;
-}
-
-.subtle-btn,
-.ghost-btn,
-.primary-btn,
-.plan-action {
-  border: none;
-  cursor: pointer;
-  font-weight: 800;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
-}
-
-.subtle-btn {
-  margin-top: 12px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: #f1f5f9;
-  color: #0f172a;
-}
-
-.ghost-btn {
-  padding: 11px 14px;
-  border-radius: 12px;
-  background: #fff;
-  border: 1px solid #cbd5e1;
-  color: #0f172a;
-}
-
-.ghost-btn.danger {
-  color: #991b1b;
-  border-color: rgba(220, 38, 38, 0.2);
-  background: rgba(220, 38, 38, 0.06);
-}
-
-.primary-btn,
-.plan-action {
-  padding: 12px 16px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #2563eb, #1d4ed8);
-  color: white;
-  box-shadow: 0 14px 26px rgba(37, 99, 235, 0.22);
-}
-
-.primary-btn.verify {
-  background: linear-gradient(135deg, #0f766e, #0d9488);
-  box-shadow: 0 14px 26px rgba(13, 148, 136, 0.22);
-}
-
-.primary-btn:disabled,
-.ghost-btn:disabled,
-.plan-action:disabled,
-.subtle-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-  transform: none;
-  box-shadow: none;
-}
-
-.pending-panel,
-.plans-section {
-  padding: 20px;
-}
-
-.pending-head,
-.section-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.panel-title,
-.section-head h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 900;
-  color: #0f172a;
-}
-
-.panel-copy,
-.section-head p {
-  margin: 6px 0 0;
-  color: #64748b;
-  line-height: 1.45;
-}
-
-.pending-badge {
-  padding: 8px 12px;
-  border-radius: 999px;
-  background: #fff7ed;
-  color: #9a3412;
-  font-size: 12px;
-  font-weight: 900;
-  text-transform: capitalize;
-}
-
-.pending-grid {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  margin-top: 16px;
-}
-
-.pending-item {
-  padding: 14px;
-  border-radius: 14px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  color: #0f172a;
-}
-
-.pending-label {
-  display: block;
-  margin-bottom: 6px;
-  font-size: 12px;
-  font-weight: 800;
-  color: #64748b;
-  text-transform: uppercase;
-}
-
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-  font-size: 13px;
-}
-
-.sandbox-box {
-  margin-top: 16px;
-  padding: 16px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, #ecfeff, #f8fafc);
-  border: 1px solid #bae6fd;
-}
-
-.sandbox-title {
-  font-size: 14px;
-  font-weight: 900;
-  color: #0f172a;
-}
-
-.sandbox-list {
-  margin: 10px 0 0;
-  padding-left: 18px;
-  color: #334155;
-  line-height: 1.55;
-}
-
-.pending-actions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 18px;
-}
-
-.plans-grid {
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  margin-top: 18px;
-}
-
-.plan-card {
-  display: flex;
-  flex-direction: column;
-  min-height: 340px;
-  padding: 18px;
-  border-radius: 18px;
-  border: 1px solid #e2e8f0;
-  background: linear-gradient(180deg, #ffffff, #fbfdff);
-}
-
-.plan-card.active {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
-}
-
-.plan-card.recommended {
-  border-color: rgba(37, 99, 235, 0.3);
-}
-
-.plan-head {
-  padding-bottom: 12px;
-  border-bottom: 1px solid #e2e8f0;
-}
-
-.plan-topline {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.plan-name {
-  font-size: 18px;
-  font-weight: 900;
-  color: #0f172a;
-}
-
-.plan-tags {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.tag {
-  padding: 4px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 900;
-}
-
-.tag.current {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.tag.rec {
-  background: #eff6ff;
-  color: #1d4ed8;
-}
-
-.tag.paymongo {
-  background: #ecfeff;
-  color: #0f766e;
-}
-
-.plan-price {
-  margin-top: 10px;
-  font-size: 28px;
-  font-weight: 900;
-  color: #111827;
-}
-
-.per {
-  margin-left: 6px;
-  font-size: 13px;
-  font-weight: 700;
-  color: #64748b;
-}
-
-.plan-description,
-.plan-delta {
-  margin: 8px 0 0;
-  color: #64748b;
-}
-
-.plan-delta {
-  font-size: 13px;
-  font-weight: 800;
-  color: #334155;
-}
-
-.plan-features {
-  flex: 1;
-  margin: 16px 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.plan-features li {
-  position: relative;
-  padding-left: 18px;
-  color: #334155;
-  line-height: 1.45;
-}
-
-.plan-features li::before {
-  content: '✓';
-  position: absolute;
-  left: 0;
-  color: #16a34a;
-  font-weight: 900;
-}
-
-@media (max-width: 900px) {
-  .hero-card,
-  .pending-head,
-  .section-head {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .hero-status {
-    align-items: flex-start;
-  }
-}
-
-@media (max-width: 768px) {
-  .subscription-manager {
-    padding: 18px;
-  }
-
-  .pending-actions,
-  .section-head {
-    flex-direction: column;
-  }
-
-  .primary-btn,
-  .ghost-btn,
-  .plan-action {
-    width: 100%;
-  }
-}
-</style>

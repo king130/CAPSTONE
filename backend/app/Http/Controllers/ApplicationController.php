@@ -13,21 +13,53 @@ class ApplicationController extends Controller
     {
         $user = $request->user();
         $appRole = $user->effectiveAppRole();
-        $query = Application::query()->with(['student.user', 'internship.company']);
+        $query = Application::query()
+            ->select([
+                'id',
+                'internship_id',
+                'student_id',
+                'company_id',
+                'status',
+                'resume_url',
+                'documents',
+                'documents_pending',
+                'internship_title',
+                'student_name',
+                'student_email',
+                'student_course',
+                'created_at',
+                'updated_at',
+            ])
+            ->with([
+                'student:id,user_id,school_id,school_subscription_code,school_name',
+                'internship:id,company_id,title',
+                'internship.company:id,user_id,company_name',
+            ]);
 
         $company = $user->organizationCompany() ?? $user->company;
+        $school = $user->organizationSchool() ?? $user->school;
 
         if ($appRole === 'student' && $user->student) {
             $query->where('student_id', $user->student->id);
         } elseif ($appRole === 'company' && $company) {
             $query->where('company_id', $company->id);
+        } elseif ($appRole === 'school' && $school) {
+            $query->whereHas('student', function ($studentQuery) use ($school) {
+                $studentQuery->where('school_id', $school->id);
+                if ($school->subscription_code) {
+                    $studentQuery->orWhere('school_subscription_code', $school->subscription_code);
+                }
+            });
         } elseif ($appRole === 'admin') {
             // list all
         } else {
             return response()->json(['data' => []]);
         }
 
-        $items = $query->orderByDesc('created_at')->get()->map(fn ($a) => $this->serialize($a));
+        $items = $query
+            ->orderByDesc('created_at')
+            ->get()
+            ->map(fn ($application) => $this->serialize($application));
 
         return response()->json(['data' => $items]);
     }
@@ -66,6 +98,12 @@ class ApplicationController extends Controller
             'student_course' => $student->course,
         ]);
 
+        $application->load([
+            'student:id,user_id,school_id,school_subscription_code,school_name',
+            'internship:id,company_id,title',
+            'internship.company:id,user_id,company_name',
+        ]);
+
         return response()->json(['data' => $this->serialize($application)], Response::HTTP_CREATED);
     }
 
@@ -76,17 +114,26 @@ class ApplicationController extends Controller
         $internship = $application->internship;
 
         $company = $user->organizationCompany() ?? $user->company;
+        $school = $user->organizationSchool() ?? $user->school;
 
         $canCompany = $appRole === 'company'
             && $company
             && $internship
             && $internship->company_id === $company->id;
 
+        $canSchool = $appRole === 'school'
+            && $school
+            && $application->student
+            && (
+                $application->student->school_id === $school->id
+                || ($school->subscription_code && $application->student->school_subscription_code === $school->subscription_code)
+            );
+
         $canStudent = $appRole === 'student'
             && $user->student
             && $application->student_id === $user->student->id;
 
-        if (! $canCompany && ! $canStudent && $appRole !== 'admin') {
+        if (! $canCompany && ! $canSchool && ! $canStudent && $appRole !== 'admin') {
             return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
         }
 
@@ -94,9 +141,42 @@ class ApplicationController extends Controller
             'status' => ['required', 'string', 'max:64'],
         ]);
 
-        $application->update(['status' => $data['status']]);
+        $nextStatus = strtolower(trim((string) $data['status']));
+        $currentStatus = strtolower(trim((string) $application->status));
 
-        return response()->json(['data' => $this->serialize($application->fresh())]);
+        if ($appRole === 'school') {
+            if (! in_array($nextStatus, ['endorsed', 'school_rejected'], true)) {
+                return response()->json(['message' => 'Schools can only endorse or reject applications.'], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+
+            if (! in_array($currentStatus, ['submitted', 'pending'], true)) {
+                return response()->json(['message' => 'Only newly submitted applications can be endorsed by the school.'], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+        }
+
+        if ($appRole === 'company') {
+            if (! in_array($nextStatus, ['accepted', 'rejected'], true)) {
+                return response()->json(['message' => 'Companies can only accept or reject endorsed applications.'], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+
+            if ($currentStatus !== 'endorsed') {
+                return response()->json(['message' => 'Only school-endorsed applications can be reviewed by the company.'], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+        }
+
+        if ($appRole === 'student' && $appRole !== 'admin') {
+            return response()->json(['message' => 'Students cannot update application decisions.'], Response::HTTP_FORBIDDEN);
+        }
+
+        $application->update(['status' => $nextStatus]);
+
+        $freshApplication = $application->fresh([
+            'student:id,user_id,school_id,school_subscription_code,school_name',
+            'internship:id,company_id,title',
+            'internship.company:id,user_id,company_name',
+        ]);
+
+        return response()->json(['data' => $this->serialize($freshApplication)]);
     }
 
     /**
@@ -104,8 +184,6 @@ class ApplicationController extends Controller
      */
     private function serialize(Application $a): array
     {
-        $a->loadMissing('student', 'internship.company');
-
         $companyUserId = '';
         if ($a->internship?->company?->user_id) {
             $companyUserId = (string) $a->internship->company->user_id;
@@ -120,6 +198,8 @@ class ApplicationController extends Controller
             'studentName' => $a->student_name,
             'studentEmail' => $a->student_email,
             'studentCourse' => $a->student_course,
+            'schoolName' => $a->student?->school_name,
+            'companyName' => $a->internship?->company?->company_name,
             'status' => $a->status,
             'resume' => $a->resume_url,
             'documents' => $a->documents,

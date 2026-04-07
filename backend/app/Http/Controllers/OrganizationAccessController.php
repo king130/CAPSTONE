@@ -6,11 +6,20 @@ use App\Models\Organization;
 use App\Models\OrganizationMembership;
 use App\Models\Role;
 use App\Models\User;
+use App\Services\SubscriptionPlanService;
+use App\Services\TenantRoleService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 
 class OrganizationAccessController extends Controller
 {
+    public function __construct(
+        private readonly SubscriptionPlanService $subscriptionPlans,
+        private readonly TenantRoleService $tenantRoleService,
+    )
+    {
+    }
+
     public function index(Request $request)
     {
         /** @var User $user */
@@ -30,10 +39,20 @@ class OrganizationAccessController extends Controller
             'memberships.role.permissions',
         ]);
 
+        $this->tenantRoleService->ensureDefaultRoles($organization);
+
         $roles = Role::query()
             ->with('permissions')
-            ->where('scope', 'organization')
-            ->where('organization_type', $organization->type)
+            ->where(function ($query) use ($organization) {
+                $query
+                    ->where('tenant_id', $organization->id)
+                    ->orWhere(function ($fallback) use ($organization) {
+                        $fallback
+                            ->whereNull('tenant_id')
+                            ->where('scope', 'organization')
+                            ->where('organization_type', $organization->type);
+                    });
+            })
             ->orderBy('name')
             ->get();
 
@@ -83,8 +102,16 @@ class OrganizationAccessController extends Controller
         if (array_key_exists('roleId', $data)) {
             $role = Role::query()
                 ->where('id', $data['roleId'])
-                ->where('scope', 'organization')
-                ->where('organization_type', $actorMembership->organization->type)
+                ->where(function ($query) use ($actorMembership) {
+                    $query
+                        ->where('tenant_id', $actorMembership->organization->id)
+                        ->orWhere(function ($fallback) use ($actorMembership) {
+                            $fallback
+                                ->whereNull('tenant_id')
+                                ->where('scope', 'organization')
+                                ->where('organization_type', $actorMembership->organization->type);
+                        });
+                })
                 ->first();
 
             if (! $role) {
@@ -99,6 +126,19 @@ class OrganizationAccessController extends Controller
         }
 
         if (array_key_exists('status', $data)) {
+            if (
+                $data['status'] === 'active'
+                && $membership->status !== 'active'
+                && $this->wouldExceedAccountLimit($actorMembership->organization)
+            ) {
+                $overage = $this->accountOverageForOrganization($actorMembership->organization);
+
+                return response()->json([
+                    'message' => $overage['message'] ?? 'Your organization is already at the account limit for the current plan.',
+                    'overage' => $overage,
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+
             $membership->status = $data['status'];
         }
 
@@ -111,6 +151,7 @@ class OrganizationAccessController extends Controller
 
         $membership->save();
         $membership->load(['user', 'role.permissions', 'organization']);
+        $this->subscriptionPlans->syncOrganizationCompliance($actorMembership->organization);
 
         return response()->json([
             'member' => $this->serializeMembership($membership),
@@ -139,18 +180,41 @@ class OrganizationAccessController extends Controller
         ]);
 
         $organization = $actorMembership->organization;
+        if ($this->wouldExceedAccountLimit($organization)) {
+            $overage = $this->accountOverageForOrganization($organization);
+
+            return response()->json([
+                'message' => $overage['message'] ?? 'Your organization has reached the account limit for the current plan.',
+                'overage' => $overage,
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
         $role = Role::query()
             ->where('id', $data['roleId'])
-            ->where('scope', 'organization')
-            ->where('organization_type', $organization->type)
+            ->where(function ($query) use ($organization) {
+                $query
+                    ->where('tenant_id', $organization->id)
+                    ->orWhere(function ($fallback) use ($organization) {
+                        $fallback
+                            ->whereNull('tenant_id')
+                            ->where('scope', 'organization')
+                            ->where('organization_type', $organization->type);
+                    });
+            })
             ->first();
 
         if (! $role) {
             return response()->json(['message' => 'The selected role is not valid for this organization.'], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
+        if ($organization->type === 'school' && $role->slug !== 'intern') {
+            return response()->json([
+                'message' => 'School accounts can only create intern accounts from organization access.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
         $tempPassword = $this->generateTemporaryPassword();
-        $legacyRole = $organization->type;
+        $legacyRole = $organization->type === 'school' ? 'student' : $organization->type;
 
         $newUser = User::query()->create([
             'name' => trim($data['name']),
@@ -173,7 +237,13 @@ class OrganizationAccessController extends Controller
             'invited_by_user_id' => $user->id,
         ]);
 
+        $newUser->forceFill([
+            'tenant_id' => $organization->id,
+            'role_id' => $role->id,
+        ])->save();
+
         $membership->load(['user', 'role.permissions', 'organization']);
+        $this->subscriptionPlans->syncOrganizationCompliance($organization);
 
         return response()->json([
             'member' => $this->serializeMembership($membership),
@@ -184,7 +254,9 @@ class OrganizationAccessController extends Controller
     private function canManageOrganizationAccess(OrganizationMembership $membership): bool
     {
         return in_array('org.manage_roles', $membership->effectivePermissions(), true)
-            || in_array('org.manage_members', $membership->effectivePermissions(), true);
+            || in_array('org.manage_members', $membership->effectivePermissions(), true)
+            || in_array('manage_roles', $membership->effectivePermissions(), true)
+            || in_array('manage_users', $membership->effectivePermissions(), true);
     }
 
     /**
@@ -195,6 +267,7 @@ class OrganizationAccessController extends Controller
         if ($organization->type === 'school') {
             return [
                 'institutionName' => $organization->name,
+                'schoolName' => $organization->name,
                 'position' => $title,
             ];
         }
@@ -208,6 +281,26 @@ class OrganizationAccessController extends Controller
     private function generateTemporaryPassword(): string
     {
         return 'Temp@'.strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
+    }
+
+    private function wouldExceedAccountLimit(Organization $organization): bool
+    {
+        $key = $organization->type === 'school' ? 'school.coordinators' : 'company.accounts';
+
+        return $this->subscriptionPlans->wouldExceedAfterIncrement($organization, $key);
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function accountOverageForOrganization(Organization $organization): ?array
+    {
+        $key = $organization->type === 'school' ? 'school.coordinators' : 'company.accounts';
+
+        return $this->subscriptionPlans->getOverageForResource($organization, $key) ?? [
+            'key' => $key,
+            'message' => 'Your organization has reached the account limit for the current subscription plan.',
+        ];
     }
 
     /**

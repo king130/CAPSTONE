@@ -1,23 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { AUTH_DISABLED } from '@/config/auth'
-import Landing from '@/views/Landing.vue'
-import Login from '@/views/Login.vue'
-import RegisterSimple from '@/views/RegisterSimple.vue'
-import ChangePassword from '@/views/ChangePassword.vue'
-import RoleSelection from '@/views/RoleSelection.vue'
-import Profile from '@/views/Profile.vue'
-import FindInternships from '@/views/FindInternships.vue'
-import Dashboard from '@/views/company/Company.vue'
-import School from '@/views/school/School.vue'
-import Intern from '@/views/intern/Intern.vue'
-import AccountDisabled from '@/views/AccountDisabled.vue'
-import Guest from '@/views/Guest.vue'
-import Subscription from '@/views/Subscription.vue'
-import AdminDashboard from '@/views/admin/AdminDashboard.vue'
-import UserManagement from '@/views/admin/UserManagement.vue'
-import TemporaryAccounts from '@/views/admin/TemporaryAccounts.vue'
-import SystemOverview from '@/views/admin/SystemOverview.vue'
-import SubscriptionPricing from '@/views/admin/SubscriptionPricing.vue'
 import { useAuthStore } from '@/stores/auth'
 import type { UserRole } from '@/services/auth'
 
@@ -60,36 +42,103 @@ const router = createRouter({
   },
   routes: [
     // Public routes
-    { path: '/', name: 'landing', component: Landing },
-    { path: '/login', name: 'login', component: Login },
-    { path: '/register', name: 'register', component: RegisterSimple },
-    { path: '/change-password', name: 'change-password', component: ChangePassword, meta: { requiresAuth: true, allowGuest: true } },
-    { path: '/find-internships', name: 'find-internships', component: FindInternships, meta: { excludeRoles: ['school'] } },
-    { path: '/account-disabled', name: 'account-disabled', component: AccountDisabled },
+    { path: '/', name: 'landing', component: () => import('@/views/Landing.vue') },
+    { path: '/login', name: 'login', component: () => import('@/views/Login.vue') },
+    { path: '/register', name: 'register', component: () => import('@/views/RegisterSimple.vue') },
+    { path: '/account-setup', name: 'account-setup', component: () => import('@/views/AccountSetup.vue') },
+    { path: '/change-password', name: 'change-password', component: () => import('@/views/ChangePassword.vue'), meta: { requiresAuth: true, allowGuest: true } },
+    { path: '/find-internships', name: 'find-internships', component: () => import('@/views/FindInternships.vue'), meta: { excludeRoles: ['school'] } },
+    { path: '/opportunities', name: 'opportunities', component: () => import('@/views/FindInternships.vue'), meta: { excludeRoles: ['school'] } },
+    { path: '/account-disabled', name: 'account-disabled', component: () => import('@/views/AccountDisabled.vue') },
+    { path: '/notifications', name: 'notifications', component: () => import('@/views/Notifications.vue'), meta: { requiresAuth: true, excludeRoles: ['guest'] } },
+    { path: '/settings', name: 'settings', component: () => import('@/views/Settings.vue'), meta: { requiresAuth: true, excludeRoles: ['guest'] } },
+    { path: '/billing', name: 'organization-subscription', component: () => import('@/views/OrganizationSubscription.vue'), meta: { requiresAuth: true, excludeRoles: ['guest', 'student', 'admin'] } },
+    { path: '/ojt-hours', name: 'ojt-hours', component: () => import('@/views/OJTHours.vue'), meta: { requiresAuth: true, excludeRoles: ['guest'] } },
+    { path: '/contracts', name: 'contracts', component: () => import('@/views/Contracts.vue'), meta: { requiresAuth: true, excludeRoles: ['guest', 'student', 'admin'] } },
+    { path: '/contracts/types', name: 'contract-types-manage', component: () => import('@/views/ManageContractTypes.vue'), meta: { requiresAuth: true, excludeRoles: ['guest', 'student', 'admin'] } },
+    { path: '/contracts/new', name: 'contracts-new', component: () => import('@/views/NewContractRequest.vue'), meta: { requiresAuth: true, excludeRoles: ['guest', 'student', 'admin'] } },
+    { path: '/school/students', name: 'school-students', component: () => import('@/views/StudentAccounts.vue'), meta: { requiresAuth: true, requiresRole: 'school' } },
+    { path: '/access/roles', name: 'tenant-role-management', component: () => import('@/views/TenantRbac.vue'), props: { mode: 'roles' }, meta: { requiresAuth: true, excludeRoles: ['guest', 'student'] } },
+    { path: '/access/permissions', name: 'tenant-permission-assignment', component: () => import('@/views/TenantRbac.vue'), props: { mode: 'permissions' }, meta: { requiresAuth: true, excludeRoles: ['guest', 'student'] } },
     
     // Guest routes (logged in but no role)
-    { path: '/guest', name: 'guest', component: Guest, meta: { requiresAuth: true, allowGuest: true } },
-    { path: '/subscription/:role?', name: 'subscription', component: Subscription, meta: { requiresAuth: true, allowGuest: true } },
-    { path: '/role-selection', name: 'role-selection', component: RoleSelection, meta: { requiresAuth: true, allowGuest: true } },
-    { path: '/profile', name: 'profile', component: Profile, meta: { requiresAuth: true, allowGuest: true } },
+    { path: '/guest', name: 'guest', component: () => import('@/views/Guest.vue'), meta: { requiresAuth: true, allowGuest: true } },
+    { path: '/subscription/:role?', name: 'subscription', component: () => import('@/views/Subscription.vue'), meta: { requiresAuth: true, allowGuest: true } },
+    { path: '/role-selection', name: 'role-selection', component: () => import('@/views/RoleSelection.vue'), meta: { requiresAuth: true, allowGuest: true } },
+    { path: '/profile', name: 'profile', component: () => import('@/views/Profile.vue'), meta: { requiresAuth: true, allowGuest: true } },
     
     // Role-specific dashboards
-    { path: '/dashboard', name: 'dashboard', component: Dashboard, meta: { requiresAuth: true, requiresRole: 'company' } },
-    { path: '/school', name: 'school', component: School, meta: { requiresAuth: true, requiresRole: 'school' } },
-    { path: '/intern', name: 'intern', component: Intern, meta: { requiresAuth: true, requiresRole: 'student' } },
+    { path: '/dashboard', name: 'dashboard', component: () => import('@/views/company/Company.vue'), meta: { requiresAuth: true, requiresRole: 'company' } },
+    { path: '/dashboard/jobs', name: 'company-internships', component: () => import('@/views/company/Company.vue'), meta: { requiresAuth: true, requiresRole: 'company' } },
+    { path: '/dashboard/applicants', name: 'company-applicants', component: () => import('@/views/company/Company.vue'), meta: { requiresAuth: true, requiresRole: 'company' } },
+    { path: '/register/company', name: 'register-company', component: () => import('@/views/RegisterSimple.vue') },
+    { path: '/register/school', name: 'register-school', component: () => import('@/views/RegisterSimple.vue') },
+    { path: '/school', name: 'school', component: () => import('@/views/school/School.vue'), meta: { requiresAuth: true, requiresRole: 'school' } },
+    { path: '/school/interns', name: 'school-interns', component: () => import('@/views/school/School.vue'), meta: { requiresAuth: true, requiresRole: 'school' } },
+    { path: '/school/opportunities', name: 'school-opportunities', component: () => import('@/views/school/School.vue'), meta: { requiresAuth: true, requiresRole: 'school' } },
+    { path: '/school/endorsements', name: 'school-endorsements', component: () => import('@/views/school/School.vue'), meta: { requiresAuth: true, requiresRole: 'school' } },
+    { path: '/school/placements', name: 'school-placements', component: () => import('@/views/school/School.vue'), meta: { requiresAuth: true, requiresRole: 'school' } },
+    { path: '/school/reports', name: 'school-reports', component: () => import('@/views/school/School.vue'), meta: { requiresAuth: true, requiresRole: 'school' } },
+    { path: '/intern', name: 'intern', component: () => import('@/views/intern/Intern.vue'), meta: { requiresAuth: true, requiresRole: 'student' } },
+    { path: '/intern/opportunities', name: 'intern-opportunities', component: () => import('@/views/intern/Intern.vue'), meta: { requiresAuth: true, requiresRole: 'student' } },
+    { path: '/intern/documents', name: 'intern-documents', component: () => import('@/views/intern/Intern.vue'), meta: { requiresAuth: true, requiresRole: 'student' } },
+    { path: '/intern/applications', name: 'intern-applications', component: () => import('@/views/intern/Intern.vue'), meta: { requiresAuth: true, requiresRole: 'student' } },
+    { path: '/intern/placement', name: 'intern-placement', component: () => import('@/views/intern/Intern.vue'), meta: { requiresAuth: true, requiresRole: 'student' } },
+    { path: '/intern/tracker', name: 'intern-tracker', component: () => import('@/views/intern/Intern.vue'), meta: { requiresAuth: true, requiresRole: 'student' } },
     
     // Admin routes (use main /login - admin redirects to /admin/overview)
     { path: '/admin/login', redirect: '/login' },
     {
       path: '/admin',
-      component: AdminDashboard,
+      component: () => import('@/views/admin/AdminDashboard.vue'),
       meta: { requiresAuth: true, requiresRole: 'admin' },
       children: [
         { path: '', redirect: '/admin/overview' },
-        { path: 'overview', name: 'admin-overview', component: SystemOverview, meta: { requiresAuth: true, requiresRole: 'admin' } },
-        { path: 'users', name: 'admin-users', component: UserManagement, meta: { requiresAuth: true, requiresRole: 'admin' } },
-        { path: 'temporary', name: 'admin-temporary', component: TemporaryAccounts, meta: { requiresAuth: true, requiresRole: 'admin' } },
-        { path: 'pricing', name: 'admin-pricing', component: SubscriptionPricing, meta: { requiresAuth: true, requiresRole: 'admin' } },
+        {
+          path: 'overview',
+          name: 'admin-overview',
+          component: () => import('@/views/admin/SystemOverview.vue'),
+          meta: { requiresAuth: true, requiresRole: 'admin', layoutTitle: 'Dashboard', navKey: 'admin-overview' },
+        },
+        {
+          path: 'interns',
+          alias: 'users',
+          name: 'admin-manage-interns',
+          component: () => import('@/views/admin/UserManagement.vue'),
+          meta: { requiresAuth: true, requiresRole: 'admin', layoutTitle: 'Manage Interns', navKey: 'admin-manage-interns' },
+        },
+        {
+          path: 'schools',
+          name: 'admin-manage-schools',
+          component: () => import('@/views/admin/UserManagement.vue'),
+          meta: { requiresAuth: true, requiresRole: 'admin', layoutTitle: 'Manage Schools', navKey: 'admin-manage-schools' },
+        },
+        {
+          path: 'companies',
+          name: 'admin-manage-companies',
+          component: () => import('@/views/admin/UserManagement.vue'),
+          meta: { requiresAuth: true, requiresRole: 'admin', layoutTitle: 'Manage Companies', navKey: 'admin-manage-companies' },
+        },
+        {
+          path: 'reports',
+          alias: 'temporary',
+          name: 'admin-reports',
+          component: () => import('@/views/admin/TemporaryAccounts.vue'),
+          meta: { requiresAuth: true, requiresRole: 'admin', layoutTitle: 'Reports', navKey: 'admin-reports' },
+        },
+        {
+          path: 'subscriptions',
+          name: 'admin-subscriptions',
+          component: () => import('@/views/admin/SubscriptionPricing.vue'),
+          meta: { requiresAuth: true, requiresRole: 'admin', layoutTitle: 'Subscription Plans', navKey: 'admin-subscriptions' },
+        },
+        {
+          path: 'settings',
+          alias: 'pricing',
+          name: 'admin-settings',
+          component: () => import('@/views/admin/AdminSettings.vue'),
+          meta: { requiresAuth: true, requiresRole: 'admin', layoutTitle: 'Settings', navKey: 'admin-settings' },
+        },
       ],
     },
   ],

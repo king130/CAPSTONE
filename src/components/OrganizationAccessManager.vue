@@ -42,9 +42,20 @@ const newMember = ref({
 })
 
 const activeMembership = computed(() => authStore.user?.memberships?.[0] ?? null)
+const accountOverage = computed(() => {
+  const key = props.organizationType === 'school' ? 'school.coordinators' : 'company.accounts'
+  return authStore.user?.subscription?.overages?.items?.find((item) => item.key === key) ?? null
+})
 const canManageAccess = computed(() => {
   const perms = activeMembership.value?.permissions ?? []
   return perms.includes('org.manage_roles') || perms.includes('org.manage_members')
+})
+const assignableRoles = computed(() => {
+  if (props.organizationType === 'school') {
+    return roles.value.filter((role) => role.slug === 'intern')
+  }
+
+  return roles.value
 })
 
 const availablePermissions = computed(() => {
@@ -84,6 +95,9 @@ async function loadAccess() {
     roles.value = data.roles
     members.value = data.members
     memberDrafts.value = {}
+    if (props.organizationType === 'school') {
+      newMember.value.roleId = data.roles.find((role) => role.slug === 'intern')?.id ?? ''
+    }
   } catch (error) {
     await Swal.fire({
       icon: 'error',
@@ -107,6 +121,25 @@ async function createMember() {
     return
   }
 
+  const confirmation = await Swal.fire({
+    icon: 'question',
+    title: 'Create this staff account?',
+    html: `
+      <div style="text-align:left;display:grid;gap:8px;">
+        <div><strong>Name:</strong> ${newMember.value.name.trim()}</div>
+        <div><strong>Email:</strong> ${newMember.value.email.trim()}</div>
+        <div><strong>Role:</strong> ${roleName(newMember.value.roleId)}</div>
+        <div><strong>Title:</strong> ${newMember.value.title.trim() || 'Not set'}</div>
+      </div>
+    `,
+    showCancelButton: true,
+    confirmButtonText: 'Create Account',
+    cancelButtonText: 'Cancel',
+    confirmButtonColor: '#2563eb',
+  })
+
+  if (!confirmation.isConfirmed) return
+
   creating.value = true
   try {
     const res = await createOrganizationMember({
@@ -118,6 +151,7 @@ async function createMember() {
 
     members.value = [...members.value, res.member].sort((a, b) => a.user.name.localeCompare(b.user.name))
     newMember.value = { name: '', email: '', roleId: '', title: '' }
+    await authStore.refreshUser()
 
     await Swal.fire({
       icon: 'success',
@@ -226,6 +260,37 @@ async function saveMemberChanges(member: OrganizationAccessMember) {
   const draft = memberDrafts.value[member.id]
   if (!draft || !hasPendingChanges(member)) return
 
+  const changedItems: string[] = []
+  if (draft.roleId !== member.role.id) {
+    changedItems.push(`<div><strong>Role:</strong> ${member.role.name} -> ${roleName(draft.roleId)}</div>`)
+  }
+  if (draft.status !== member.status) {
+    changedItems.push(`<div><strong>Status:</strong> ${member.status} -> ${draft.status}</div>`)
+  }
+  if ([...draft.grantPermissions].sort().join('|') !== [...(member.permissionsOverride.grant ?? [])].sort().join('|')) {
+    changedItems.push(`<div><strong>Granted permissions:</strong> updated</div>`)
+  }
+  if ([...draft.denyPermissions].sort().join('|') !== [...(member.permissionsOverride.deny ?? [])].sort().join('|')) {
+    changedItems.push(`<div><strong>Denied permissions:</strong> updated</div>`)
+  }
+
+  const confirmation = await Swal.fire({
+    icon: 'question',
+    title: 'Apply access changes?',
+    html: `
+      <div style="text-align:left;display:grid;gap:8px;">
+        <div><strong>Member:</strong> ${member.user.name}</div>
+        ${changedItems.join('')}
+      </div>
+    `,
+    showCancelButton: true,
+    confirmButtonText: 'Apply Changes',
+    cancelButtonText: 'Cancel',
+    confirmButtonColor: '#2563eb',
+  })
+
+  if (!confirmation.isConfirmed) return
+
   savingMemberId.value = member.id
   try {
     const updated = await updateOrganizationMember(member.id, {
@@ -235,6 +300,7 @@ async function saveMemberChanges(member: OrganizationAccessMember) {
       denyPermissions: draft.denyPermissions,
     })
     members.value = members.value.map((item) => (item.id === member.id ? updated : item))
+    await authStore.refreshUser()
     memberDrafts.value = {
       ...memberDrafts.value,
       [member.id]: {
@@ -305,24 +371,34 @@ onMounted(() => {
       </div>
 
       <div v-if="canManageAccess" class="create-card">
+        <div v-if="accountOverage" class="limit-warning">
+          {{ accountOverage.message }}
+        </div>
         <div class="create-head">
           <div>
-            <div class="create-title">Add team member</div>
-            <div class="create-copy">Create a staff account and assign its starting role.</div>
+            <div class="create-title">{{ organizationType === 'school' ? 'Add intern account' : 'Add team member' }}</div>
+            <div class="create-copy">
+              {{ organizationType === 'school' ? 'Schools can create intern accounts only from this workspace.' : 'Create a staff account and assign its starting role.' }}
+            </div>
           </div>
         </div>
         <div class="create-grid">
           <input v-model="newMember.name" type="text" class="field-input" placeholder="Full name" />
           <input v-model="newMember.email" type="email" class="field-input" placeholder="Email address" />
           <select v-model="newMember.roleId" class="field-input">
-            <option value="">Select role</option>
-            <option v-for="role in roles" :key="role.id" :value="role.id">{{ role.name }}</option>
+            <option value="">{{ organizationType === 'school' ? 'Select intern role' : 'Select role' }}</option>
+            <option v-for="role in assignableRoles" :key="role.id" :value="role.id">{{ role.name }}</option>
           </select>
-          <input v-model="newMember.title" type="text" class="field-input" placeholder="Job title / position" />
+          <input
+            v-model="newMember.title"
+            type="text"
+            class="field-input"
+            :placeholder="organizationType === 'school' ? 'Course / section (optional)' : 'Job title / position'"
+          />
         </div>
         <div class="create-actions">
           <button type="button" class="create-btn" :disabled="creating || loading" @click="createMember">
-            {{ creating ? 'Creating...' : 'Create Staff Account' }}
+            {{ creating ? 'Creating...' : organizationType === 'school' ? 'Create Intern Account' : 'Create Staff Account' }}
           </button>
         </div>
       </div>
@@ -467,6 +543,17 @@ onMounted(() => {
   gap: 12px;
   align-items: flex-start;
   margin-bottom: 12px;
+}
+
+.limit-warning {
+  margin-bottom: 12px;
+  border: 1px solid #fcd34d;
+  border-radius: 12px;
+  background: #fffbeb;
+  color: #92400e;
+  padding: 12px 14px;
+  font-size: 0.92rem;
+  font-weight: 600;
 }
 
 .create-title {

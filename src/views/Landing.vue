@@ -1,273 +1,340 @@
 <script setup lang="ts">
+import {
+  ArrowRight,
+  Building2,
+  CheckCircle2,
+  ClipboardList,
+  GraduationCap,
+  LayoutDashboard,
+  Menu,
+  Sparkles,
+} from 'lucide-vue-next'
+import { ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import Navbar from '@/components/Navbar.vue'
+
+import Button from '@/components/ui/button/Button.vue'
+import Card from '@/components/ui/card/Card.vue'
+import CardContent from '@/components/ui/card/CardContent.vue'
+
+const mobileMenuOpen = ref(false)
+
+const features = [
+  {
+    icon: Sparkles,
+    title: 'Smarter Matching',
+    description:
+      'Connect students to the right internships faster using structured profiles, fit signals, and guided workflows.',
+  },
+  {
+    icon: LayoutDashboard,
+    title: 'Shared Visibility',
+    description:
+      'Give schools, companies, and interns one place to track progress, documents, and approvals in real time.',
+  },
+  {
+    icon: ClipboardList,
+    title: 'Less Manual Work',
+    description:
+      'Streamline applications, endorsements, and internship coordination without juggling scattered spreadsheets.',
+  },
+]
+
+const steps = [
+  {
+    number: '01',
+    title: 'Create Your Workspace',
+    description: 'Sign up as a student, school, or company and set up the information needed for your role.',
+  },
+  {
+    number: '02',
+    title: 'Connect Opportunities',
+    description: 'Post openings, review profiles, and endorse candidates with a cleaner collaboration flow.',
+  },
+  {
+    number: '03',
+    title: 'Track the Journey',
+    description: 'Monitor applications, requirements, and internship milestones from one shared dashboard.',
+  },
+]
+
+const rolePaths = [
+  {
+    title: 'For Schools',
+    description: 'Create student accounts, manage endorsements, and track placements in one workspace.',
+    to: '/register/school',
+    cta: 'Register as School',
+  },
+  {
+    title: 'For Companies',
+    description: 'Post internships, review endorsed students, and manage applicant decisions clearly.',
+    to: '/register/company',
+    cta: 'Register as Company',
+  },
+  {
+    title: 'For Students',
+    description: 'Browse OJT opportunities, including school-hosted placements and partner-school options.',
+    to: '/opportunities',
+    cta: 'Browse Opportunities',
+  },
+]
 </script>
 
 <template>
-  <div class="page">
-    <Navbar />
+  <div class="min-h-screen bg-[linear-gradient(180deg,#f8fafc_0%,#eff6ff_28%,#ffffff_100%)] text-slate-950">
+    <header class="sticky top-0 z-30 border-b border-white/60 bg-white/80 backdrop-blur-xl">
+      <div class="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
+        <RouterLink to="/" class="flex items-center gap-3">
+          <img src="/icons/logo-main.png" alt="OJT Intern Path" class="h-11 w-11 rounded-2xl object-contain ring-1 ring-slate-200" />
+          <div>
+            <p class="text-sm font-semibold tracking-wide text-slate-950">OJT Intern Path</p>
+            <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Internship Platform</p>
+          </div>
+        </RouterLink>
+
+        <nav class="hidden items-center gap-8 text-sm font-medium text-slate-600 md:flex">
+          <a href="#features" class="transition hover:text-slate-950">Features</a>
+          <a href="#how-it-works" class="transition hover:text-slate-950">How It Works</a>
+          <a href="#footer" class="transition hover:text-slate-950">Contact</a>
+        </nav>
+
+        <div class="hidden items-center gap-3 md:flex">
+          <RouterLink to="/login">
+            <Button variant="outline">Log In</Button>
+          </RouterLink>
+          <RouterLink to="/register">
+            <Button>Get Started</Button>
+          </RouterLink>
+        </div>
+
+        <Button variant="ghost" size="icon" class="md:hidden" @click="mobileMenuOpen = !mobileMenuOpen">
+          <Menu class="h-5 w-5" />
+        </Button>
+      </div>
+
+      <div v-if="mobileMenuOpen" class="border-t border-slate-200 bg-white px-4 py-4 md:hidden">
+        <div class="flex flex-col gap-3 text-sm font-medium text-slate-600">
+          <a href="#features" class="transition hover:text-slate-950" @click="mobileMenuOpen = false">Features</a>
+          <a href="#how-it-works" class="transition hover:text-slate-950" @click="mobileMenuOpen = false">How It Works</a>
+          <a href="#footer" class="transition hover:text-slate-950" @click="mobileMenuOpen = false">Contact</a>
+          <RouterLink to="/login" class="pt-2" @click="mobileMenuOpen = false">
+            <Button variant="outline" class="w-full">Log In</Button>
+          </RouterLink>
+          <RouterLink to="/register" @click="mobileMenuOpen = false">
+            <Button class="w-full">Get Started</Button>
+          </RouterLink>
+        </div>
+      </div>
+    </header>
 
     <main>
-      <section class="hero">
-        <div class="hero-text">
-          <p class="eyebrow">Find the Right Internship</p>
-          <h1>Hire the Right Talent. Smarter and Faster.</h1>
-          <p class="muted">
-            A web-based internship platform that helps students find the right opportunities, schools manage OJT programs, 
-            and companies hire qualified interns using a decision support system and mobile application.
-          </p>
-          <div class="hero-actions">
-            <RouterLink to="/register" class="btn btn-primary">Get Started</RouterLink>
+      <section class="relative overflow-hidden">
+        <div class="absolute inset-x-0 top-0 -z-10 h-[28rem] bg-[radial-gradient(circle_at_top_right,_rgba(59,130,246,0.18),_transparent_42%),radial-gradient(circle_at_left,_rgba(14,165,233,0.14),_transparent_32%)]" />
+        <div class="mx-auto grid max-w-7xl items-center gap-12 px-4 py-16 sm:px-6 md:py-24 lg:grid-cols-[1.1fr_0.9fr] lg:px-8">
+          <div class="max-w-2xl">
+            <div class="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-white/80 px-4 py-1.5 text-sm font-medium text-sky-800 shadow-sm">
+              <Sparkles class="h-4 w-4" />
+              Built for students, schools, and companies
+            </div>
+
+            <h1 class="mt-6 text-4xl font-semibold tracking-tight text-slate-950 sm:text-5xl lg:text-6xl">
+              Run internship programs with clarity, speed, and better matches.
+            </h1>
+
+            <p class="mt-6 max-w-xl text-base leading-7 text-slate-600 sm:text-lg">
+              OJT Intern Path brings applications, endorsements, tracking, and collaboration into one responsive platform so every stakeholder can move with confidence.
+            </p>
+
+            <div class="mt-8 flex flex-col gap-3 sm:flex-row">
+              <RouterLink to="/register">
+                <Button class="h-11 w-full sm:w-auto">
+                  Get Started
+                  <ArrowRight class="h-4 w-4" />
+                </Button>
+              </RouterLink>
+              <RouterLink to="/opportunities">
+                <Button variant="outline" class="h-11 w-full sm:w-auto">Browse Opportunities</Button>
+              </RouterLink>
+              <RouterLink to="/login">
+                <Button variant="outline" class="h-11 w-full sm:w-auto">Log In</Button>
+              </RouterLink>
+            </div>
+
+            <div class="mt-10 grid gap-4 sm:grid-cols-3">
+              <div class="rounded-2xl border border-white/80 bg-white/80 p-4 shadow-sm backdrop-blur">
+                <div class="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <GraduationCap class="h-4 w-4 text-sky-600" />
+                  Students
+                </div>
+                <p class="mt-2 text-sm text-slate-600">Discover internships that fit your goals and track your progress clearly.</p>
+              </div>
+              <div class="rounded-2xl border border-white/80 bg-white/80 p-4 shadow-sm backdrop-blur">
+                <div class="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <CheckCircle2 class="h-4 w-4 text-sky-600" />
+                  Schools
+                </div>
+                <p class="mt-2 text-sm text-slate-600">Coordinate endorsements, documents, and reporting with fewer manual steps.</p>
+              </div>
+              <div class="rounded-2xl border border-white/80 bg-white/80 p-4 shadow-sm backdrop-blur">
+                <div class="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <Building2 class="h-4 w-4 text-sky-600" />
+                  Companies
+                </div>
+                <p class="mt-2 text-sm text-slate-600">Post roles, review applicants, and manage internship workflows in one place.</p>
+              </div>
+            </div>
           </div>
-        </div>
-        <div class="hero-visual">
-          <div class="hero-blob"></div>
-          <img src="/undraw_working-remotely_ivtz-1024x815.webp" alt="Illustration" />
+
+          <div class="relative">
+            <div class="absolute -left-6 top-10 hidden h-24 w-24 rounded-full bg-sky-200/60 blur-2xl sm:block" />
+            <div class="absolute -right-6 bottom-10 hidden h-32 w-32 rounded-full bg-blue-300/50 blur-3xl sm:block" />
+            <div class="relative rounded-[2rem] border border-white/70 bg-white/85 p-4 shadow-2xl shadow-slate-300/30 backdrop-blur sm:p-6">
+              <img
+                src="/undraw_working-remotely_ivtz-1024x815.webp"
+                alt="Internship collaboration illustration"
+                class="w-full rounded-[1.5rem] bg-slate-50 object-cover"
+              />
+              <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                <div class="rounded-2xl bg-slate-950 px-4 py-3 text-white">
+                  <p class="text-xs uppercase tracking-[0.2em] text-slate-300">Faster Coordination</p>
+                  <p class="mt-2 text-sm text-slate-100">Align applicants, schools, and companies without chasing updates manually.</p>
+                </div>
+                <div class="rounded-2xl bg-sky-50 px-4 py-3 text-slate-900 ring-1 ring-sky-100">
+                  <p class="text-xs uppercase tracking-[0.2em] text-sky-700">Shared Tracking</p>
+                  <p class="mt-2 text-sm text-slate-600">Keep documents, approvals, and progress visible from application to completion.</p>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
-      <section id="features" class="section features">
-        <div class="pill">Features</div>
-        <h2 class="center">Everything You Need for Internship Management</h2>
-        <p class="center muted">
-          Powerful tools integrated into one seamless workflow.
-        </p>
+      <section class="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
+        <div class="max-w-2xl">
+          <p class="text-sm font-semibold uppercase tracking-[0.3em] text-sky-700">Choose Your Path</p>
+          <h2 class="mt-3 text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
+            One platform, different workflows for schools, companies, and interns.
+          </h2>
+          <p class="mt-4 text-base leading-7 text-slate-600">
+            The experience stays consistent, but each workspace is shaped around the actions that role needs most.
+          </p>
+        </div>
 
-        <!-- Main Feature Block -->
-        <div class="main-feature-block">
-          <div class="main-feature-icon">
-            <img src="/icons/logo-main.png" alt="Smart Matching" class="main-feature-img" />
-          </div>
-          <div class="main-feature-content">
-            <h3>Smart Internship Matching Decision Support System</h3>
-            <p>
-              The platform uses a decision support system to intelligently match students with internship opportunities based on their course, skills, performance data, and company requirements, ensuring better and more suitable internship placements.
+        <div class="mt-10 grid gap-6 lg:grid-cols-3">
+          <Card
+            v-for="rolePath in rolePaths"
+            :key="rolePath.title"
+            class="border-slate-200/80 bg-white/90 shadow-sm transition duration-200 hover:-translate-y-1 hover:shadow-xl"
+          >
+            <CardContent class="space-y-5 p-6">
+              <div>
+                <h3 class="text-xl font-semibold text-slate-950">{{ rolePath.title }}</h3>
+                <p class="mt-3 text-sm leading-6 text-slate-600">{{ rolePath.description }}</p>
+              </div>
+              <RouterLink :to="rolePath.to">
+                <Button variant="outline" class="w-full justify-center">
+                  {{ rolePath.cta }}
+                </Button>
+              </RouterLink>
+            </CardContent>
+          </Card>
+        </div>
+      </section>
+
+      <section id="features" class="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8 lg:py-20">
+        <div class="max-w-2xl">
+          <p class="text-sm font-semibold uppercase tracking-[0.3em] text-sky-700">Features</p>
+          <h2 class="mt-3 text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
+            Everything teams need to run internships with less friction.
+          </h2>
+          <p class="mt-4 text-base leading-7 text-slate-600">
+            The platform combines role-based workflows with a cleaner interface so daily internship operations feel more organized and easier to act on.
+          </p>
+        </div>
+
+        <div class="mt-10 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+          <Card
+            v-for="feature in features"
+            :key="feature.title"
+            class="border-slate-200/80 bg-white/90 shadow-sm transition duration-200 hover:-translate-y-1 hover:shadow-xl"
+          >
+            <CardContent class="p-6">
+              <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 text-sky-700">
+                <component :is="feature.icon" class="h-5 w-5" />
+              </div>
+              <h3 class="mt-5 text-xl font-semibold text-slate-950">{{ feature.title }}</h3>
+              <p class="mt-3 text-sm leading-6 text-slate-600">{{ feature.description }}</p>
+            </CardContent>
+          </Card>
+        </div>
+      </section>
+
+      <section id="how-it-works" class="border-y border-slate-200 bg-slate-950 text-white">
+        <div class="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8 lg:py-20">
+          <div class="max-w-2xl">
+            <p class="text-sm font-semibold uppercase tracking-[0.3em] text-sky-300">How It Works</p>
+            <h2 class="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">
+              A simple workflow from onboarding to internship completion.
+            </h2>
+            <p class="mt-4 text-base leading-7 text-slate-300">
+              Each step is designed to reduce confusion, improve coordination, and help everyone stay aligned.
             </p>
           </div>
-        </div>
 
-        <!-- Feature Cards Grid -->
-        <div class="feature-grid">
-          <div class="feature-card">
-            <div class="feature-icon">
-              <img src="/icons/icon-company.png" alt="Performance" class="feature-icon-img" />
+          <div class="mt-10 grid gap-6 lg:grid-cols-3">
+            <div
+              v-for="step in steps"
+              :key="step.number"
+              class="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur"
+            >
+              <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-sky-400/15 text-lg font-semibold text-sky-200 ring-1 ring-sky-300/20">
+                {{ step.number }}
+              </div>
+              <h3 class="mt-6 text-xl font-semibold">{{ step.title }}</h3>
+              <p class="mt-3 text-sm leading-6 text-slate-300">{{ step.description }}</p>
             </div>
-            <h4>Performance Evaluation & KPI Tracking</h4>
-            <p>Evaluates intern performance using predefined KPIs.</p>
-          </div>
-          <div class="feature-card">
-            <div class="feature-icon">
-              <img src="/icons/icon-student.png" alt="Attendance" class="feature-icon-img" />
-            </div>
-            <h4>Attendance & Task Monitoring</h4>
-            <p>Tracks attendance and internship activities in real time.</p>
-          </div>
-          <div class="feature-card">
-            <div class="feature-icon">
-              <img src="/icons/icon-school.png" alt="Documents" class="feature-icon-img" />
-            </div>
-            <h4>MOA, Contract & Document Management</h4>
-            <p>Manages internship agreements and required documents.</p>
-          </div>
-          <div class="feature-card">
-            <div class="feature-icon">
-              <img src="/icons/icon-student.png" alt="Certificate" class="feature-icon-img" />
-            </div>
-            <h4>Certificate & Internship Completion</h4>
-            <p>Generates verified certificates after internship completion.</p>
-          </div>
-        </div>
-      </section>
-
-      <section id="why" class="section">
-        <p class="eyebrow center">Why Students, Schools, and Companies Choose Our Platform</p>
-        <h2 class="center">Complete visibility and collaboration in one place</h2>
-        <div class="cards three">
-          <div class="card">
-            <h3>Students</h3>
-            <p>Personalized matches, streamlined applications, faster placements.</p>
-          </div>
-          <div class="card">
-            <h3>Schools</h3>
-            <p>Real-time oversight, reporting, and centralized coordination for cohorts.</p>
-          </div>
-          <div class="card">
-            <h3>Companies</h3>
-            <p>Curated candidates, easy scheduling, and faster hiring decisions.</p>
-          </div>
-        </div>
-      </section>
-
-      <section id="benefits" class="section benefits">
-        <div class="pill">Benefits</div>
-        <h2 class="center">Why Students, Schools, and Companies Choose Our Platform</h2>
-        <p class="center muted">
-          We combine cutting-edge technology with human-centric design to transform your hiring experience.
-        </p>
-
-        <div class="benefit-grid three">
-          <div class="benefit-card">
-            <div class="icon-circle">
-              <img src="/icons/icon-student.png" alt="Students" class="benefit-icon-img" />
-            </div>
-            <h4>Students</h4>
-            <p>Find internships aligned with skills and career goals.</p>
-          </div>
-          <div class="benefit-card">
-            <div class="icon-circle">
-              <img src="/icons/icon-school.png" alt="Schools" class="benefit-icon-img" />
-            </div>
-            <h4>Schools</h4>
-            <p>Manage OJT programs and monitor student progress.</p>
-          </div>
-          <div class="benefit-card">
-            <div class="icon-circle">
-              <img src="/icons/icon-company.png" alt="Companies" class="benefit-icon-img" />
-            </div>
-            <h4>Companies</h4>
-            <p>Hire and manage interns efficiently.</p>
-          </div>
-        </div>
-
-        <div class="benefit-grid two">
-          <div class="benefit-card">
-            <div class="icon-circle">
-              <img src="/icons/logo-main.png" alt="Smart Decisions" class="benefit-icon-img" />
-            </div>
-            <h4>Smarter Decisions</h4>
-            <p>DSS-powered internship matching.</p>
-          </div>
-          <div class="benefit-card">
-            <div class="icon-circle">
-              <img src="/icons/icon-student.png" alt="Easy Access" class="benefit-icon-img" />
-            </div>
-            <h4>Easy Access</h4>
-            <p>Web and mobile platform support.</p>
-          </div>
-        </div>
-      </section>
-
-      <section id="pricing" class="section pricing">
-        <h2 class="center">Simple plans for schools and companies</h2>
-        <p class="center muted">
-          Students use the platform through their school's active subscription.
-        </p>
-        <div class="pricing-grid">
-          <div class="pricing-card">
-            <h3>Free</h3>
-            <div class="price">₱0<span>/month</span></div>
-            <p>Basic access for small teams.</p>
-            <ul>
-              <li>Post internships</li>
-              <li>Basic matching</li>
-              <li>Student applications</li>
-            </ul>
-          </div>
-          <div class="pricing-card featured">
-            <div class="badge">Most Popular</div>
-            <h3>Standard</h3>
-            <div class="price">₱1,499<span>/month</span></div>
-            <p>Best for growing schools and employers.</p>
-            <ul>
-              <li>Analytics dashboard</li>
-              <li>Priority support</li>
-              <li>Advanced reports</li>
-            </ul>
-          </div>
-          <div class="pricing-card">
-            <h3>Premium</h3>
-            <div class="price">₱2,999<span>/month</span></div>
-            <p>Full suite + DSS customization.</p>
-            <ul>
-              <li>DSS weight controls</li>
-              <li>Bulk approvals</li>
-              <li>Custom templates</li>
-            </ul>
-          </div>
-        </div>
-      </section>
-
-      <section id="features" class="section alt">
-        <p class="eyebrow center">Everything You Need for Internship Management</p>
-        <h2 class="center">Smarter decisions. Less busywork.</h2>
-        <div class="cards two">
-          <div class="card">
-            <h3>Matching & Routing</h3>
-            <p>Smart matching to connect the right students with the right roles automatically.</p>
-          </div>
-          <div class="card">
-            <h3>Progress & Feedback</h3>
-            <p>Track evaluations, requirements, and documents in one shared workspace.</p>
-          </div>
-        </div>
-        <div class="cards two">
-          <div class="card">
-            <h3>Communication</h3>
-            <p>Keep schools, students, and companies aligned with shared updates and alerts.</p>
-          </div>
-          <div class="card">
-            <h3>Certificates & Reports</h3>
-            <p>Automate completion proofs and export reports for stakeholders in seconds.</p>
-          </div>
-        </div>
-      </section>
-
-      <section id="steps" class="section process">
-        <div class="process-pill">Process</div>
-        <h2 class="center">Internship Made Simple for Everyone</h2>
-        <p class="center muted">Follow simple steps to proceed</p>
-
-        <div class="process-track">
-          <div class="process-node">
-            <div class="process-circle">1</div>
-            <h4>Register</h4>
-            <p>Students, schools, and companies create verified accounts.</p>
-          </div>
-          <div class="process-node">
-            <div class="process-circle">2</div>
-            <h4>Match &amp; Apply</h4>
-            <p>Students are matched to internships based on skills and course fit.</p>
-          </div>
-          <div class="process-node">
-            <div class="process-circle">3</div>
-            <h4>Monitor &amp; Evaluate</h4>
-            <p>Schools and companies track attendance, tasks, and performance.</p>
-          </div>
-          <div class="process-node">
-            <div class="process-circle">4</div>
-            <h4>Complete &amp; Certify</h4>
-            <p>Internships finish and verified certificates are issued.</p>
-          </div>
-        </div>
-      </section>
-
-      <section id="cta" class="cta">
-        <div class="cta-content">
-          <h2>Ready to start your internship journey?</h2>
-          <p>Join students, schools, and companies already using OJT Path.</p>
-          <div class="cta-actions">
-            <RouterLink to="/register" class="btn btn-ghost">Get Started</RouterLink>
           </div>
         </div>
       </section>
     </main>
 
-    <footer class="footer">
-      <div class="logo">
-        <img src="/icons/logo-main.png" alt="OJT Path" class="logo-icon" />
-        <span class="logo-text">OJT Path</span>
+    <footer id="footer" class="border-t border-slate-200 bg-white">
+      <div class="mx-auto flex max-w-7xl flex-col gap-8 px-4 py-10 sm:px-6 md:flex-row md:items-start md:justify-between lg:px-8">
+        <div class="max-w-sm">
+          <div class="flex items-center gap-3">
+            <img src="/icons/logo-main.png" alt="OJT Intern Path" class="h-11 w-11 rounded-2xl object-contain ring-1 ring-slate-200" />
+            <div>
+              <p class="text-sm font-semibold text-slate-950">OJT Intern Path</p>
+              <p class="text-xs uppercase tracking-[0.25em] text-slate-500">Internship Platform</p>
+            </div>
+          </div>
+          <p class="mt-4 text-sm leading-6 text-slate-600">
+            Helping students, schools, and companies move through internship workflows with better visibility and less administrative drag.
+          </p>
+        </div>
+
+        <div class="grid gap-8 sm:grid-cols-2">
+          <div>
+            <p class="text-sm font-semibold text-slate-950">Explore</p>
+            <div class="mt-4 flex flex-col gap-3 text-sm text-slate-600">
+              <a href="#features" class="transition hover:text-slate-950">Features</a>
+              <a href="#how-it-works" class="transition hover:text-slate-950">How It Works</a>
+              <RouterLink to="/find-internships" class="transition hover:text-slate-950">Find Internships</RouterLink>
+            </div>
+          </div>
+          <div>
+            <p class="text-sm font-semibold text-slate-950">Access</p>
+            <div class="mt-4 flex flex-col gap-3 text-sm text-slate-600">
+              <RouterLink to="/login" class="transition hover:text-slate-950">Login</RouterLink>
+              <RouterLink to="/register" class="transition hover:text-slate-950">Register</RouterLink>
+              <RouterLink to="/change-password" class="transition hover:text-slate-950">Change Password</RouterLink>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="foot-links">
-        <a href="#why">Why Us</a>
-        <a href="#features">Features</a>
-        <a href="#steps">How It Works</a>
-        <RouterLink to="/login">Login</RouterLink>
+
+      <div class="border-t border-slate-200 px-4 py-4 text-center text-sm text-slate-500 sm:px-6 lg:px-8">
+        © {{ new Date().getFullYear() }} OJT Intern Path. All rights reserved.
       </div>
-      <small>© {{ new Date().getFullYear() }} OJT Path. All rights reserved.</small>
     </footer>
   </div>
 </template>
-
-<style scoped src="../styles/Landing.css">
-</style>
-

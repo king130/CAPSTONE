@@ -1,16 +1,52 @@
 <script setup lang="ts">
-import Swal from 'sweetalert2'
+import { toTypedSchema } from '@vee-validate/zod'
+import { AlertCircle, Building2, GraduationCap, LoaderCircle } from 'lucide-vue-next'
+import { useForm } from 'vee-validate'
+import { computed } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { ref } from 'vue'
+import { z } from 'zod'
+
+import Alert from '@/components/ui/alert/Alert.vue'
+import Button from '@/components/ui/button/Button.vue'
+import Card from '@/components/ui/card/Card.vue'
+import CardContent from '@/components/ui/card/CardContent.vue'
+import CardHeader from '@/components/ui/card/CardHeader.vue'
+import FormControl from '@/components/ui/form/FormControl.vue'
+import FormField from '@/components/ui/form/FormField.vue'
+import FormItem from '@/components/ui/form/FormItem.vue'
+import FormLabel from '@/components/ui/form/FormLabel.vue'
+import FormMessage from '@/components/ui/form/FormMessage.vue'
+import Input from '@/components/ui/input/Input.vue'
+import { useToast } from '@/composables/useToast'
+import AuthLayout from '@/layouts/AuthLayout.vue'
 import { useAuthStore } from '@/stores/auth'
+
+interface LoginForm {
+  email: string
+  password: string
+}
 
 const router = useRouter()
 const authStore = useAuthStore()
-const email = ref('')
-const password = ref('')
-const showPassword = ref(false)
+const { success, error } = useToast()
 
-// Helper function to get role dashboard
+const loginSchema = toTypedSchema(
+  z.object({
+    email: z.string().min(1, 'Email is required.').email('Enter a valid email address.'),
+    password: z.string().min(1, 'Password is required.'),
+  }),
+)
+
+const { handleSubmit, errors, setFieldValue } = useForm<LoginForm>({
+  validationSchema: loginSchema,
+  initialValues: {
+    email: '',
+    password: '',
+  },
+})
+
+const errorMessage = computed(() => authStore.error)
+
 function getRoleDashboard(role: string | null): string {
   switch (role) {
     case 'admin':
@@ -29,114 +65,117 @@ function getRoleDashboard(role: string | null): string {
   }
 }
 
-async function onLogin() {
+const onSubmit = handleSubmit(async (values) => {
   try {
-    const profile = await authStore.login(email.value.trim(), password.value)
-    
-    // Check if user has a role
+    const profile = await authStore.login(values.email, values.password)
+
+    success('Login successful.', {
+      description: 'Your workspace is ready.',
+    })
+
     if (!profile?.role || profile.role === 'guest' || profile.role === null) {
       router.push('/guest')
       return
     }
 
-    // Show success message
-    const roleMessages: Record<string, string> = {
-      admin: 'Welcome back, Administrator!',
-      company: 'Welcome to the Company Dashboard',
-      school: 'Welcome to the School Dashboard',
-      student: 'Welcome back!'
-    }
-
-    await Swal.fire({
-      icon: 'success',
-      iconColor: '#16a34a',
-      title: 'Login Successful!',
-      text: roleMessages[profile.role] || 'Welcome back!',
-      timer: 1500,
-      showConfirmButton: false
-    })
-
-    // Router will handle redirect based on role
     router.push(getRoleDashboard(profile.role))
-    
-  } catch (error) {
-    const errorCode = (error as { code?: string } | null)?.code || ''
-    const defaultMessage = error instanceof Error ? error.message : 'Invalid credentials.'
-    const message = (errorCode === 'auth/invalid-credential' || errorCode === 'auth/user-not-found')
-      ? 'Invalid email or password. For school-issued student accounts, use the exact default password given by your school on first login.'
-      : defaultMessage
-    await Swal.fire({
-      icon: 'error',
-      iconColor: '#dc2626',
-      title: 'Login Failed!',
-      text: message,
-      confirmButtonText: 'Try Again',
-      confirmButtonColor: '#2563eb'
+  } catch (caughtError) {
+    error(caughtError, {
+      fallback: 'Login failed.',
     })
   }
-}
+})
 </script>
 
 <template>
-  <div class="page">
-    <div class="card">
-      <!-- Left Illustration Panel -->
-      <div class="left">
-        <h2>Let’s get Started!</h2>
+  <AuthLayout back-to="/" back-label="Back">
+    <template #left-eyebrow>Secure Access</template>
+    <template #left-title>Sign in with the account your role already uses.</template>
+    <template #left-description>
+      Students use school-issued credentials, while schools and companies use their registered organization account.
+    </template>
+    <template #title>Welcome Back</template>
+    <template #description>Sign in to the correct portal for your account and continue where you left off.</template>
 
-        <!-- Illustration Image -->
-        <div class="illustration">
-          <img
-            src="/undraw_working-remotely_ivtz-1024x815.webp"
-            alt="Working remotely illustration"
-            class="illustration-img"
-          />
-        </div>
-      </div>
+    <Card class="border-slate-200/80 bg-white/95 shadow-xl shadow-slate-200/70">
+      <CardHeader class="pb-2" />
+      <CardContent class="space-y-5 p-5 sm:p-6">
+        <Alert v-if="errorMessage" variant="destructive" class="flex items-start gap-3">
+          <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" />
+          <div>{{ errorMessage }}</div>
+        </Alert>
 
-      <!-- Right Login Panel -->
-      <div class="right">
-        <div class="icon">
-          <img src="/icons/logo-main.png" alt="OJT Intern Path" class="login-logo" />
-        </div>
+        <form class="space-y-3" @submit="onSubmit">
+          <div class="grid gap-2 sm:grid-cols-2">
+            <div class="rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm text-sky-950">
+              <div class="flex items-center gap-2 font-semibold">
+                <GraduationCap class="h-4 w-4" />
+                <span>Student access</span>
+              </div>
+              <p class="mt-2 text-xs leading-5 text-sky-900/80">
+                Students log in using the school-issued email and password provided by their school.
+              </p>
+            </div>
 
-        <h1>Welcome!</h1>
-        <p class="subtitle">Log in to manage opportunities and application</p>
-
-        <form @submit.prevent="onLogin">
-          <input type="email" placeholder="Email Address:" v-model="email" />
-          <div class="password-field">
-            <input
-              :type="showPassword ? 'text' : 'password'"
-              placeholder="Password:"
-              v-model="password"
-            />
-            <button type="button" class="toggle-password" @click="showPassword = !showPassword">
-              {{ showPassword ? 'Hide' : 'Show' }}
-            </button>
+            <div class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900">
+              <div class="flex items-center gap-2 font-semibold">
+                <Building2 class="h-4 w-4" />
+                <span>School and company access</span>
+              </div>
+              <p class="mt-2 text-xs leading-5 text-slate-700">
+                Registered school coordinators and companies can sign in here with their own account.
+              </p>
+            </div>
           </div>
 
-          <div class="row">
-            <label>
-              <input type="checkbox" />
-              Remember me
-            </label>
-            <a href="#">Forgot password</a>
-          </div>
+          <FormField v-slot="{ componentField, errorMessage: fieldError }" name="email">
+            <FormItem>
+              <FormLabel for="email">Email</FormLabel>
+              <FormControl>
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="name@example.com"
+                  autocomplete="email"
+                  v-bind="componentField"
+                  @update:modelValue="setFieldValue('email', $event)"
+                />
+              </FormControl>
+              <FormMessage :message="fieldError || errors.email" />
+            </FormItem>
+          </FormField>
+          <FormField v-slot="{ componentField, errorMessage: fieldError }" name="password">
+            <FormItem>
+              <FormLabel for="password">Password</FormLabel>
+              <FormControl>
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="Enter your password"
+                  autocomplete="current-password"
+                  v-bind="componentField"
+                  @update:modelValue="setFieldValue('password', $event)"
+                />
+              </FormControl>
+              <FormMessage :message="fieldError || errors.password" />
+            </FormItem>
+          </FormField>
 
-          <button type="submit" :disabled="authStore.loading">
-            {{ authStore.loading ? 'Logging in...' : 'Log In' }}
-          </button>
 
-          <p class="signup">
-            Don’t have an account?
-            <RouterLink to="/register">Sign up</RouterLink>
+          
+          <Button type="submit" class="w-full" :disabled="authStore.loading">
+            <LoaderCircle v-if="authStore.loading" class="h-4 w-4 animate-spin" />
+            <span>{{ authStore.loading ? 'Logging in...' : 'Login' }}</span>
+          </Button>
+
+          <p class="text-center text-sm text-slate-600">
+            Need an organization account?
+            <RouterLink to="/register" class="font-semibold text-slate-950 hover:text-slate-700">
+              Register here
+            </RouterLink>
           </p>
         </form>
-      </div>
-    </div>
-  </div>
+      </CardContent>
+    </Card>
+  </AuthLayout>
 </template>
-
-<style scoped src="../styles/Login.css">
-</style>

@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import Navbar from '@/components/Navbar.vue'
-import { subscribeActiveInternships, type InternshipRecord } from '@/services/internships'
+import { subscribeActiveInternships, subscribeEligibleInternships, type InternshipRecord } from '@/services/internships'
 import { useAuthStore } from '@/stores/auth'
 
 const authStore = useAuthStore()
@@ -21,7 +21,9 @@ onMounted(() => {
     return
   }
 
-  unsub = subscribeActiveInternships((items) => {
+  const subscribeToList = authStore.user?.role === 'student' ? subscribeEligibleInternships : subscribeActiveInternships
+
+  unsub = subscribeToList((items) => {
     internships.value = items.map((i) => ({
       ...i,
       logo: (i.companyName || 'CO').slice(0, 2).toUpperCase(),

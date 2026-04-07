@@ -2,31 +2,33 @@
 
 namespace App\Http\Controllers;
 
+use App\Mail\StudentAccountSetupMail;
+use App\Models\AccountSetupToken;
 use App\Models\Organization;
 use App\Models\OrganizationMembership;
 use App\Models\Role;
 use App\Models\School;
 use App\Models\Student;
 use App\Models\User;
+use App\Services\SubscriptionPlanService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 
 class SchoolStudentController extends Controller
 {
+    public function __construct(private readonly SubscriptionPlanService $subscriptionPlans)
+    {
+    }
+
     public function index(Request $request)
     {
         $school = $this->resolveSchool($request->user());
 
-        $students = Student::query()
-            ->with('user')
-            ->where(function ($query) use ($school) {
-                $query->where('school_id', $school->id);
-                if ($school->subscription_code) {
-                    $query->orWhere('school_subscription_code', $school->subscription_code);
-                }
-            })
+        $students = $this->studentsForSchool($school)
+            ->with($this->studentRelations())
             ->orderByDesc('created_at')
             ->get()
             ->map(fn (Student $student) => $this->transformStudent($student))
@@ -39,6 +41,22 @@ class SchoolStudentController extends Controller
     public function store(Request $request)
     {
         $school = $this->resolveSchool($request->user());
+        $organization = $school->organization;
+
+        if (! $organization) {
+            return response()->json(['message' => 'This school is missing an organization context.'], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        if ($this->subscriptionPlans->wouldExceedAfterIncrement($organization, 'school.students')) {
+            $studentOverage = $this->subscriptionPlans->getOverageForResource($organization, 'school.students') ?? [
+                'key' => 'school.students',
+                'message' => 'This school has reached the student account limit for the current subscription plan.',
+            ];
+            return response()->json([
+                'message' => $studentOverage['message'],
+                'overage' => $studentOverage,
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
 
         $data = $request->validate([
             'email' => ['required', 'email', 'max:255'],
@@ -53,12 +71,11 @@ class SchoolStudentController extends Controller
             return response()->json(['message' => 'That student email is already in use.'], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
-        $defaultPassword = $this->generatePassword();
-        $student = DB::transaction(function () use ($school, $data, $email, $defaultPassword) {
+        $student = DB::transaction(function () use ($school, $data, $email) {
             $user = User::query()->create([
                 'name' => trim((string) ($data['studentName'] ?? Str::before($email, '@'))),
                 'email' => $email,
-                'password' => $defaultPassword,
+                'password' => Str::random(32).'!Aa1',
                 'role' => 'student',
                 'profile' => [
                     'studentNumber' => $data['studentNumber'] ?? null,
@@ -99,13 +116,47 @@ class SchoolStudentController extends Controller
             return $student->load('user');
         });
 
+        $inviteDelivery = $this->sendSetupLink($student->user, $school, $request->user());
         $record = $this->transformStudent($student);
-        $record['defaultPassword'] = $defaultPassword;
+        $record['inviteSent'] = $inviteDelivery['sent'];
+        $record['setupLinkExpiresAt'] = $inviteDelivery['expiresAt'];
+        $this->subscriptionPlans->syncOrganizationCompliance($organization);
 
         return response()->json([
-            'message' => 'Student account created successfully.',
+            'message' => $inviteDelivery['sent']
+                ? 'Student account created and setup email sent successfully.'
+                : 'Student account created, but the setup email could not be sent.',
             'data' => $record,
+            'invite' => $inviteDelivery,
         ], Response::HTTP_CREATED);
+    }
+
+    public function resendSetupLink(Request $request, Student $student)
+    {
+        $school = $this->resolveSchool($request->user());
+        $this->ensureStudentBelongsToSchool($student, $school);
+
+        $user = $student->user;
+        if (! $user) {
+            return response()->json([
+                'message' => 'This student account is missing its login record.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        if (! $user->must_change_password) {
+            return response()->json([
+                'message' => 'This student already finished account setup.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $inviteDelivery = $this->sendSetupLink($user, $school, $request->user());
+
+        return response()->json([
+            'message' => $inviteDelivery['sent']
+                ? 'A fresh setup link was sent to the student email.'
+                : 'The setup link was generated, but the email could not be delivered.',
+            'invite' => $inviteDelivery,
+        ]);
     }
 
     public function update(Request $request, Student $student)
@@ -159,6 +210,7 @@ class SchoolStudentController extends Controller
     {
         $school = $this->resolveSchool($request->user());
         $this->ensureStudentBelongsToSchool($student, $school);
+        $organization = $school->organization;
 
         $user = $student->user;
         if ($user && ! $user->is_temporary && ! $user->must_change_password) {
@@ -176,6 +228,10 @@ class SchoolStudentController extends Controller
             }
         });
 
+        if ($organization) {
+            $this->subscriptionPlans->syncOrganizationCompliance($organization);
+        }
+
         return response()->json(['message' => 'Student removed successfully.']);
     }
 
@@ -184,7 +240,18 @@ class SchoolStudentController extends Controller
         $school = $this->resolveSchool($request->user());
 
         $rows = Student::query()
-            ->with('user')
+            ->select([
+                'id',
+                'user_id',
+                'school_id',
+                'intern_code',
+                'student_id_number',
+                'school_subscription_code',
+                'course',
+                'year_level',
+                'created_at',
+            ])
+            ->with($this->studentRelations())
             ->where(function ($query) use ($school) {
                 $query->where('school_id', $school->id);
                 if ($school->subscription_code) {
@@ -221,6 +288,7 @@ class SchoolStudentController extends Controller
 
     private function resolveSchool(?User $user): School
     {
+        $user?->loadMissing('school:id,user_id,organization_id,institution_name,subscription_code,official_school_email');
         $school = $user?->school;
         if (! $school || $user?->role !== 'school') {
             abort(Response::HTTP_FORBIDDEN, 'Only schools can manage student roster data.');
@@ -255,6 +323,7 @@ class SchoolStudentController extends Controller
         return [
             'id' => (string) $student->id,
             'schoolId' => $student->school_id ? (string) $student->school_id : '',
+            'internCode' => $student->intern_code,
             'email' => $user?->email ?? '',
             'studentName' => $user?->name ?: null,
             'studentNumber' => $student->student_id_number,
@@ -265,9 +334,36 @@ class SchoolStudentController extends Controller
         ];
     }
 
-    private function generatePassword(): string
+    private function studentsForSchool(School $school)
     {
-        return 'Stu'.Str::upper(Str::random(3)).random_int(100, 999);
+        return Student::query()
+            ->select([
+                'id',
+                'user_id',
+                'school_id',
+                'intern_code',
+                'student_id_number',
+                'school_subscription_code',
+                'course',
+                'year_level',
+                'created_at',
+            ])
+            ->where(function ($query) use ($school) {
+                $query->where('school_id', $school->id);
+                if ($school->subscription_code) {
+                    $query->orWhere('school_subscription_code', $school->subscription_code);
+                }
+            });
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function studentRelations(): array
+    {
+        return [
+            'user:id,name,email,is_active,must_change_password',
+        ];
     }
 
     private function attachOrganizationMembership(User $user, Organization $organization, string $roleSlug, string $title = ''): void
@@ -288,5 +384,88 @@ class SchoolStudentController extends Controller
                 'title' => $title ?: $role->name,
             ]
         );
+    }
+
+    /**
+     * @return array{sent: bool, expiresAt: string|null, errorMessage?: string}
+     */
+    private function sendSetupLink(User $user, School $school, User $invitedBy): array
+    {
+        AccountSetupToken::query()
+            ->where('user_id', $user->id)
+            ->whereNull('used_at')
+            ->delete();
+
+        $plainToken = Str::random(64);
+        $expiresAt = now()->addHours(48);
+
+        AccountSetupToken::query()->create([
+            'user_id' => $user->id,
+            'invited_by_user_id' => $invitedBy->id,
+            'token_hash' => hash('sha256', $plainToken),
+            'expires_at' => $expiresAt,
+        ]);
+
+        $frontendBase = rtrim((string) env('FRONTEND_URL', env('APP_URL', 'http://localhost:5173')), '/');
+        $setupUrl = "{$frontendBase}/account-setup?token={$plainToken}";
+        $schoolSenderEmail = $this->resolveSchoolSenderEmail($school, $invitedBy);
+        $schoolSenderName = $school->institution_name ?: $invitedBy->name;
+
+        try {
+            Mail::to($user->email)->send(new StudentAccountSetupMail(
+                studentName: $user->name,
+                schoolName: $school->institution_name,
+                setupUrl: $setupUrl,
+                senderEmail: $schoolSenderEmail,
+                senderName: $schoolSenderName,
+                useSenderAsFrom: true,
+            ));
+
+            return [
+                'sent' => true,
+                'expiresAt' => $expiresAt->toIso8601String(),
+            ];
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            try {
+                Mail::to($user->email)->send(new StudentAccountSetupMail(
+                    studentName: $user->name,
+                    schoolName: $school->institution_name,
+                    setupUrl: $setupUrl,
+                    senderEmail: $schoolSenderEmail,
+                    senderName: $schoolSenderName,
+                    useSenderAsFrom: false,
+                ));
+
+                return [
+                    'sent' => true,
+                    'expiresAt' => $expiresAt->toIso8601String(),
+                ];
+            } catch (\Throwable $fallbackException) {
+                report($fallbackException);
+            }
+
+            return [
+                'sent' => false,
+                'expiresAt' => $expiresAt->toIso8601String(),
+                'errorMessage' => 'The account was created, but the setup email could not be sent.',
+            ];
+        }
+    }
+
+    private function resolveSchoolSenderEmail(School $school, User $invitedBy): ?string
+    {
+        $officialSchoolEmail = trim((string) ($school->official_school_email ?? ''));
+        if ($officialSchoolEmail !== '' && filter_var($officialSchoolEmail, FILTER_VALIDATE_EMAIL)) {
+            return $officialSchoolEmail;
+        }
+
+        $inviterEmail = trim((string) $invitedBy->email);
+        if ($inviterEmail !== '' && filter_var($inviterEmail, FILTER_VALIDATE_EMAIL)) {
+            return $inviterEmail;
+        }
+
+        return null;
     }
 }
