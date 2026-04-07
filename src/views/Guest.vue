@@ -2,7 +2,7 @@
 import { computed, ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import Swal from 'sweetalert2'
+import Swal from '@/services/sweetalert2'
 import { 
   BriefcaseIcon, 
   BuildingOfficeIcon,

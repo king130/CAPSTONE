@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import Swal from 'sweetalert2'
+import Swal from '@/services/sweetalert2'
 import { useAuthStore } from '@/stores/auth'
 import { completeAccountSetup, validateAccountSetupToken } from '@/services/auth'
 

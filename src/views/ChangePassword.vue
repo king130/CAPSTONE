@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { RouterLink } from 'vue-router'
-import Swal from 'sweetalert2'
+import Swal from '@/services/sweetalert2'
 import { useAuthStore } from '@/stores/auth'
 import { updateCurrentUserPassword } from '@/services/auth'
 

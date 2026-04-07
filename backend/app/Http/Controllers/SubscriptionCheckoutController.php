@@ -84,6 +84,9 @@ class SubscriptionCheckoutController extends Controller
         }
 
         $hints[] = 'Example (backend-relative): PAYMONGO_CA_BUNDLE=storage/certs/cacert.pem';
+        if (PHP_OS_FAMILY === 'Windows') {
+            $hints[] = 'Windows tip: If you have Git for Windows installed, you can copy C:\\Program Files\\Git\\usr\\ssl\\certs\\ca-bundle.crt to backend/storage/certs/cacert.pem.';
+        }
         $hints[] = 'For local dev only, you can set PAYMONGO_VERIFY_SSL=false (not recommended).';
 
         return response()->json([

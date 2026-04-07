@@ -39,7 +39,6 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: [
         { find: '@', replacement: fileURLToPath(new URL('./src', import.meta.url)) },
-        { find: /^sweetalert2$/, replacement: fileURLToPath(new URL('./src/services/sweetalert2.ts', import.meta.url)) },
       ],
     },
     test: {
