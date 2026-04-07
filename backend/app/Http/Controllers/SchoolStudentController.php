@@ -116,7 +116,12 @@ class SchoolStudentController extends Controller
             return $student->load('user');
         });
 
-        $inviteDelivery = $this->sendSetupLink($student->user, $school, $request->user());
+        $inviteDelivery = $this->sendSetupLink(
+            $student->user,
+            $school,
+            $request->user(),
+            'The account was created, but the setup email could not be sent.',
+        );
         $record = $this->transformStudent($student);
         $record['inviteSent'] = $inviteDelivery['sent'];
         $record['setupLinkExpiresAt'] = $inviteDelivery['expiresAt'];
@@ -143,7 +148,7 @@ class SchoolStudentController extends Controller
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
-        if (! $user->must_change_password) {
+        if ($user->profile_setup_complete) {
             return response()->json([
                 'message' => 'This student already finished account setup.',
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
@@ -351,7 +356,7 @@ class SchoolStudentController extends Controller
         $status = 'Registered';
         if ($user && ! $user->is_active) {
             $status = 'Disabled';
-        } elseif ($user && $user->must_change_password) {
+        } elseif ($user && ! $user->profile_setup_complete) {
             $status = 'Pending Setup';
         }
 
@@ -397,7 +402,7 @@ class SchoolStudentController extends Controller
     private function studentRelations(): array
     {
         return [
-            'user:id,name,email,is_active,must_change_password',
+            'user:id,name,email,is_active,must_change_password,profile_setup_complete',
         ];
     }
 
@@ -424,7 +429,7 @@ class SchoolStudentController extends Controller
     /**
      * @return array{sent: bool, expiresAt: string|null, errorMessage?: string}
      */
-    private function sendSetupLink(User $user, School $school, User $invitedBy): array
+    private function sendSetupLink(User $user, School $school, User $invitedBy, string $mailFailureMessage = 'The setup email could not be sent.'): array
     {
         AccountSetupToken::query()
             ->where('user_id', $user->id)
@@ -446,6 +451,10 @@ class SchoolStudentController extends Controller
         $schoolSenderEmail = $this->resolveSchoolSenderEmail($school, $invitedBy);
         $schoolSenderName = $school->institution_name ?: $invitedBy->name;
 
+        // Gmail and most SMTP providers only allow From = the authenticated mailbox (or verified aliases).
+        // Use MAIL_FROM_* as From and Reply-To for the school/inviter when they differ.
+        $useSenderAsFrom = $this->shouldUseSenderAsSmtpFrom($schoolSenderEmail);
+
         try {
             Mail::to($user->email)->send(new StudentAccountSetupMail(
                 studentName: $user->name,
@@ -453,7 +462,7 @@ class SchoolStudentController extends Controller
                 setupUrl: $setupUrl,
                 senderEmail: $schoolSenderEmail,
                 senderName: $schoolSenderName,
-                useSenderAsFrom: true,
+                useSenderAsFrom: $useSenderAsFrom,
             ));
 
             return [
@@ -463,30 +472,37 @@ class SchoolStudentController extends Controller
         } catch (\Throwable $exception) {
             report($exception);
 
-            try {
-                Mail::to($user->email)->send(new StudentAccountSetupMail(
-                    studentName: $user->name,
-                    schoolName: $school->institution_name,
-                    setupUrl: $setupUrl,
-                    senderEmail: $schoolSenderEmail,
-                    senderName: $schoolSenderName,
-                    useSenderAsFrom: false,
-                ));
-
-                return [
-                    'sent' => true,
-                    'expiresAt' => $expiresAt->toIso8601String(),
-                ];
-            } catch (\Throwable $fallbackException) {
-                report($fallbackException);
+            $errorMessage = $mailFailureMessage;
+            $technical = $exception->getMessage();
+            if (
+                str_contains($technical, '535')
+                || str_contains($technical, 'BadCredentials')
+                || str_contains($technical, 'Failed to authenticate')
+            ) {
+                $errorMessage .= ' SMTP login failed. For Gmail: Google Account → Security → App passwords → generate a new 16-character password, set MAIL_PASSWORD to that value (not your normal Gmail password), then run php artisan config:clear.';
             }
 
             return [
                 'sent' => false,
                 'expiresAt' => $expiresAt->toIso8601String(),
-                'errorMessage' => 'The account was created, but the setup email could not be sent.',
+                'errorMessage' => $errorMessage,
             ];
         }
+    }
+
+    /**
+     * True only when the visible sender address matches the SMTP login (e.g. same Gmail account).
+     */
+    private function shouldUseSenderAsSmtpFrom(?string $senderEmail): bool
+    {
+        $sender = strtolower(trim((string) $senderEmail));
+        if ($sender === '') {
+            return false;
+        }
+
+        $smtpUser = strtolower(trim((string) config('mail.mailers.smtp.username', '')));
+
+        return $smtpUser !== '' && $sender === $smtpUser;
     }
 
     private function resolveSchoolSenderEmail(School $school, User $invitedBy): ?string

@@ -21,8 +21,8 @@ const emit = defineEmits<{
 
 const rootClass = computed(() =>
   cn(
-    'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
-    props.modelValue ? 'bg-primary' : 'bg-slate-300',
+    'relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
+    props.modelValue ? 'bg-emerald-600' : 'bg-slate-300',
     props.class,
   ),
 )

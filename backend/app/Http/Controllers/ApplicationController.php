@@ -3,7 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Models\Application;
+use App\Support\SchoolTenantPermissions;
 use App\Models\Internship;
+use App\Models\School;
+use App\Models\Student;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 
@@ -111,6 +114,7 @@ class ApplicationController extends Controller
     {
         $user = $request->user();
         $appRole = $user->effectiveAppRole();
+        $application->loadMissing(['student', 'internship']);
         $internship = $application->internship;
 
         $company = $user->organizationCompany() ?? $user->company;
@@ -119,19 +123,17 @@ class ApplicationController extends Controller
         $canCompany = $appRole === 'company'
             && $company
             && $internship
-            && $internship->company_id === $company->id;
+            && (int) $internship->company_id === (int) $company->id;
 
         $canSchool = $appRole === 'school'
             && $school
             && $application->student
-            && (
-                $application->student->school_id === $school->id
-                || ($school->subscription_code && $application->student->school_subscription_code === $school->subscription_code)
-            );
+            && $this->schoolMatchesStudent($school, $application->student)
+            && SchoolTenantPermissions::userMayCoordinateSchoolTenant($user);
 
         $canStudent = $appRole === 'student'
             && $user->student
-            && $application->student_id === $user->student->id;
+            && (int) $application->student_id === (int) $user->student->id;
 
         if (! $canCompany && ! $canSchool && ! $canStudent && $appRole !== 'admin') {
             return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
@@ -177,6 +179,26 @@ class ApplicationController extends Controller
         ]);
 
         return response()->json(['data' => $this->serialize($freshApplication)]);
+    }
+
+    private function schoolMatchesStudent(School $school, Student $student): bool
+    {
+        $sid = $student->school_id;
+        if ($sid !== null && $sid !== '' && (int) $sid === (int) $school->id) {
+            return true;
+        }
+
+        $code = $school->subscription_code;
+        if ($code === null || $code === '') {
+            return false;
+        }
+
+        $studentCode = $student->school_subscription_code;
+        if ($studentCode === null || $studentCode === '') {
+            return false;
+        }
+
+        return strcasecmp(trim((string) $studentCode), trim((string) $code)) === 0;
     }
 
     /**

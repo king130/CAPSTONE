@@ -122,10 +122,11 @@ async function loadPlans() {
     plans.value = await getSubscriptionPlans()
   } catch (error) {
     console.error('Failed to load plans:', error)
+    const detail = error instanceof Error && error.message.trim() ? error.message : 'Check VITE_API_BASE_URL and that GET /api/subscription-plans is reachable.'
     await Swal.fire({
       icon: 'error',
       title: 'Unable to load plans',
-      text: 'The subscription catalog could not be loaded right now.',
+      text: detail,
       confirmButtonColor: '#0f766e',
     })
   } finally {

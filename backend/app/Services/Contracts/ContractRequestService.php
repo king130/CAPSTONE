@@ -7,7 +7,6 @@ use App\Models\ContractType;
 use App\Models\Organization;
 use App\Models\User;
 use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
@@ -175,8 +174,10 @@ class ContractRequestService
             }
 
             $rules[$key] = $fieldRules;
-            if ($type === 'multiselect' && ! empty($field['options'])) {
-                $rules["{$key}.*"] = ['string', 'in:'.implode(',', Arr::wrap($field['options']))];
+            // Per-item rules for multiselect: do not use comma-joined "in:" (breaks when option text contains commas).
+            // Course/program fields are narrowed on the client to aligned school↔company courses; allow any string up to 255.
+            if ($type === 'multiselect') {
+                $rules["{$key}.*"] = ['string', 'max:255'];
             }
         }
 

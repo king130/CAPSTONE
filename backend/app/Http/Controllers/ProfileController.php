@@ -12,7 +12,9 @@ use App\Models\Subscription;
 use App\Models\User;
 use App\Services\SubscriptionPlanService;
 use App\Services\TenantRoleService;
+use App\Support\TenantSubscriptionPermissions;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Validation\Rule;
 
 class ProfileController extends Controller
@@ -73,6 +75,12 @@ class ProfileController extends Controller
         }
 
         if (isset($data['subscription'])) {
+            if (! TenantSubscriptionPermissions::userMayManageOrganizationSubscription($user)) {
+                return response()->json([
+                    'message' => 'You do not have permission to update organization subscription settings.',
+                ], Response::HTTP_FORBIDDEN);
+            }
+
             $user->loadMissing('organizationMemberships.organization.subscription');
 
             $activeOrganization = $user->primaryOrganizationMembership()?->organization;

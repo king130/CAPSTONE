@@ -1,4 +1,23 @@
+import axios from 'axios'
 import apiClient from './apiClient'
+
+function formatContractSubmitError(error: unknown): Error {
+  if (axios.isAxiosError(error) && error.response?.data) {
+    const data = error.response.data as { message?: string; errors?: Record<string, string[]> }
+    if (typeof data.message === 'string' && data.message.trim()) {
+      return new Error(data.message)
+    }
+    const flat = Object.values(data.errors ?? {}).flat()
+    const first = flat.find((m): m is string => typeof m === 'string')
+    if (first) {
+      return new Error(first)
+    }
+  }
+  if (error instanceof Error) {
+    return error
+  }
+  return new Error('Contract request failed.')
+}
 
 export interface ContractFieldSchema {
   key: string
@@ -116,9 +135,11 @@ export async function submitDynamicContract(payload: ContractSubmitPayload): Pro
     form.append('files[]', file)
   }
 
-  const response = await apiClient.post<SubmittedContractResponse>('/contracts', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  })
-
-  return response.data
+  // Let axios set multipart boundary automatically; a bare "multipart/form-data" header breaks parsing and causes 422s.
+  try {
+    const response = await apiClient.post<SubmittedContractResponse>('/contracts', form)
+    return response.data
+  } catch (e) {
+    throw formatContractSubmitError(e)
+  }
 }

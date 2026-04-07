@@ -41,6 +41,8 @@ export interface UserProfile {
   displayName: string
   role: UserRole
   accessScope?: AccessScope
+  /** True when the user owns the active organization (subscription account owner). */
+  isOrganizationOwner?: boolean
   isTemporary?: boolean
   isActive?: boolean
   profileSetupComplete?: boolean
@@ -103,6 +105,18 @@ export interface UserProfile {
   updatedAt?: unknown
 }
 
+/** Membership for the current active organization (not always memberships[0]). */
+export function membershipForActiveOrganization(user: UserProfile | null | undefined): MembershipSummary | null {
+  if (!user?.memberships?.length) return null
+  const list = user.memberships
+  const orgId = user.activeOrganization?.id
+  if (orgId) {
+    const match = list.find((m) => m.organization?.id === orgId)
+    if (match) return match
+  }
+  return list[0] ?? null
+}
+
 interface AuthResponse {
   token: string
   user: Record<string, unknown>
@@ -130,7 +144,14 @@ function getAuthErrorMessage(
 
   const data = res.data
   if (typeof data === 'string' && data.trim()) {
-    return data.length > 280 ? fallback : data.trim()
+    if (data.length > 280) {
+      return (
+        `The server returned a non-JSON response (HTTP ${res.status}). ` +
+        'This usually means the SPA is calling the wrong URL (e.g. static hosting without /api), or a proxy returned HTML. ' +
+        'Set VITE_API_BASE_URL at build time to your Laravel API base including /api (e.g. https://api.example.com/api), rebuild, and redeploy.'
+      )
+    }
+    return data.trim()
   }
 
   const responseData = data as
@@ -166,12 +187,16 @@ function getAuthErrorMessage(
     )
   }
 
+  const serverErr =
+    res.status >= 500
+      ? 'Server error. Check API logs (storage/logs/laravel.log), database connectivity, and that migrations ran on the server.'
+      : null
+
   return (
     responseData?.message ||
     firstValidation ||
-    (res.status >= 500
-      ? 'Server error while registering. Check API logs (storage/logs/laravel.log) and run migrations on the server.'
-      : fallback)
+    serverErr ||
+    `Request failed (HTTP ${res.status}). Check that the API is reachable, VITE_API_BASE_URL matches your Laravel /api base, and the server allows this origin (FRONTEND_URL / CORS_ALLOWED_ORIGINS).`
   )
 }
 
@@ -183,6 +208,7 @@ export function mapApiUserToProfile(raw: Record<string, unknown>): UserProfile {
     displayName: String(raw.displayName ?? ''),
     role: role === 'guest' ? null : (role as UserRole),
     accessScope: (raw.accessScope as AccessScope | undefined) ?? 'personal',
+    isOrganizationOwner: raw.isOrganizationOwner === true,
     isTemporary: raw.isTemporary as boolean | undefined,
     isActive: raw.isActive !== false,
     profileSetupComplete: raw.profileSetupComplete as boolean | undefined,

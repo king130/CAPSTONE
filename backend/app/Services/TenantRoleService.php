@@ -69,8 +69,12 @@ class TenantRoleService
      */
     public function syncPermissions(Role $role, array $keys): void
     {
+        $filtered = collect($keys)->filter()->unique()->values()->all();
+        $normalized = Permission::normalizeOrganizationPermissionKeys($filtered);
+        Permission::ensureKeysExistForOrganizationRoles($normalized);
+
         $permissionIds = Permission::query()
-            ->whereIn('key', collect($keys)->filter()->unique()->values()->all())
+            ->whereIn('key', $normalized)
             ->pluck('id')
             ->all();
 

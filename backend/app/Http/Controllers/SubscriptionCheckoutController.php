@@ -6,6 +6,7 @@ use App\Models\Subscription;
 use App\Models\SubscriptionPlanDefinition;
 use App\Models\User;
 use App\Services\SubscriptionPlanService;
+use App\Support\TenantSubscriptionPermissions;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -154,6 +155,12 @@ class SubscriptionCheckoutController extends Controller
             return response()->json([
                 'message' => 'No active organization found for this account.',
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        if (! TenantSubscriptionPermissions::userMayManageOrganizationSubscription($user)) {
+            return response()->json([
+                'message' => 'You do not have permission to start or change the organization subscription.',
+            ], Response::HTTP_FORBIDDEN);
         }
 
         if ($organization->type !== $data['role']) {
@@ -327,6 +334,12 @@ class SubscriptionCheckoutController extends Controller
             return response()->json([
                 'message' => 'No active organization found for this account.',
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        if (! TenantSubscriptionPermissions::userMayManageOrganizationSubscription($user)) {
+            return response()->json([
+                'message' => 'You do not have permission to verify or complete subscription checkout for this organization.',
+            ], Response::HTTP_FORBIDDEN);
         }
 
         $pending = $organization->settings['pending_plan_change'] ?? null;

@@ -63,7 +63,13 @@ const selectedPartnerProfile = computed(() => {
   return props.partners.find((partner) => partner.uid === partnerUserId.value) ?? null
 })
 const selectedTypeLocked = computed(() => Boolean(props.lockContractType && props.initialContractTypeName))
-const canSubmit = computed(() => !loadingTypes.value && !submitting.value && Boolean(selectedTypeId.value))
+const canSubmit = computed(
+  () =>
+    !loadingTypes.value &&
+    !submitting.value &&
+    Boolean(selectedTypeId.value) &&
+    Boolean(subject.value.trim()),
+)
 const referencePreview = computed(() => `CTR-${new Date().getFullYear()}-######`)
 const selectedFilesLabel = computed(() => {
   if (!files.value.length) return 'No attachments selected'
@@ -100,15 +106,20 @@ const alignedCourseOptions = computed(() => {
   const partnerCourseMap = new Map(partnerCourses.map((course) => [course.toLowerCase(), course]))
   return requesterCourses.filter((course) => partnerCourseMap.has(course.toLowerCase()))
 })
-const contractTypeCards = computed(() =>
-  contractTypes.value.map((type) => {
+const contractTypeCards = computed(() => {
+  const sorted = [...contractTypes.value].sort((a, b) => {
+    if (a.slug === 'ojt-moa') return -1
+    if (b.slug === 'ojt-moa') return 1
+    return (a.name || '').localeCompare(b.name || '')
+  })
+  return sorted.map((type) => {
     const fieldsSchema = (type.fieldsSchema ?? []).map((field) => enrichField(field))
     return {
       ...type,
       fieldsSchema,
     }
-  }),
-)
+  })
+})
 const selectedTypeCard = computed(() => contractTypeCards.value.find((item) => item.id === selectedTypeId.value) ?? null)
 
 function isCourseField(field: ContractFieldSchema) {

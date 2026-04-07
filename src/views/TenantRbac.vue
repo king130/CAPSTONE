@@ -26,6 +26,7 @@ import {
   type TenantRole,
   type TenantSummary,
 } from '@/services/tenantRbac'
+import { membershipForActiveOrganization } from '@/services/auth'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
 
@@ -69,6 +70,8 @@ const newMember = ref({
   email: '',
   roleId: '',
   title: '',
+  password: '',
+  passwordConfirmation: '',
 })
 
 const currentRole = computed<LayoutRole>(() => {
@@ -80,11 +83,6 @@ const currentRole = computed<LayoutRole>(() => {
   return 'company'
 })
 
-const navItems = computed<LayoutNavItem[]>(() => {
-  const base = defaultNavItems[currentRole.value]
-  return base
-})
-
 const pageTitle = computed(() => (props.mode === 'roles' ? 'Role Management' : 'Permission Assignment'))
 const activeItem = computed(() => (props.mode === 'roles' ? 'tenant-role-management' : 'tenant-permission-assignment'))
 const selectedTenant = computed(() => tenants.value.find((tenant) => tenant.id === selectedTenantId.value) ?? null)
@@ -93,17 +91,49 @@ const isSystemAdmin = computed(() =>
   authStore.user?.platformRole?.slug === 'system_admin' ||
   authStore.user?.platformRole?.permissions?.includes('platform.manage_users') === true,
 )
-const canManage = computed(() => {
+const canAccessTenantRbacPage = computed(() => {
   if (isSystemAdmin.value) {
     return true
   }
 
-  const permissions = authStore.user?.memberships?.[0]?.permissions ?? []
+  if (authStore.user?.isOrganizationOwner) {
+    return true
+  }
+
+  const permissions = membershipForActiveOrganization(authStore.user)?.permissions ?? []
+  return (
+    permissions.includes('manage_roles') ||
+    permissions.includes('manage_permissions') ||
+    permissions.includes('org.manage_roles') ||
+    permissions.includes('manage_users') ||
+    permissions.includes('org.manage_members')
+  )
+})
+
+/** Edit permission matrix (toggles): role admins only — not manage_users / org.manage_members alone. */
+const canEditPermissionMatrix = computed(() => {
+  if (isSystemAdmin.value) {
+    return true
+  }
+
+  if (authStore.user?.isOrganizationOwner) {
+    return true
+  }
+
+  const permissions = membershipForActiveOrganization(authStore.user)?.permissions ?? []
   return (
     permissions.includes('manage_roles') ||
     permissions.includes('manage_permissions') ||
     permissions.includes('org.manage_roles')
   )
+})
+
+const navItems = computed<LayoutNavItem[]>(() => {
+  const base = defaultNavItems[currentRole.value]
+  if (canEditPermissionMatrix.value) {
+    return base
+  }
+  return base.filter((item) => item.key !== 'tenant-permission-assignment')
 })
 
 const filteredRoles = computed(() => {
@@ -185,7 +215,7 @@ function resetPermissionDraft(role: TenantRole) {
 }
 
 async function loadTenants() {
-  if (!canManage.value) return
+  if (!canAccessTenantRbacPage.value) return
 
   loading.value = true
   try {
@@ -220,7 +250,7 @@ async function loadTenantRbac() {
     const payload = await getTenantRbac(selectedTenantId.value)
     roles.value = payload.roles
     members.value = payload.members
-    permissions.value = payload.permissions
+    permissions.value = Array.isArray(payload.permissions) ? payload.permissions : []
     newMember.value.roleId = payload.roles[0]?.id ?? ''
     syncRoleDrafts(payload.roles)
     syncMemberDrafts(payload.members)
@@ -291,17 +321,39 @@ async function createAccount() {
   }
 }
 
+function validateNewMemberPassword(): string | null {
+  const p = newMember.value.password.trim()
+  const c = newMember.value.passwordConfirmation.trim()
+  if (!p && !c) return null
+  if (p.length < 8 || c.length < 8) {
+    return 'Password must be at least 8 characters.'
+  }
+  if (p !== c) {
+    return 'Password and confirmation do not match.'
+  }
+  return null
+}
+
 async function createMember() {
   if (!selectedTenantId.value) return
   if (!newMember.value.name.trim() || !newMember.value.email.trim() || !newMember.value.roleId) return
 
+  const pwdErr = validateNewMemberPassword()
+  if (pwdErr) {
+    error(pwdErr)
+    return
+  }
+
   creatingAccount.value = true
   try {
+    const useSetPassword = Boolean(newMember.value.password.trim())
     const response = await createTenantMember(selectedTenantId.value, {
       name: newMember.value.name.trim(),
       email: newMember.value.email.trim(),
       roleId: newMember.value.roleId,
       title: newMember.value.title.trim() || undefined,
+      password: useSetPassword ? newMember.value.password : undefined,
+      passwordConfirmation: useSetPassword ? newMember.value.passwordConfirmation : undefined,
     })
 
     members.value = [...members.value, response.member].sort((a, b) => a.user.name.localeCompare(b.user.name))
@@ -315,10 +367,14 @@ async function createMember() {
       email: '',
       roleId: roles.value[0]?.id ?? '',
       title: '',
+      password: '',
+      passwordConfirmation: '',
     }
 
     success('Account created.', {
-      description: `Temporary password: ${response.temporaryPassword}`,
+      description: response.temporaryPassword
+        ? `Temporary password: ${response.temporaryPassword}`
+        : 'The user can sign in with the password you set.',
     })
   } catch (caughtError) {
     error(caughtError, { fallback: 'Unable to create account user.' })
@@ -429,6 +485,13 @@ function goToRoles() {
 
 onMounted(async () => {
   await loadTenants()
+  if (
+    props.mode === 'permissions' &&
+    canAccessTenantRbacPage.value &&
+    !canEditPermissionMatrix.value
+  ) {
+    await router.replace({ name: 'tenant-role-management' })
+  }
 })
 
 watch(selectedTenantId, async (next, previous) => {
@@ -436,6 +499,15 @@ watch(selectedTenantId, async (next, previous) => {
     await loadTenantRbac()
   }
 })
+
+watch(
+  () => props.mode,
+  async (m) => {
+    if (m === 'permissions' && canAccessTenantRbacPage.value && !canEditPermissionMatrix.value) {
+      await router.replace({ name: 'tenant-role-management' })
+    }
+  },
+)
 </script>
 
 <template>
@@ -460,7 +532,11 @@ watch(selectedTenantId, async (next, previous) => {
                 <Button :variant="props.mode === 'roles' ? 'default' : 'outline'" @click="goToRoles">
                   Role Management
                 </Button>
-                <Button :variant="props.mode === 'permissions' ? 'default' : 'outline'" @click="goToPermissions()">
+                <Button
+                  v-if="canEditPermissionMatrix"
+                  :variant="props.mode === 'permissions' ? 'default' : 'outline'"
+                  @click="goToPermissions()"
+                >
                   Permission Assignment
                 </Button>
               </div>
@@ -481,7 +557,7 @@ watch(selectedTenantId, async (next, previous) => {
           </div>
         </CardHeader>
         <CardContent>
-          <div v-if="!canManage" class="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+          <div v-if="!canAccessTenantRbacPage" class="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
             Your account does not have access to account RBAC management.
           </div>
 
@@ -701,7 +777,7 @@ watch(selectedTenantId, async (next, previous) => {
                 </p>
               </CardHeader>
               <CardContent class="space-y-4">
-                <div class="grid gap-4 lg:grid-cols-4">
+                <div class="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
                   <div>
                     <label class="mb-2 block text-sm font-medium text-slate-700">Full name</label>
                     <Input v-model="newMember.name" placeholder="Full name" />
@@ -722,6 +798,25 @@ watch(selectedTenantId, async (next, previous) => {
                   <div>
                     <label class="mb-2 block text-sm font-medium text-slate-700">Title</label>
                     <Input v-model="newMember.title" placeholder="Optional title" />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-slate-700">Password</label>
+                    <Input
+                      v-model="newMember.password"
+                      type="password"
+                      autocomplete="new-password"
+                      placeholder="Leave blank for auto-generated temp password"
+                    />
+                    <p class="mt-1 text-xs text-slate-500">Min. 8 characters if you set a password.</p>
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-slate-700">Confirm password</label>
+                    <Input
+                      v-model="newMember.passwordConfirmation"
+                      type="password"
+                      autocomplete="new-password"
+                      placeholder="Match password above"
+                    />
                   </div>
                 </div>
                 <div class="flex justify-end">
@@ -813,7 +908,7 @@ watch(selectedTenantId, async (next, previous) => {
               </CardContent>
             </Card>
 
-            <div v-else-if="selectedTenant" class="space-y-4">
+            <div v-if="selectedTenant && props.mode === 'permissions'" class="space-y-4">
               <div class="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <p class="text-sm text-slate-600">
                   Toggle permissions across roles, then save everything in one action.
@@ -821,13 +916,13 @@ watch(selectedTenantId, async (next, previous) => {
                 <div class="flex flex-wrap gap-2">
                   <Button
                     variant="outline"
-                    :disabled="!!savingRoleId || !hasAnyPendingPermissionChanges"
+                    :disabled="!canEditPermissionMatrix || !!savingRoleId || !hasAnyPendingPermissionChanges"
                     @click="discardAllPermissionChanges"
                   >
                     Discard All
                   </Button>
                   <Button
-                    :disabled="!!savingRoleId || !hasAnyPendingPermissionChanges"
+                    :disabled="!canEditPermissionMatrix || !!savingRoleId || !hasAnyPendingPermissionChanges"
                     @click="saveAllPermissionChanges"
                   >
                     {{ savingRoleId ? 'Saving...' : 'Save Changes' }}
@@ -870,7 +965,7 @@ watch(selectedTenantId, async (next, previous) => {
                         <div class="space-y-3">
                           <Switch
                             :model-value="roleHasPermission(role, permission.key)"
-                            :disabled="savingRoleId === role.id"
+                            :disabled="!canEditPermissionMatrix || savingRoleId === role.id"
                             @update:model-value="togglePermissionDraft(role, permission.key, $event)"
                           />
                           <p class="text-xs leading-5 text-slate-500">

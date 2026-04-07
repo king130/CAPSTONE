@@ -125,15 +125,20 @@ export async function createTenantMember(
     email: string
     roleId: string
     title?: string
+    /** If omitted, the API generates a temporary password and returns it. */
+    password?: string
+    passwordConfirmation?: string
   },
-): Promise<{ member: TenantMember; temporaryPassword: string }> {
-  return apiFetch<{ member: TenantMember; temporaryPassword: string }>(`/rbac/tenants/${tenantId}/members`, {
+): Promise<{ member: TenantMember; temporaryPassword: string | null }> {
+  return apiFetch<{ member: TenantMember; temporaryPassword: string | null }>(`/rbac/tenants/${tenantId}/members`, {
     method: 'POST',
     body: JSON.stringify({
       name: payload.name,
       email: payload.email,
       roleId: Number(payload.roleId),
       title: payload.title,
+      password: payload.password,
+      password_confirmation: payload.passwordConfirmation,
     }),
   })
 }

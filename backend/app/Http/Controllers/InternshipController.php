@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Company;
+use App\Support\SchoolTenantPermissions;
 use App\Models\Contract;
 use App\Models\Internship;
 use App\Models\School;
@@ -244,6 +245,10 @@ class InternshipController extends Controller
             return response()->json(['message' => 'School profile not found.'], Response::HTTP_FORBIDDEN);
         }
 
+        if ($appRole === 'school' && ! SchoolTenantPermissions::userMayCoordinateSchoolTenant($user)) {
+            return response()->json(['message' => 'You do not have permission to post or edit school opportunities.'], Response::HTTP_FORBIDDEN);
+        }
+
         $organization = $user->activeOrganization();
         if ($appRole === 'company' && $organization && $this->subscriptionPlans->wouldExceedAfterIncrement($organization, 'company.internships')) {
             $overage = $this->subscriptionPlans->getOverageForResource($organization, 'company.internships') ?? [
@@ -338,6 +343,10 @@ class InternshipController extends Controller
             return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
         }
 
+        if ($ownsSchoolInternship && ! SchoolTenantPermissions::userMayCoordinateSchoolTenant($user)) {
+            return response()->json(['message' => 'You do not have permission to edit school opportunities.'], Response::HTTP_FORBIDDEN);
+        }
+
         $data = $request->validate([
             'title' => ['sometimes', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
@@ -380,6 +389,10 @@ class InternshipController extends Controller
 
         if (! $ownsCompanyInternship && ! $ownsSchoolInternship) {
             return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
+        }
+
+        if ($ownsSchoolInternship && ! SchoolTenantPermissions::userMayCoordinateSchoolTenant($user)) {
+            return response()->json(['message' => 'You do not have permission to remove school opportunities.'], Response::HTTP_FORBIDDEN);
         }
 
         $internship->delete();

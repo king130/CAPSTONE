@@ -55,12 +55,12 @@ export async function addSchoolStudent(
 }
 
 export async function resendSchoolStudentSetupLink(id: string): Promise<{ sent: boolean; expiresAt?: string | null; errorMessage?: string }> {
-  const response = await apiFetch<{ invite?: { sent: boolean; expiresAt?: string | null; errorMessage?: string } }>(`/school-students/${id}/resend-setup-link`, {
-    method: 'POST',
-    body: JSON.stringify({}),
-  })
+  const response = await apiFetch<{ invite?: { sent: boolean; expiresAt?: string | null; errorMessage?: string } }>(
+    `/school-students/${encodeURIComponent(id)}/resend-setup-link`,
+    { method: 'POST' },
+  )
   await schoolStudentsResource.refresh()
-  return response.invite ?? { sent: false }
+  return response?.invite ?? { sent: false }
 }
 
 export async function updateSchoolStudent(id: string, patch: Record<string, unknown>): Promise<void> {

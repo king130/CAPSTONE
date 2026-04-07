@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { AUTH_DISABLED } from '@/config/auth'
 import { useAuthStore } from '@/stores/auth'
-import type { UserRole } from '@/services/auth'
+import { membershipForActiveOrganization, type UserRole } from '@/services/auth'
 
 /**
  * Get dashboard route based on user role
@@ -219,6 +219,73 @@ router.beforeEach((to) => {
       if (userRole !== requiredRole) {
         console.log(`🚫 Access denied: ${requiredRole} required, user is ${userRole}`)
         return { path: getRoleDashboard(userRole) }
+      }
+    }
+
+    // School staff: tenant RBAC permissions (owner always allowed)
+    if (userRole === 'school' && authStore.user) {
+      const perms = membershipForActiveOrganization(authStore.user)?.permissions ?? []
+      const isOwner = authStore.user.isOrganizationOwner === true
+      const hasPerm = (keys: string[]) => isOwner || keys.some((k) => perms.includes(k))
+
+      const rosterKeys = ['manage_users', 'org.manage_members', 'org.manage_roles', 'manage_roles', 'manage_permissions']
+      const rbacKeys = ['manage_roles', 'manage_permissions', 'org.manage_roles', 'manage_users', 'org.manage_members']
+      const coordinationKeys = [
+        'manage_users',
+        'org.manage_members',
+        'manage_roles',
+        'manage_permissions',
+        'org.manage_roles',
+        'manage_contracts',
+        'org.manage_contracts',
+        'manage_subscription',
+        'org.manage_subscription',
+      ]
+      const subscriptionKeys = ['manage_subscription', 'org.manage_subscription']
+
+      const routeName = to.name as string | undefined
+      if (routeName === 'school-students' && !hasPerm(rosterKeys)) {
+        return { name: 'school' }
+      }
+      if (
+        (routeName === 'tenant-role-management' || routeName === 'tenant-permission-assignment') &&
+        !hasPerm(rbacKeys)
+      ) {
+        return { name: 'school' }
+      }
+      if (routeName === 'organization-subscription' && !hasPerm(subscriptionKeys)) {
+        return { name: 'school' }
+      }
+      if (
+        (routeName === 'contracts' || routeName === 'contracts-new' || routeName === 'contract-types-manage') &&
+        !hasPerm(coordinationKeys)
+      ) {
+        return { name: 'school' }
+      }
+    }
+
+    if (userRole === 'company' && authStore.user) {
+      const perms = membershipForActiveOrganization(authStore.user)?.permissions ?? []
+      const isOwner = authStore.user.isOrganizationOwner === true
+      const hasPerm = (keys: string[]) => isOwner || keys.some((k) => perms.includes(k))
+      const subscriptionKeys = ['manage_subscription', 'org.manage_subscription']
+      const rbacKeys = ['manage_roles', 'manage_permissions', 'org.manage_roles', 'manage_users', 'org.manage_members']
+      const contractKeys = ['manage_contracts', 'org.manage_contracts']
+      const routeName = to.name as string | undefined
+      if (routeName === 'organization-subscription' && !hasPerm(subscriptionKeys)) {
+        return { name: 'dashboard' }
+      }
+      if (
+        (routeName === 'tenant-role-management' || routeName === 'tenant-permission-assignment') &&
+        !hasPerm(rbacKeys)
+      ) {
+        return { name: 'dashboard' }
+      }
+      if (
+        (routeName === 'contracts' || routeName === 'contracts-new' || routeName === 'contract-types-manage') &&
+        !hasPerm(contractKeys)
+      ) {
+        return { name: 'dashboard' }
       }
     }
 

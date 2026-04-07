@@ -48,7 +48,7 @@ onMounted(() => {
 async function loadPlans() {
   loading.value = true
   try {
-    const plans = await getSubscriptionPlans()
+    const plans = await getSubscriptionPlans({ fallbackOnError: false })
     originalPlans.value = plans
     planEditors.value = plans.map(createEditor)
   } catch (error) {
@@ -56,7 +56,10 @@ async function loadPlans() {
     await Swal.fire({
       icon: 'error',
       title: 'Loading Failed',
-      text: 'Unable to load subscription plans right now.',
+      text:
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : 'Unable to load subscription plans. Check the API and database (subscription_plan_definitions).',
       confirmButtonColor: '#2563eb',
     })
   } finally {
@@ -205,7 +208,7 @@ async function savePlan(plan: PlanEditor) {
       },
     })
 
-    const updatedPlans = await getSubscriptionPlans()
+    const updatedPlans = await getSubscriptionPlans({ fallbackOnError: false })
     originalPlans.value = updatedPlans
     planEditors.value = updatedPlans.map(createEditor)
 

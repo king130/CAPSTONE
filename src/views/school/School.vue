@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { Component } from 'vue'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -35,6 +36,9 @@ import TableHeader from '@/components/ui/table/TableHeader.vue'
 import TableRow from '@/components/ui/table/TableRow.vue'
 import { useToast } from '@/composables/useToast'
 import MainLayout from '@/layouts/MainLayout.vue'
+import { defaultNavItems } from '@/layouts/navigation'
+import type { LayoutNavItem } from '@/layouts/navigation'
+import { membershipForActiveOrganization } from '@/services/auth'
 import { subscribeAllApplications, updateApplicationStatus, type ApplicationRecord } from '@/services/applications'
 import { subscribeSchoolContracts, type ContractRecord } from '@/services/contracts'
 import { subscribeInternships, type InternshipRecord } from '@/services/internships'
@@ -137,36 +141,136 @@ const pageTitle = computed(() => {
 
 const activeItem = computed(() => currentView.value)
 
-const quickActions = computed(() => [
-  {
-    label: 'Student Accounts',
-    copy: 'Create temporary student logins, bulk import roster records, and export the current list.',
-    icon: UserRoundPlus,
-    action: () => router.push({ name: 'school-students' }),
-    buttonLabel: 'Manage Accounts',
-  },
-  {
-    label: 'Contracts',
-    copy: 'Send new contract requests and respond to company agreements from the shared contracts workspace.',
-    icon: FileText,
-    action: () => router.push({ name: 'contracts' }),
-    buttonLabel: 'Open Contracts',
-  },
-  {
-    label: 'Messages',
-    copy: 'Open the restored messaging widget to contact companies and continue school-side conversations.',
-    icon: MessageSquare,
-    action: () => window.dispatchEvent(new CustomEvent('chat:open')),
-    buttonLabel: 'Open Messages',
-  },
-  {
-    label: 'Opportunities',
-    copy: 'Review company-hosted and school-hosted placements that match the programs you coordinate.',
-    icon: BriefcaseBusiness,
-    action: () => router.push({ name: 'school-opportunities' }),
-    buttonLabel: 'Browse Opportunities',
-  },
-])
+const membershipPermissions = computed(() => membershipForActiveOrganization(authStore.user)?.permissions ?? [])
+
+function hasAnyPermission(keys: string[]) {
+  const perms = membershipPermissions.value
+  return keys.some((key) => perms.includes(key))
+}
+
+const isOrganizationOwner = computed(() => authStore.user?.isOrganizationOwner === true)
+
+/** Matches backend SchoolStudentController::canManageRoster */
+const canManageStudentRoster = computed(
+  () =>
+    isOrganizationOwner.value ||
+    hasAnyPermission([
+      'manage_users',
+      'org.manage_members',
+      'org.manage_roles',
+      'manage_roles',
+      'manage_permissions',
+    ]),
+)
+
+/** Matches backend SchoolTenantPermissions::userMayCoordinateSchoolTenant */
+const canCoordinateSchool = computed(
+  () =>
+    isOrganizationOwner.value ||
+    hasAnyPermission([
+      'manage_users',
+      'org.manage_members',
+      'manage_roles',
+      'manage_permissions',
+      'org.manage_roles',
+      'manage_contracts',
+      'org.manage_contracts',
+      'manage_subscription',
+      'org.manage_subscription',
+    ]),
+)
+
+const canAccessTenantRbac = computed(
+  () =>
+    isOrganizationOwner.value ||
+    hasAnyPermission([
+      'manage_roles',
+      'manage_permissions',
+      'org.manage_roles',
+      'manage_users',
+      'org.manage_members',
+    ]),
+)
+
+const canManageContracts = computed(
+  () =>
+    isOrganizationOwner.value ||
+    hasAnyPermission(['manage_contracts', 'org.manage_contracts']) ||
+    canCoordinateSchool.value,
+)
+
+const canManageSubscription = computed(
+  () =>
+    isOrganizationOwner.value || hasAnyPermission(['manage_subscription', 'org.manage_subscription']),
+)
+
+const schoolNavItems = computed<LayoutNavItem[]>(() => {
+  const items = defaultNavItems.school
+  return items.filter((item) => {
+    switch (item.key) {
+      case 'student-accounts':
+        return canManageStudentRoster.value
+      case 'tenant-role-management':
+      case 'tenant-permission-assignment':
+        return canAccessTenantRbac.value
+      case 'contracts':
+        return canManageContracts.value
+      case 'subscription':
+        return canManageSubscription.value
+      default:
+        return true
+    }
+  })
+})
+
+const quickActions = computed(() => {
+  const actions: Array<{
+    label: string
+    copy: string
+    icon: Component
+    action: () => void
+    buttonLabel: string
+  }> = []
+
+  if (canManageStudentRoster.value) {
+    actions.push({
+      label: 'Student Accounts',
+      copy: 'Create temporary student logins, bulk import roster records, and export the current list.',
+      icon: UserRoundPlus,
+      action: () => router.push({ name: 'school-students' }),
+      buttonLabel: 'Manage Accounts',
+    })
+  }
+
+  if (canManageContracts.value) {
+    actions.push({
+      label: 'Contracts',
+      copy: 'Send new contract requests and respond to company agreements from the shared contracts workspace.',
+      icon: FileText,
+      action: () => router.push({ name: 'contracts' }),
+      buttonLabel: 'Open Contracts',
+    })
+  }
+
+  actions.push(
+    {
+      label: 'Messages',
+      copy: 'Open the restored messaging widget to contact companies and continue school-side conversations.',
+      icon: MessageSquare,
+      action: () => window.dispatchEvent(new CustomEvent('chat:open')),
+      buttonLabel: 'Open Messages',
+    },
+    {
+      label: 'Opportunities',
+      copy: 'Review company-hosted and school-hosted placements that match the programs you coordinate.',
+      icon: BriefcaseBusiness,
+      action: () => router.push({ name: 'school-opportunities' }),
+      buttonLabel: 'Browse Opportunities',
+    },
+  )
+
+  return actions
+})
 
 const dashboardStats = computed(() => {
   const totalInterns = students.value.length
@@ -382,10 +486,6 @@ function formatDate(value?: string) {
     : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-async function loadApplications() {
-  loadingApplications.value = false
-}
-
 function openDecisionDialog(applicationId: string, action: 'endorsed' | 'school_rejected', internName: string) {
   pendingDecision.value = { applicationId, action, internName }
 }
@@ -399,7 +499,6 @@ async function confirmDecision() {
   submittingDecision.value = true
   try {
     await updateApplicationStatus(pendingDecision.value.applicationId, pendingDecision.value.action)
-    await loadApplications()
     success(
       pendingDecision.value.action === 'endorsed' ? 'Student endorsed.' : 'Endorsement rejected.',
       {
@@ -461,7 +560,7 @@ watch(
 </script>
 
 <template>
-  <MainLayout role="school" :title="pageTitle" :active-item="activeItem" @navigate="handleMenuClick($event.key)">
+  <MainLayout role="school" :title="pageTitle" :active-item="activeItem" :nav-items="schoolNavItems" @navigate="handleMenuClick($event.key)">
     <div class="space-y-6">
       <Card v-if="currentView === 'dashboard'" class="border-border/80 shadow-sm">
         <CardHeader>
@@ -786,23 +885,25 @@ watch(
                     <Eye class="h-4 w-4" />
                     View
                   </Button>
-                  <Button
-                    class="gap-2"
-                    :disabled="submittingDecision"
-                    @click="openDecisionDialog(endorsement.id, 'endorsed', endorsement.internName)"
-                  >
-                    <CheckCircle2 class="h-4 w-4" />
-                    Endorse
-                  </Button>
-                  <Button
-                    variant="outline"
-                    class="gap-2"
-                    :disabled="submittingDecision"
-                    @click="openDecisionDialog(endorsement.id, 'school_rejected', endorsement.internName)"
-                  >
-                    <XCircle class="h-4 w-4" />
-                    Reject
-                  </Button>
+                  <template v-if="canCoordinateSchool">
+                    <Button
+                      class="gap-2"
+                      :disabled="submittingDecision"
+                      @click="openDecisionDialog(endorsement.id, 'endorsed', endorsement.internName)"
+                    >
+                      <CheckCircle2 class="h-4 w-4" />
+                      Endorse
+                    </Button>
+                    <Button
+                      variant="outline"
+                      class="gap-2"
+                      :disabled="submittingDecision"
+                      @click="openDecisionDialog(endorsement.id, 'school_rejected', endorsement.internName)"
+                    >
+                      <XCircle class="h-4 w-4" />
+                      Reject
+                    </Button>
+                  </template>
                 </div>
               </CardContent>
             </Card>

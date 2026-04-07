@@ -4,12 +4,14 @@ namespace App\Http\Controllers;
 
 use App\Models\Organization;
 use App\Models\OrganizationMembership;
+use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
 use App\Services\SubscriptionPlanService;
 use App\Services\TenantRoleService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Validation\Rule;
 
 class OrganizationAccessController extends Controller
 {
@@ -56,12 +58,15 @@ class OrganizationAccessController extends Controller
             ->orderBy('name')
             ->get();
 
+        $permissionKeys = Permission::catalogOrganizationPermissionKeysForUi();
+
         return response()->json([
             'organization' => [
                 'id' => (string) $organization->id,
                 'name' => $organization->name,
                 'type' => $organization->type,
             ],
+            'permissionKeys' => $permissionKeys,
             'roles' => $roles->map(fn (Role $role) => $this->serializeRole($role))->values(),
             'members' => $organization->memberships
                 ->sortBy(fn (OrganizationMembership $item) => strtolower($item->user?->name ?? ''))
@@ -89,15 +94,28 @@ class OrganizationAccessController extends Controller
             return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
         }
 
+        $actorMembership->loadMissing('role.permissions');
+
+        $assignableKeys = Permission::assignableOrganizationPermissionKeys();
+
         $data = $request->validate([
             'roleId' => ['sometimes', 'integer', 'exists:roles,id'],
             'title' => ['sometimes', 'nullable', 'string', 'max:255'],
             'grantPermissions' => ['sometimes', 'array'],
-            'grantPermissions.*' => ['string', 'max:255'],
+            'grantPermissions.*' => ['string', 'max:255', Rule::in($assignableKeys)],
             'denyPermissions' => ['sometimes', 'array'],
-            'denyPermissions.*' => ['string', 'max:255'],
+            'denyPermissions.*' => ['string', 'max:255', Rule::in($assignableKeys)],
             'status' => ['sometimes', 'in:active,inactive,pending'],
         ]);
+
+        if (array_key_exists('grantPermissions', $data)) {
+            $grantKeys = array_values(array_unique($data['grantPermissions'] ?? []));
+            if (! $actorMembership->mayGrantOrganizationPermissionKeys($grantKeys)) {
+                return response()->json([
+                    'message' => 'You cannot grant one or more of the selected permissions.',
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+        }
 
         if (array_key_exists('roleId', $data)) {
             $role = Role::query()
@@ -116,6 +134,14 @@ class OrganizationAccessController extends Controller
 
             if (! $role) {
                 return response()->json(['message' => 'The selected role is not valid for this organization.'], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+
+            $role->loadMissing('permissions');
+
+            if (! $actorMembership->mayAssignTenantRole($role)) {
+                return response()->json([
+                    'message' => 'You cannot assign this role with your current permissions.',
+                ], Response::HTTP_FORBIDDEN);
             }
 
             $membership->role_id = $role->id;
@@ -144,8 +170,12 @@ class OrganizationAccessController extends Controller
 
         if (array_key_exists('grantPermissions', $data) || array_key_exists('denyPermissions', $data)) {
             $membership->permissions_override = [
-                'grant' => array_values(array_unique($data['grantPermissions'] ?? ($membership->permissions_override['grant'] ?? []))),
-                'deny' => array_values(array_unique($data['denyPermissions'] ?? ($membership->permissions_override['deny'] ?? []))),
+                'grant' => Permission::normalizeOrganizationPermissionKeys(
+                    array_values(array_unique($data['grantPermissions'] ?? ($membership->permissions_override['grant'] ?? [])))
+                ),
+                'deny' => Permission::normalizeOrganizationPermissionKeys(
+                    array_values(array_unique($data['denyPermissions'] ?? ($membership->permissions_override['deny'] ?? [])))
+                ),
             ];
         }
 
@@ -172,11 +202,14 @@ class OrganizationAccessController extends Controller
             return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
         }
 
+        $actorMembership->loadMissing('role.permissions');
+
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
             'roleId' => ['required', 'integer', 'exists:roles,id'],
             'title' => ['nullable', 'string', 'max:255'],
+            'password' => ['nullable', 'string', 'min:8', 'confirmed'],
         ]);
 
         $organization = $actorMembership->organization;
@@ -213,18 +246,29 @@ class OrganizationAccessController extends Controller
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
-        $tempPassword = $this->generateTemporaryPassword();
+        $role->loadMissing('permissions');
+
+        if (! $actorMembership->mayAssignTenantRole($role)) {
+            return response()->json([
+                'message' => 'You cannot assign this role with your current permissions.',
+            ], Response::HTTP_FORBIDDEN);
+        }
+
+        $useGeneratedPassword = ! filled($data['password'] ?? null);
+        $plainPassword = $useGeneratedPassword
+            ? $this->generateTemporaryPassword()
+            : (string) $data['password'];
         $legacyRole = $organization->type === 'school' ? 'student' : $organization->type;
 
         $newUser = User::query()->create([
             'name' => trim($data['name']),
             'email' => strtolower(trim($data['email'])),
-            'password' => $tempPassword,
+            'password' => $plainPassword,
             'role' => $legacyRole,
             'profile' => $this->buildProfileForOrganizationUser($organization, $data['title'] ?? null),
             'is_active' => true,
-            'is_temporary' => true,
-            'must_change_password' => true,
+            'is_temporary' => $useGeneratedPassword,
+            'must_change_password' => $useGeneratedPassword,
             'profile_setup_complete' => true,
         ]);
 
@@ -247,16 +291,24 @@ class OrganizationAccessController extends Controller
 
         return response()->json([
             'member' => $this->serializeMembership($membership),
-            'temporaryPassword' => $tempPassword,
+            'temporaryPassword' => $useGeneratedPassword ? $plainPassword : null,
         ], Response::HTTP_CREATED);
     }
 
     private function canManageOrganizationAccess(OrganizationMembership $membership): bool
     {
-        return in_array('org.manage_roles', $membership->effectivePermissions(), true)
-            || in_array('org.manage_members', $membership->effectivePermissions(), true)
-            || in_array('manage_roles', $membership->effectivePermissions(), true)
-            || in_array('manage_users', $membership->effectivePermissions(), true);
+        $membership->loadMissing('organization');
+        $organization = $membership->organization;
+        if ($organization && (int) ($organization->owner_user_id ?? 0) === (int) $membership->user_id) {
+            return true;
+        }
+
+        $permissions = $membership->effectivePermissions();
+
+        return in_array('org.manage_roles', $permissions, true)
+            || in_array('org.manage_members', $permissions, true)
+            || in_array('manage_roles', $permissions, true)
+            || in_array('manage_permissions', $permissions, true);
     }
 
     /**
@@ -314,7 +366,7 @@ class OrganizationAccessController extends Controller
             'slug' => $role->slug,
             'scope' => $role->scope,
             'organizationType' => $role->organization_type,
-            'permissions' => $role->permissions->pluck('key')->values()->all(),
+            'permissions' => Permission::normalizeOrganizationPermissionKeys($role->permissions->pluck('key')->all()),
         ];
     }
 
@@ -338,10 +390,14 @@ class OrganizationAccessController extends Controller
             ],
             'role' => $this->serializeRole($membership->role),
             'permissionsOverride' => [
-                'grant' => array_values($membership->permissions_override['grant'] ?? []),
-                'deny' => array_values($membership->permissions_override['deny'] ?? []),
+                'grant' => Permission::normalizeOrganizationPermissionKeys(
+                    array_values($membership->permissions_override['grant'] ?? [])
+                ),
+                'deny' => Permission::normalizeOrganizationPermissionKeys(
+                    array_values($membership->permissions_override['deny'] ?? [])
+                ),
             ],
-            'effectivePermissions' => $membership->effectivePermissions(),
+            'effectivePermissions' => Permission::normalizeOrganizationPermissionKeys($membership->effectivePermissions()),
         ];
     }
 }

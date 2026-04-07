@@ -34,6 +34,8 @@ export interface OrganizationAccessResponse {
     name: string
     type: 'school' | 'company'
   }
+  /** Full catalog of org-scoped permission keys for matrix columns (union with role keys if missing). */
+  permissionKeys?: string[]
   roles: OrganizationAccessRole[]
   members: OrganizationAccessMember[]
 }
@@ -70,14 +72,18 @@ export async function createOrganizationMember(payload: {
   email: string
   roleId: string
   title?: string | null
-}): Promise<{ member: OrganizationAccessMember; temporaryPassword: string }> {
-  return apiFetch<{ member: OrganizationAccessMember; temporaryPassword: string }>('/organization/access/members', {
+  password?: string
+  passwordConfirmation?: string
+}): Promise<{ member: OrganizationAccessMember; temporaryPassword: string | null }> {
+  return apiFetch<{ member: OrganizationAccessMember; temporaryPassword: string | null }>('/organization/access/members', {
     method: 'POST',
     body: JSON.stringify({
       name: payload.name,
       email: payload.email,
       roleId: Number(payload.roleId),
       title: payload.title,
+      password: payload.password,
+      password_confirmation: payload.passwordConfirmation,
     }),
   })
 }

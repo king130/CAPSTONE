@@ -18,16 +18,47 @@ export function useDynamicContractForm(requestedByRole: 'school' | 'company') {
 
   const selectedType = computed(() => contractTypes.value.find((item) => item.id === selectedTypeId.value) ?? null)
 
+  function defaultSubjectForType(type: { name: string } | null): string {
+    if (!type) return ''
+    const year = new Date().getFullYear()
+    return `${type.name} – ${year}`
+  }
+
   watch(selectedType, (type) => {
     dynamicFields.value = { ...(type?.defaultValues ?? {}) }
+    if (type && !subject.value.trim()) {
+      subject.value = defaultSubjectForType(type)
+    }
   })
 
+  function pickDefaultContractType(): (typeof contractTypes.value)[0] | undefined {
+    const list = contractTypes.value
+    return (
+      list.find((t) => t.slug === 'ojt-moa')
+      ?? list.find((t) => /moa|memorandum of agreement/i.test(t.name))
+      ?? list[0]
+    )
+  }
+
   function chooseType(preferredTypeName?: string): boolean {
-    const preferredName = preferredTypeName?.trim().toLowerCase()
-    if (preferredName) {
-      const matched = contractTypes.value.find((item) => item.name.trim().toLowerCase() === preferredName)
+    const list = contractTypes.value
+    const fallback = pickDefaultContractType()
+
+    const preferred = preferredTypeName?.trim().toLowerCase()
+    if (preferred) {
+      const matched =
+        list.find((item) => item.name.trim().toLowerCase() === preferred)
+        ?? list.find((item) => item.slug === 'ojt-moa' && (preferred.includes('moa') || preferred.includes('ojt')))
+        ?? list.find((item) => item.name.toLowerCase().includes('memorandum'))
+        ?? list.find((item) => item.name.toLowerCase().includes(preferred))
+
       if (matched) {
         selectedTypeId.value = matched.id
+        return true
+      }
+
+      if (fallback) {
+        selectedTypeId.value = fallback.id
         return true
       }
 
@@ -35,8 +66,8 @@ export function useDynamicContractForm(requestedByRole: 'school' | 'company') {
       return false
     }
 
-    selectedTypeId.value = contractTypes.value[0]?.id ?? ''
-    return true
+    selectedTypeId.value = fallback?.id ?? ''
+    return Boolean(fallback)
   }
 
   async function loadTypes(preferredTypeName?: string) {
@@ -50,9 +81,9 @@ export function useDynamicContractForm(requestedByRole: 'school' | 'company') {
     error.value = null
     try {
       contractTypes.value = await fetchContractTypes(partnerUserId.value)
-      const matched = chooseType(preferredTypeName)
-      if (!matched && preferredTypeName) {
-        error.value = `The selected contract type "${preferredTypeName}" is not available for this partner.`
+      const picked = chooseType(preferredTypeName)
+      if (!picked) {
+        error.value = 'No contract templates are available for this partner.'
       }
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'Could not load contract types.'
@@ -69,7 +100,7 @@ export function useDynamicContractForm(requestedByRole: 'school' | 'company') {
     try {
       return await submitDynamicContract({
         requestedByRole,
-        subject: subject.value,
+        subject: subject.value.trim() || defaultSubjectForType(selectedType.value),
         contractTypeId: selectedTypeId.value || undefined,
         contractTypeLabel: selectedType.value?.name,
         schoolId: requestedByRole === 'company' ? partnerUserId.value : undefined,

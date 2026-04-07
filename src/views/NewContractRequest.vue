@@ -144,6 +144,7 @@ onMounted(() => {
           :partners="partners"
           :initial-partner-id="selectedPartner.uid"
           :selected-partner="selectedPartner"
+          initial-contract-type-name="OJT Memorandum of Agreement (MOA)"
           lock-partner
           @change-partner="resetPartner"
           @submitted="handleSubmitted"

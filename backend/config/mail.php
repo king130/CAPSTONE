@@ -43,10 +43,14 @@ return [
             'url' => env('MAIL_URL'),
             'host' => env('MAIL_HOST', '127.0.0.1'),
             'port' => env('MAIL_PORT', 2525),
-            'username' => env('MAIL_USERNAME'),
-            'password' => env('MAIL_PASSWORD'),
-            'timeout' => null,
+            // Trim accidental whitespace; Google App Passwords may be pasted with spaces (they are optional in .env).
+            'username' => ($u = env('MAIL_USERNAME')) !== null ? trim((string) $u) : null,
+            'password' => ($p = env('MAIL_PASSWORD')) !== null ? preg_replace('/\s+/', '', (string) $p) : null,
+            'timeout' => env('MAIL_TIMEOUT', 30),
+            // EHLO identity: optional MAIL_EHLO_DOMAIN; otherwise the host from APP_URL (use your real API URL in production).
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
+            // Set MAIL_SSL_VERIFY_PEER=false only on dev machines with broken CA bundles (prefer fixing php.ini openssl.cafile).
+            'verify_peer' => filter_var(env('MAIL_SSL_VERIFY_PEER', true), FILTER_VALIDATE_BOOL),
         ],
 
         'ses' => [

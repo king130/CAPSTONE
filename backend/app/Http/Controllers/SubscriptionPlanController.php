@@ -17,8 +17,16 @@ class SubscriptionPlanController extends Controller
 
     public function index()
     {
+        $plans = $this->plans->getAllPlans();
+
+        if ($plans->isEmpty()) {
+            return response()->json([
+                'data' => $this->plans->fallbackSerializedPlans(),
+            ]);
+        }
+
         return response()->json([
-            'data' => $this->plans->getAllPlans()
+            'data' => $plans
                 ->map(fn (SubscriptionPlanDefinition $plan) => $this->plans->serializePlan($plan))
                 ->values(),
         ]);

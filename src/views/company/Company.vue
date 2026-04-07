@@ -43,6 +43,9 @@ import TableRow from '@/components/ui/table/TableRow.vue'
 import { caviteBarangaysByLocation, caviteLocationGroups } from '@/config/courseCatalog'
 import { useToast } from '@/composables/useToast'
 import MainLayout from '@/layouts/MainLayout.vue'
+import { defaultNavItems } from '@/layouts/navigation'
+import type { LayoutNavItem } from '@/layouts/navigation'
+import { membershipForActiveOrganization } from '@/services/auth'
 import { subscribeCompanyApplications, updateApplicationStatus, type ApplicationRecord } from '@/services/applications'
 import {
   createInternship,
@@ -147,6 +150,56 @@ const companyIndustry = computed(() => String(companyProfile.value?.industryType
 const companyAcceptedCourses = computed(() => {
   const stored = Array.isArray(companyProfile.value?.courses) ? (companyProfile.value.courses as string[]) : []
   return stored.map((course) => course.trim()).filter(Boolean)
+})
+
+const membershipPermissions = computed(() => membershipForActiveOrganization(authStore.user)?.permissions ?? [])
+
+function companyHasAnyPermission(keys: string[]) {
+  const perms = membershipPermissions.value
+  return keys.some((key) => perms.includes(key))
+}
+
+const isCompanyOrganizationOwner = computed(() => authStore.user?.isOrganizationOwner === true)
+
+const companyCanAccessTenantRbac = computed(
+  () =>
+    isCompanyOrganizationOwner.value ||
+    companyHasAnyPermission([
+      'manage_roles',
+      'manage_permissions',
+      'org.manage_roles',
+      'manage_users',
+      'org.manage_members',
+    ]),
+)
+
+const companyCanManageContracts = computed(
+  () =>
+    isCompanyOrganizationOwner.value ||
+    companyHasAnyPermission(['manage_contracts', 'org.manage_contracts']),
+)
+
+const companyCanManageSubscription = computed(
+  () =>
+    isCompanyOrganizationOwner.value ||
+    companyHasAnyPermission(['manage_subscription', 'org.manage_subscription']),
+)
+
+const companyNavItems = computed<LayoutNavItem[]>(() => {
+  const items = defaultNavItems.company
+  return items.filter((item) => {
+    switch (item.key) {
+      case 'tenant-role-management':
+      case 'tenant-permission-assignment':
+        return companyCanAccessTenantRbac.value
+      case 'contracts':
+        return companyCanManageContracts.value
+      case 'subscription':
+        return companyCanManageSubscription.value
+      default:
+        return true
+    }
+  })
 })
 
 const commonDurationOptions = ['200 hours', '300 hours', '486 hours', '600 hours']
@@ -728,7 +781,7 @@ watch(
 </script>
 
 <template>
-  <MainLayout role="company" :title="pageTitle" :active-item="currentView" @navigate="handleMenuClick($event.key)">
+  <MainLayout role="company" :title="pageTitle" :active-item="currentView" :nav-items="companyNavItems" @navigate="handleMenuClick($event.key)">
     <div class="space-y-6">
       <Card v-if="currentView === 'dashboard'" class="border-border/80 shadow-sm">
         <CardHeader>

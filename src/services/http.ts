@@ -1,12 +1,28 @@
 /** API base URL, e.g. http://localhost:8000/api — or leave empty and use Vite proxy to /api */
 const TOKEN_KEY = 'capstone_auth_token'
 
+/**
+ * If VITE_API_BASE_URL is a bare origin (e.g. https://api.example.com), append /api so routes match Laravel's api prefix.
+ */
+function maybeAppendApiPath(absoluteUrl: string): string {
+  try {
+    const u = new URL(absoluteUrl.trim())
+    const path = u.pathname.replace(/\/$/, '') || '/'
+    if (path === '/') {
+      return `${u.origin}/api`
+    }
+    return absoluteUrl.trim().replace(/\/$/, '')
+  } catch {
+    return absoluteUrl.trim().replace(/\/$/, '')
+  }
+}
+
 function normalizeApiBase(raw: unknown): string | null {
   const value = String(raw ?? '').trim().replace(/\/$/, '')
   if (!value) return null
 
   if (value.startsWith('/')) return value
-  if (/^https?:\/\//i.test(value)) return value
+  if (/^https?:\/\//i.test(value)) return maybeAppendApiPath(value)
 
   const protocol =
     typeof window !== 'undefined' && window.location?.protocol
@@ -54,14 +70,7 @@ export function setToken(token: string | null): void {
 export function apiBase(): string {
   const explicit = normalizeApiBase(import.meta.env.VITE_API_BASE_URL)
   if (explicit) return explicit
-
-  if (import.meta.env.DEV && typeof window !== 'undefined') {
-    const hostname = window.location.hostname
-    if (hostname === '127.0.0.1' || hostname === 'localhost') {
-      return 'http://127.0.0.1:8000/api'
-    }
-  }
-
+  // Same-origin `/api`: Vite dev server proxies to Laravel; production can use a reverse proxy or set VITE_API_BASE_URL.
   return ''
 }
 

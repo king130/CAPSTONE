@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Contract;
+use App\Support\SchoolTenantPermissions;
 use App\Models\User;
 use App\Services\Contracts\ContractRequestService;
 use Illuminate\Http\Request;
@@ -122,6 +123,10 @@ class ContractController extends Controller
             return response()->json(['message' => 'Requester role must match the signed-in account.'], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
+        if ($appRole === 'school' && ! SchoolTenantPermissions::userMayManageSchoolContracts($user)) {
+            return response()->json(['message' => 'You do not have permission to create or manage contracts for this school.'], Response::HTTP_FORBIDDEN);
+        }
+
         $contract = $this->contractRequestService->create(
             $user,
             $request->all(),
@@ -134,8 +139,12 @@ class ContractController extends Controller
     public function accept(Request $request, Contract $contract)
     {
         $user = $request->user();
-        if (! $this->canRespond($contract, $user->id, (string) $user->effectiveAppRole())) {
+        $appRole = (string) $user->effectiveAppRole();
+        if (! $this->canRespond($contract, $user->id, $appRole)) {
             return response()->json(['message' => 'Only the receiving party can accept this contract request.'], Response::HTTP_FORBIDDEN);
+        }
+        if ($appRole === 'school' && ! SchoolTenantPermissions::userMayManageSchoolContracts($user)) {
+            return response()->json(['message' => 'You do not have permission to accept contracts for this school.'], Response::HTTP_FORBIDDEN);
         }
         if ($contract->status !== 'pending') {
             return response()->json(['message' => 'Only pending contracts can be accepted.'], Response::HTTP_UNPROCESSABLE_ENTITY);
@@ -155,8 +164,12 @@ class ContractController extends Controller
     public function reject(Request $request, Contract $contract)
     {
         $user = $request->user();
-        if (! $this->canRespond($contract, $user->id, (string) $user->effectiveAppRole())) {
+        $appRole = (string) $user->effectiveAppRole();
+        if (! $this->canRespond($contract, $user->id, $appRole)) {
             return response()->json(['message' => 'Only the receiving party can reject this contract request.'], Response::HTTP_FORBIDDEN);
+        }
+        if ($appRole === 'school' && ! SchoolTenantPermissions::userMayManageSchoolContracts($user)) {
+            return response()->json(['message' => 'You do not have permission to reject contracts for this school.'], Response::HTTP_FORBIDDEN);
         }
         if ($contract->status !== 'pending') {
             return response()->json(['message' => 'Only pending contracts can be rejected.'], Response::HTTP_UNPROCESSABLE_ENTITY);
@@ -180,6 +193,9 @@ class ContractController extends Controller
         $appRole = $user->effectiveAppRole();
         if (! $this->isParticipant($contract, $user->id, (string) $appRole) && $appRole !== 'admin') {
             return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
+        }
+        if ($appRole === 'school' && ! SchoolTenantPermissions::userMayManageSchoolContracts($user)) {
+            return response()->json(['message' => 'You do not have permission to cancel contracts for this school.'], Response::HTTP_FORBIDDEN);
         }
         if (! in_array($contract->status, ['pending', 'active'], true)) {
             return response()->json(['message' => 'Only pending or active contracts can be cancelled.'], Response::HTTP_UNPROCESSABLE_ENTITY);

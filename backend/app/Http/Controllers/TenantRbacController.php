@@ -9,8 +9,10 @@ use App\Models\Role;
 use App\Models\User;
 use App\Services\OrganizationAccountProvisioner;
 use App\Services\TenantRoleService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Validation\Rule;
 
 class TenantRbacController extends Controller
 {
@@ -72,10 +74,35 @@ class TenantRbacController extends Controller
             ->orderBy('name')
             ->get();
 
-        $permissions = Permission::query()
+        $permissionRows = Permission::query()
             ->select(['id', 'key', 'description'])
+            ->where('scope', 'organization')
             ->orderBy('key')
             ->get();
+
+        if ($permissionRows->isEmpty()) {
+            $permissionsPayload = collect(Permission::normalizeOrganizationPermissionKeys(Permission::fallbackOrganizationKeys()))
+                ->map(fn (string $key) => [
+                    'id' => $key,
+                    'key' => $key,
+                    'description' => null,
+                ])
+                ->values();
+        } else {
+            $deduped = Permission::deduplicateOrganizationPermissionsForUi($permissionRows);
+            $permissionsPayload = $deduped
+                ->map(function (Permission $permission) {
+                    $canonical = Permission::canonicalOrganizationPermissionKey($permission->key);
+
+                    return [
+                        'id' => (string) $permission->id,
+                        'key' => $canonical,
+                        'description' => $permission->description,
+                    ];
+                })
+                ->unique('key')
+                ->values();
+        }
 
         $members = $tenant->memberships()
             ->select(['id', 'organization_id', 'user_id', 'role_id', 'status', 'title'])
@@ -91,11 +118,7 @@ class TenantRbacController extends Controller
             'tenant' => $this->serializeTenant($tenant->loadCount(['memberships', 'roles'])),
             'roles' => $roles->map(fn (Role $role) => $this->serializeRole($role))->values(),
             'members' => $members->map(fn (OrganizationMembership $membership) => $this->serializeMembership($membership))->values(),
-            'permissions' => $permissions->map(fn (Permission $permission) => [
-                'id' => (string) $permission->id,
-                'key' => $permission->key,
-                'description' => $permission->description,
-            ])->values(),
+            'permissions' => $permissionsPayload,
             'canManageAllTenants' => $this->isSystemAdmin($user),
         ]);
     }
@@ -178,6 +201,12 @@ class TenantRbacController extends Controller
             return response()->json(['message' => 'The selected role is not valid for this account.'], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
+        $role->loadMissing('permissions');
+
+        if ($response = $this->forbiddenUnlessMayAssignTenantRole($user, $tenant, $role)) {
+            return $response;
+        }
+
         $membership->role_id = $role->id;
         $membership->title = $membership->title ?: $role->name;
         $membership->save();
@@ -206,6 +235,7 @@ class TenantRbacController extends Controller
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
             'roleId' => ['required', 'integer', 'exists:roles,id'],
             'title' => ['nullable', 'string', 'max:255'],
+            'password' => ['nullable', 'string', 'min:8', 'confirmed'],
         ]);
 
         $role = Role::query()
@@ -217,7 +247,16 @@ class TenantRbacController extends Controller
             return response()->json(['message' => 'The selected role is not valid for this account.'], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
-        $temporaryPassword = 'Temp@'.strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
+        $role->loadMissing('permissions');
+
+        if ($response = $this->forbiddenUnlessMayAssignTenantRole($user, $tenant, $role)) {
+            return $response;
+        }
+
+        $useGeneratedPassword = ! filled($data['password'] ?? null);
+        $plainPassword = $useGeneratedPassword
+            ? 'Temp@'.strtoupper(substr(bin2hex(random_bytes(4)), 0, 8))
+            : (string) $data['password'];
         $legacyRole = $tenant->type;
         if ($tenant->type === 'school') {
             $legacyRole = in_array($role->slug, ['intern', 'student_member'], true) ? 'student' : 'school';
@@ -237,12 +276,12 @@ class TenantRbacController extends Controller
         $newUser = User::query()->create([
             'name' => trim($data['name']),
             'email' => strtolower(trim($data['email'])),
-            'password' => $temporaryPassword,
+            'password' => $plainPassword,
             'role' => $legacyRole,
             'profile' => $profile,
             'is_active' => true,
-            'is_temporary' => true,
-            'must_change_password' => true,
+            'is_temporary' => $useGeneratedPassword,
+            'must_change_password' => $useGeneratedPassword,
             'profile_setup_complete' => true,
             'tenant_id' => $tenant->id,
             'role_id' => $role->id,
@@ -259,7 +298,7 @@ class TenantRbacController extends Controller
 
         return response()->json([
             'member' => $this->serializeMembership($membership->fresh(['user', 'role.permissions', 'organization'])),
-            'temporaryPassword' => $temporaryPassword,
+            'temporaryPassword' => $useGeneratedPassword ? $plainPassword : null,
         ], Response::HTTP_CREATED);
     }
 
@@ -325,9 +364,11 @@ class TenantRbacController extends Controller
             return response()->json(['message' => 'Role does not belong to the selected tenant.'], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
+        $allowedKeys = Permission::assignableOrganizationPermissionKeys();
+
         $data = $request->validate([
             'permissions' => ['array'],
-            'permissions.*' => ['string', 'exists:permissions,key'],
+            'permissions.*' => ['string', 'max:255', Rule::in($allowedKeys)],
         ]);
 
         $this->tenantRoleService->syncPermissions($role, $data['permissions'] ?? []);
@@ -337,9 +378,40 @@ class TenantRbacController extends Controller
         ]);
     }
 
+    private function forbiddenUnlessMayAssignTenantRole(User $user, Organization $tenant, Role $role): ?JsonResponse
+    {
+        if ($this->isSystemAdmin($user)) {
+            return null;
+        }
+
+        if ((int) ($tenant->owner_user_id ?? 0) === (int) $user->id) {
+            return null;
+        }
+
+        $actorMembership = OrganizationMembership::query()
+            ->where('user_id', $user->id)
+            ->where('organization_id', $tenant->id)
+            ->where('status', 'active')
+            ->first();
+
+        $actorMembership?->loadMissing('role.permissions');
+
+        if (! $actorMembership || ! $actorMembership->mayAssignTenantRole($role)) {
+            return response()->json([
+                'message' => 'You cannot assign this role with your current permissions.',
+            ], Response::HTTP_FORBIDDEN);
+        }
+
+        return null;
+    }
+
     private function canManageTenantRoles(User $user, Organization $tenant): bool
     {
         if ($this->isSystemAdmin($user)) {
+            return true;
+        }
+
+        if ((int) ($tenant->owner_user_id ?? 0) === (int) $user->id) {
             return true;
         }
 
@@ -365,6 +437,10 @@ class TenantRbacController extends Controller
     private function canManageTenantMembers(User $user, Organization $tenant): bool
     {
         if ($this->isSystemAdmin($user)) {
+            return true;
+        }
+
+        if ((int) ($tenant->owner_user_id ?? 0) === (int) $user->id) {
             return true;
         }
 
@@ -420,7 +496,7 @@ class TenantRbacController extends Controller
             'slug' => $role->slug,
             'description' => $role->description,
             'memberCount' => (int) ($role->memberships_count ?? 0),
-            'permissions' => $role->permissions->pluck('key')->values()->all(),
+            'permissions' => Permission::normalizeOrganizationPermissionKeys($role->permissions->pluck('key')->all()),
         ];
     }
 
@@ -444,7 +520,7 @@ class TenantRbacController extends Controller
                 'id' => (string) $membership->role->id,
                 'name' => $membership->role->name,
                 'slug' => $membership->role->slug,
-                'permissions' => $membership->role->permissions->pluck('key')->values()->all(),
+                'permissions' => Permission::normalizeOrganizationPermissionKeys($membership->role->permissions->pluck('key')->all()),
             ],
         ];
     }

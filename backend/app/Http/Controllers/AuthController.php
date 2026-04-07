@@ -278,6 +278,21 @@ class AuthController extends Controller
             $user->is_temporary = false;
             $user->profile_setup_complete = true;
             $user->email_verified_at = now();
+
+            $user->load('student');
+            if ($user->student) {
+                $merged = $user->profile ?? [];
+                $merged['schoolName'] = $merged['schoolName'] ?? $user->student->school_name;
+                $merged['course'] = $merged['course'] ?? $user->student->course;
+                $merged['yearLevel'] = $merged['yearLevel'] ?? $user->student->year_level;
+                $merged['studentNumber'] = $merged['studentNumber'] ?? $user->student->student_id_number;
+                $merged['studentId'] = $merged['studentId'] ?? $user->student->student_id_number;
+                if ($user->student->school_id) {
+                    $merged['schoolId'] = $merged['schoolId'] ?? (string) $user->student->school_id;
+                }
+                $user->profile = $merged;
+            }
+
             $user->save();
 
             AccountSetupToken::query()
@@ -350,6 +365,56 @@ class AuthController extends Controller
             $profile['organizationName'] = $activeOrganization->name;
         }
 
+        if ($activeOrganization && $activeOrganization->type === 'school') {
+            $tenantSchool = School::query()
+                ->where('organization_id', $activeOrganization->id)
+                ->first();
+
+            if ($tenantSchool) {
+                $official = trim((string) ($tenantSchool->official_school_email ?? ''));
+                if ($official !== '' && trim((string) ($profile['officialSchoolEmail'] ?? '')) === '') {
+                    $profile['officialSchoolEmail'] = $tenantSchool->official_school_email;
+                }
+                if (trim((string) ($profile['institutionName'] ?? '')) === '' && $tenantSchool->institution_name) {
+                    $profile['institutionName'] = $tenantSchool->institution_name;
+                }
+                if (trim((string) ($profile['schoolName'] ?? '')) === '' && $tenantSchool->institution_name) {
+                    $profile['schoolName'] = $tenantSchool->institution_name;
+                }
+            }
+
+            $ownerId = (int) ($activeOrganization->owner_user_id ?? 0);
+            if ($ownerId > 0) {
+                $ownerProfile = User::query()->whereKey($ownerId)->value('profile');
+                $ownerCourses = is_array($ownerProfile) ? ($ownerProfile['courses'] ?? null) : null;
+                if (is_array($ownerCourses) && $ownerCourses !== []) {
+                    $currentCourses = $profile['courses'] ?? null;
+                    if (! is_array($currentCourses) || $currentCourses === []) {
+                        $profile['courses'] = $ownerCourses;
+                    }
+                }
+            }
+        }
+
+        if ($activeOrganization && $activeOrganization->type === 'company') {
+            $ownerId = (int) ($activeOrganization->owner_user_id ?? 0);
+            if ($ownerId > 0 && $ownerId !== (int) $user->id) {
+                $ownerProfile = User::query()->whereKey($ownerId)->value('profile');
+                if (is_array($ownerProfile)) {
+                    $ownerCourses = $ownerProfile['courses'] ?? null;
+                    if (is_array($ownerCourses) && $ownerCourses !== []) {
+                        $currentCourses = $profile['courses'] ?? null;
+                        if (! is_array($currentCourses) || $currentCourses === []) {
+                            $profile['courses'] = $ownerCourses;
+                        }
+                    }
+                    if (trim((string) ($profile['companyName'] ?? '')) === '' && ! empty($ownerProfile['companyName'])) {
+                        $profile['companyName'] = (string) $ownerProfile['companyName'];
+                    }
+                }
+            }
+        }
+
         $appRole = $user->effectiveAppRole();
 
         return [
@@ -388,9 +453,11 @@ class AuthController extends Controller
                     ],
                     'title' => $membership->title,
                     'status' => $membership->status,
-                    'permissions' => $membership->effectivePermissions(),
+                    'permissions' => Permission::normalizeOrganizationPermissionKeys($membership->effectivePermissions()),
                 ];
             })->values()->all(),
+            'isOrganizationOwner' => $activeOrganization
+                && (int) ($activeOrganization->owner_user_id ?? 0) === (int) $user->id,
             'activeOrganization' => $activeOrganization ? [
                 'id' => (string) $activeOrganization->id,
                 'name' => $activeOrganization->name,

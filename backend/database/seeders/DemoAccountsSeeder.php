@@ -21,11 +21,20 @@ class DemoAccountsSeeder extends Seeder
         $schoolAdminRole = Role::query()->where('slug', 'school_admin')->first();
         $studentRole = Role::query()->where('slug', 'student_member')->first();
 
-        $admin = User::query()->updateOrCreate(
-            ['email' => 'admin@ojtpath.com'],
+        $adminEmail = (string) env('DEMO_ADMIN_EMAIL', 'admin@ojtpath.com');
+        $adminPassword = (string) env('DEMO_ADMIN_PASSWORD', 'Admin@2026!');
+        $companyEmail = (string) env('DEMO_COMPANY_EMAIL', 'company@techcorp.com');
+        $companyPassword = (string) env('DEMO_COMPANY_PASSWORD', 'Company@2026!');
+        $schoolEmail = (string) env('DEMO_SCHOOL_EMAIL', 'school@cvsu.edu.ph');
+        $schoolPassword = (string) env('DEMO_SCHOOL_PASSWORD', 'School@2026!');
+        $studentEmail = (string) env('DEMO_STUDENT_EMAIL', 'student@cvsu.edu.ph');
+        $studentPassword = (string) env('DEMO_STUDENT_PASSWORD', 'Student@2026!');
+
+        User::query()->updateOrCreate(
+            ['email' => $adminEmail],
             [
-                'name' => 'System Administrator',
-                'password' => 'Admin@2026!',
+                'name' => (string) env('DEMO_ADMIN_NAME', 'System Administrator'),
+                'password' => $adminPassword,
                 'role' => 'admin',
                 'platform_role_id' => $platformAdminRole?->id,
                 'profile' => [
@@ -44,16 +53,16 @@ class DemoAccountsSeeder extends Seeder
         );
 
         $companyUser = User::query()->updateOrCreate(
-            ['email' => 'company@techcorp.com'],
+            ['email' => $companyEmail],
             [
                 'name' => 'TechCorp HR',
-                'password' => 'Company@2026!',
+                'password' => $companyPassword,
                 'role' => 'company',
                 'profile' => [
                     'companyName' => 'TechCorp Solutions',
-                    'companyEmail' => 'company@techcorp.com',
+                    'companyEmail' => $companyEmail,
                     'contactPersonName' => 'TechCorp HR',
-                    'contactPersonEmail' => 'company@techcorp.com',
+                    'contactPersonEmail' => $companyEmail,
                     'courses' => ['BS Computer Science', 'BS Information Technology'],
                 ],
                 'is_active' => true,
@@ -83,9 +92,9 @@ class DemoAccountsSeeder extends Seeder
                 'subscription_id' => $companySubscription->id,
                 'organization_id' => $companyOrg->id,
                 'company_name' => 'TechCorp Solutions',
-                'company_email' => 'company@techcorp.com',
+                'company_email' => $companyEmail,
                 'contact_person_name' => 'TechCorp HR',
-                'contact_person_email' => 'company@techcorp.com',
+                'contact_person_email' => $companyEmail,
                 'verification_status' => 'approved',
             ]
         );
@@ -103,14 +112,14 @@ class DemoAccountsSeeder extends Seeder
         );
 
         $schoolUser = User::query()->updateOrCreate(
-            ['email' => 'school@cvsu.edu.ph'],
+            ['email' => $schoolEmail],
             [
                 'name' => 'CvSU OJT Office',
-                'password' => 'School@2026!',
+                'password' => $schoolPassword,
                 'role' => 'school',
                 'profile' => [
                     'institutionName' => 'Cavite State University',
-                    'officialSchoolEmail' => 'school@cvsu.edu.ph',
+                    'officialSchoolEmail' => $schoolEmail,
                     'courses' => ['BS Computer Science', 'BS Information Technology'],
                 ],
                 'is_active' => true,
@@ -140,7 +149,7 @@ class DemoAccountsSeeder extends Seeder
                 'subscription_id' => $schoolSubscription->id,
                 'organization_id' => $schoolOrg->id,
                 'institution_name' => 'Cavite State University',
-                'official_school_email' => 'school@cvsu.edu.ph',
+                'official_school_email' => $schoolEmail,
                 'subscription_code' => 'CVSU-2026',
                 'verification_status' => 'approved',
             ]
@@ -154,10 +163,10 @@ class DemoAccountsSeeder extends Seeder
         }
 
         User::query()->updateOrCreate(
-            ['email' => 'student@cvsu.edu.ph'],
+            ['email' => $studentEmail],
             [
                 'name' => 'CvSU Student',
-                'password' => 'Student@2026!',
+                'password' => $studentPassword,
                 'role' => 'student',
                 'profile' => [
                     'schoolName' => 'Cavite State University',
@@ -172,7 +181,7 @@ class DemoAccountsSeeder extends Seeder
             ]
         );
 
-        $studentUser = User::query()->where('email', 'student@cvsu.edu.ph')->firstOrFail();
+        $studentUser = User::query()->where('email', $studentEmail)->firstOrFail();
 
         Student::query()->updateOrCreate(
             ['user_id' => $studentUser->id],

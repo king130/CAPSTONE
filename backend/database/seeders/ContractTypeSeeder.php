@@ -11,12 +11,12 @@ class ContractTypeSeeder extends Seeder
     {
         $types = [
             [
-                'name' => 'OJT Memorandum of Agreement',
+                'name' => 'OJT Memorandum of Agreement (MOA)',
                 'slug' => 'ojt-moa',
                 'scope' => 'global',
-                'description' => 'Standard partnership agreement for internship placements.',
+                'description' => 'Default MOA for OJT: aligns eligible programs with courses shared by both school and company.',
                 'fields_schema' => [
-                    ['key' => 'programs', 'label' => 'Eligible Programs', 'type' => 'multiselect', 'required' => true, 'options' => ['BS Computer Science', 'BS Information Technology', 'BS Information Systems']],
+                    ['key' => 'programs', 'label' => 'Eligible Programs (aligned with shared courses)', 'type' => 'multiselect', 'required' => true, 'options' => ['BS Computer Science', 'BS Information Technology', 'BS Information Systems']],
                     ['key' => 'contact_person', 'label' => 'Primary Contact Person', 'type' => 'text', 'required' => true],
                     ['key' => 'contact_email', 'label' => 'Primary Contact Email', 'type' => 'email', 'required' => true],
                     ['key' => 'max_interns', 'label' => 'Maximum Intern Slots', 'type' => 'number', 'required' => false],

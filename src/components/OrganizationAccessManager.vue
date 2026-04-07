@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import Swal from '@/services/swal'
+import { membershipForActiveOrganization } from '@/services/auth'
 import { useAuthStore } from '@/stores/auth'
 import {
   createOrganizationMember,
@@ -19,6 +20,7 @@ const loading = ref(false)
 const creating = ref(false)
 const savingMemberId = ref<string | null>(null)
 const organizationName = ref('')
+const permissionCatalogKeys = ref<string[]>([])
 const members = ref<OrganizationAccessMember[]>([])
 const roles = ref<OrganizationAccessRole[]>([])
 const search = ref('')
@@ -39,16 +41,26 @@ const newMember = ref({
   email: '',
   roleId: '',
   title: '',
+  password: '',
+  passwordConfirmation: '',
 })
 
-const activeMembership = computed(() => authStore.user?.memberships?.[0] ?? null)
+const activeMembership = computed(() => membershipForActiveOrganization(authStore.user ?? undefined))
 const accountOverage = computed(() => {
   const key = props.organizationType === 'school' ? 'school.coordinators' : 'company.accounts'
   return authStore.user?.subscription?.overages?.items?.find((item) => item.key === key) ?? null
 })
 const canManageAccess = computed(() => {
+  if (authStore.user?.isOrganizationOwner) {
+    return true
+  }
   const perms = activeMembership.value?.permissions ?? []
-  return perms.includes('org.manage_roles') || perms.includes('org.manage_members')
+  return (
+    perms.includes('org.manage_roles') ||
+    perms.includes('org.manage_members') ||
+    perms.includes('manage_roles') ||
+    perms.includes('manage_permissions')
+  )
 })
 const assignableRoles = computed(() => {
   if (props.organizationType === 'school') {
@@ -60,6 +72,9 @@ const assignableRoles = computed(() => {
 
 const availablePermissions = computed(() => {
   const keys = new Set<string>()
+  for (const key of permissionCatalogKeys.value) {
+    keys.add(key)
+  }
   for (const role of roles.value) {
     for (const permission of role.permissions) keys.add(permission)
   }
@@ -92,6 +107,7 @@ async function loadAccess() {
   try {
     const data = await getOrganizationAccess()
     organizationName.value = data.organization.name
+    permissionCatalogKeys.value = Array.isArray(data.permissionKeys) ? data.permissionKeys : []
     roles.value = data.roles
     members.value = data.members
     memberDrafts.value = {}
@@ -110,12 +126,36 @@ async function loadAccess() {
   }
 }
 
+function validateNewMemberPassword(): string | null {
+  const p = newMember.value.password.trim()
+  const c = newMember.value.passwordConfirmation.trim()
+  if (!p && !c) return null
+  if (p.length < 8 || c.length < 8) {
+    return 'Password must be at least 8 characters.'
+  }
+  if (p !== c) {
+    return 'Password and confirmation do not match.'
+  }
+  return null
+}
+
 async function createMember() {
   if (!newMember.value.name.trim() || !newMember.value.email.trim() || !newMember.value.roleId) {
     await Swal.fire({
       icon: 'warning',
       title: 'Missing Details',
       text: 'Enter a name, email, and assigned role first.',
+      confirmButtonColor: '#2563eb',
+    })
+    return
+  }
+
+  const pwdErr = validateNewMemberPassword()
+  if (pwdErr) {
+    await Swal.fire({
+      icon: 'warning',
+      title: 'Invalid password',
+      text: pwdErr,
       confirmButtonColor: '#2563eb',
     })
     return
@@ -142,21 +182,37 @@ async function createMember() {
 
   creating.value = true
   try {
+    const useSetPassword = Boolean(newMember.value.password.trim())
     const res = await createOrganizationMember({
       name: newMember.value.name.trim(),
       email: newMember.value.email.trim(),
       roleId: newMember.value.roleId,
       title: newMember.value.title.trim() || null,
+      password: useSetPassword ? newMember.value.password : undefined,
+      passwordConfirmation: useSetPassword ? newMember.value.passwordConfirmation : undefined,
     })
 
     members.value = [...members.value, res.member].sort((a, b) => a.user.name.localeCompare(b.user.name))
-    newMember.value = { name: '', email: '', roleId: '', title: '' }
+    const defaultRoleId =
+      props.organizationType === 'school'
+        ? roles.value.find((role) => role.slug === 'intern')?.id ?? ''
+        : ''
+    newMember.value = {
+      name: '',
+      email: '',
+      roleId: defaultRoleId,
+      title: '',
+      password: '',
+      passwordConfirmation: '',
+    }
     await authStore.refreshUser()
 
     await Swal.fire({
       icon: 'success',
       title: 'Member Account Created',
-      html: `<strong>Temporary password:</strong> ${res.temporaryPassword}<br><br>The new user will be forced to change it on first login.`,
+      html: res.temporaryPassword
+        ? `<strong>Temporary password:</strong> ${res.temporaryPassword}<br><br>The new user will be forced to change it on first login.`
+        : 'The user can sign in with the password you set.',
       confirmButtonColor: '#2563eb',
     })
   } catch (error) {
@@ -394,6 +450,20 @@ onMounted(() => {
             type="text"
             class="field-input"
             :placeholder="organizationType === 'school' ? 'Course / section (optional)' : 'Job title / position'"
+          />
+          <input
+            v-model="newMember.password"
+            type="password"
+            class="field-input"
+            autocomplete="new-password"
+            placeholder="Password (optional, min 8 chars)"
+          />
+          <input
+            v-model="newMember.passwordConfirmation"
+            type="password"
+            class="field-input"
+            autocomplete="new-password"
+            placeholder="Confirm password"
           />
         </div>
         <div class="create-actions">

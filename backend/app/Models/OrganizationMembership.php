@@ -57,4 +57,76 @@ class OrganizationMembership extends Model
 
         return array_values(array_unique(array_diff(array_merge($base, $grant), $deny)));
     }
+
+    public function isOwnerOfOrganization(): bool
+    {
+        $this->loadMissing('organization');
+        $organization = $this->organization;
+
+        return $organization
+            && (int) ($organization->owner_user_id ?? 0) === (int) $this->user_id;
+    }
+
+    /**
+     * @param array<int, string> $actorPermissions
+     */
+    private static function hasBroadRoleOrPermissionAssignment(array $actorPermissions): bool
+    {
+        return in_array('manage_permissions', $actorPermissions, true)
+            || in_array('manage_roles', $actorPermissions, true)
+            || in_array('org.manage_roles', $actorPermissions, true);
+    }
+
+    public function mayAssignTenantRole(Role $role): bool
+    {
+        if ($this->isOwnerOfOrganization()) {
+            return true;
+        }
+
+        $this->loadMissing('role.permissions');
+        $actorPermissions = $this->effectivePermissions();
+
+        if (static::hasBroadRoleOrPermissionAssignment($actorPermissions)) {
+            return true;
+        }
+
+        $role->loadMissing('permissions');
+
+        foreach ($role->permissions->pluck('key')->all() as $key) {
+            if (! Permission::actorHasOrganizationPermissionKey($actorPermissions, $key)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param array<int, string> $grantKeys
+     */
+    public function mayGrantOrganizationPermissionKeys(array $grantKeys): bool
+    {
+        if ($grantKeys === []) {
+            return true;
+        }
+
+        if ($this->isOwnerOfOrganization()) {
+            return true;
+        }
+
+        $this->loadMissing('role.permissions');
+        $actorPermissions = $this->effectivePermissions();
+
+        if (static::hasBroadRoleOrPermissionAssignment($actorPermissions)) {
+            return true;
+        }
+
+        foreach ($grantKeys as $key) {
+            if (! Permission::actorHasOrganizationPermissionKey($actorPermissions, $key)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
 }
