@@ -116,18 +116,62 @@ function getAuthErrorMessage(
     return fallback
   }
 
-  const responseData = error.response?.data as
-    | { message?: string; errors?: Record<string, string[] | string> }
+  if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
+    return (
+      'Cannot reach the API server. Set VITE_API_BASE_URL in the project root .env to your Laravel API ' +
+      '(e.g. https://your-api-host/api), run npm run build, upload dist, and ensure FRONTEND_URL on the API matches this site.'
+    )
+  }
+
+  const res = error.response
+  if (!res) {
+    return error.message || fallback
+  }
+
+  const data = res.data
+  if (typeof data === 'string' && data.trim()) {
+    return data.length > 280 ? fallback : data.trim()
+  }
+
+  const responseData = data as
+    | { message?: string; errors?: Record<string, string[] | string | Record<string, string[]>> }
     | undefined
 
-  const firstValidationMessage = responseData?.errors
-    ? Object.values(responseData.errors)[0]
-    : undefined
+  let firstValidation: string | undefined
+  const errs = responseData?.errors
+  if (errs && typeof errs === 'object') {
+    for (const v of Object.values(errs)) {
+      if (Array.isArray(v) && v[0]) {
+        firstValidation = String(v[0])
+        break
+      }
+      if (typeof v === 'string') {
+        firstValidation = v
+        break
+      }
+      if (v && typeof v === 'object') {
+        const nested = Object.values(v as Record<string, string[]>)[0]
+        if (Array.isArray(nested) && nested[0]) {
+          firstValidation = String(nested[0])
+          break
+        }
+      }
+    }
+  }
+
+  if (res.status === 404) {
+    return (
+      responseData?.message ||
+      'API returned 404. VITE_API_BASE_URL is probably wrong — it must be the full base including /api (e.g. https://api.example.com/api).'
+    )
+  }
 
   return (
     responseData?.message ||
-    (Array.isArray(firstValidationMessage) ? firstValidationMessage[0] : firstValidationMessage) ||
-    fallback
+    firstValidation ||
+    (res.status >= 500
+      ? 'Server error while registering. Check API logs (storage/logs/laravel.log) and run migrations on the server.'
+      : fallback)
   )
 }
 

@@ -5,7 +5,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Eye, EyeOff, Upload } from 'lucide-vue-next'
 import TomSelect from 'tom-select'
 import 'tom-select/dist/css/tom-select.css'
-import Swal from 'sweetalert2'
+import Swal from '@/services/swal'
 import { z } from 'zod'
 
 import AlertDialog from '@/components/ui/alert-dialog/AlertDialog.vue'

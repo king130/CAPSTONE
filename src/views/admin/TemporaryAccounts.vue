@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
-import Swal from 'sweetalert2'
+import Swal from '@/services/swal'
 import { apiFetch } from '@/services/http'
 
 type TempUser = {
