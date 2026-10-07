@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Str;
 
 class Student extends Model
@@ -49,6 +50,16 @@ class Student extends Model
     public function organization(): BelongsTo
     {
         return $this->belongsTo(Organization::class);
+    }
+
+    public function applications(): HasMany
+    {
+        return $this->hasMany(Application::class);
+    }
+
+    public function ojtLogs(): HasMany
+    {
+        return $this->hasMany(OjtLog::class);
     }
 
     public static function generateInternCode(?School $school = null, ?string $schoolSubscriptionCode = null): string

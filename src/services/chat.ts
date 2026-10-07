@@ -1,213 +1,108 @@
-export interface ChatThread {
+import { apiFetch } from './http'
+
+export interface ChatPeer {
   id: string
-  members: string[]
-  title: string
-  lastMessage?: string
-  updatedAt?: string
-  memberNames?: Record<string, string>
+  name: string
+  role: string | null
+}
+
+export interface ChatLatestMessage {
+  id: string
+  body: string
+  senderId: string
+  createdAt: string | null
+}
+
+export interface ChatConversation {
+  id: string
+  peer: ChatPeer | null
+  latestMessage: ChatLatestMessage | null
+  lastReadAt: string | null
+  unreadCount: number
+  updatedAt: string | null
+  createdAt: string | null
 }
 
 export interface ChatMessage {
   id: string
+  conversationId: string
   senderId: string
-  text: string
-  createdAt?: string
+  body: string
+  createdAt: string | null
 }
 
-interface ChatStore {
-  threads: ChatThread[]
-  messages: Record<string, ChatMessage[]>
+/** @deprecated Prefer ChatMessage.body — kept for UI compatibility mapping */
+export type ChatThread = ChatConversation
+
+export class ChatApiError extends Error {
+  readonly status: number
+
+  constructor(message: string, status = 0) {
+    super(message)
+    this.name = 'ChatApiError'
+    this.status = status
+  }
+
+  get isForbidden(): boolean {
+    return this.status === 403 || this.message === 'Forbidden.'
+  }
 }
 
-interface DirectChatOptions {
-  title?: string
-  userName1?: string
-  userName2?: string
+function inferChatErrorStatus(message: string): number {
+  const normalized = message.trim().toLowerCase()
+  if (normalized === 'forbidden.' || normalized === 'forbidden' || normalized === 'account disabled') {
+    return 403
+  }
+  if (normalized.includes('unauthenticated') || normalized === 'unauthorized') {
+    return 401
+  }
+  return 0
 }
 
-const STORAGE_KEY = 'ojt-chat-store'
-const CHAT_CHANGED_EVENT = 'chat:changed'
-
-function readStore(): ChatStore {
+async function chatFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (!raw) {
-      return { threads: [], messages: {} }
-    }
-
-    const parsed = JSON.parse(raw) as Partial<ChatStore>
-    return {
-      threads: Array.isArray(parsed.threads) ? parsed.threads : [],
-      messages: parsed.messages && typeof parsed.messages === 'object' ? parsed.messages : {},
-    }
-  } catch {
-    return { threads: [], messages: {} }
+    return await apiFetch<T>(path, init)
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : 'Request failed'
+    throw new ChatApiError(message, inferChatErrorStatus(message))
   }
 }
 
-function writeStore(store: ChatStore) {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store))
-  window.dispatchEvent(new CustomEvent(CHAT_CHANGED_EVENT))
+export async function listConversations(): Promise<ChatConversation[]> {
+  const res = await chatFetch<{ data: ChatConversation[] }>('/conversations')
+  return Array.isArray(res.data) ? res.data : []
 }
 
-function notifySubscriber(callback: () => void) {
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === STORAGE_KEY) callback()
-  }
-
-  window.addEventListener(CHAT_CHANGED_EVENT, callback)
-  window.addEventListener('storage', onStorage)
-
-  return () => {
-    window.removeEventListener(CHAT_CHANGED_EVENT, callback)
-    window.removeEventListener('storage', onStorage)
-  }
-}
-
-function sortThreads(threads: ChatThread[]) {
-  return [...threads].sort((left, right) => {
-    const leftTime = new Date(left.updatedAt || 0).getTime()
-    const rightTime = new Date(right.updatedAt || 0).getTime()
-    return rightTime - leftTime
+export async function openConversation(peerUserId: string | number): Promise<ChatConversation> {
+  const res = await chatFetch<{ data: ChatConversation }>('/conversations', {
+    method: 'POST',
+    body: JSON.stringify({ peerUserId: Number(peerUserId) }),
   })
+  return res.data
 }
 
-function canonicalDirectChatId(userId1: string, userId2: string) {
-  return `direct:${[userId1, userId2].sort().join(':')}`
+export async function listMessages(conversationId: string): Promise<ChatMessage[]> {
+  const res = await chatFetch<{ data: ChatMessage[] }>(`/conversations/${conversationId}/messages`)
+  return Array.isArray(res.data) ? res.data : []
 }
 
-export function subscribeToChats(
-  userId: string,
-  callback: (threads: ChatThread[]) => void,
-  onError?: (err: Error) => void,
-): () => void {
-  const emit = () => {
-    try {
-      const store = readStore()
-      callback(sortThreads(store.threads.filter((thread) => thread.members.includes(userId))))
-    } catch (caughtError) {
-      onError?.(caughtError instanceof Error ? caughtError : new Error('Unable to read chat threads.'))
-    }
-  }
-
-  emit()
-  return notifySubscriber(emit)
+export async function sendChatMessage(conversationId: string, body: string): Promise<ChatMessage> {
+  const res = await chatFetch<{ data: ChatMessage }>(`/conversations/${conversationId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ body }),
+  })
+  return res.data
 }
 
-export async function ensureDefaultChat(userId: string): Promise<string> {
-  const store = readStore()
-  const firstThread = sortThreads(store.threads.filter((thread) => thread.members.includes(userId)))[0]
-  return firstThread?.id || ''
+/** @deprecated Use sendChatMessage(conversationId, body) — sender is server-enforced */
+export async function sendMessage(conversationId: string, _senderId: string, text: string): Promise<ChatMessage> {
+  return sendChatMessage(conversationId, text)
 }
 
-export async function createOrGetDirectChat(
-  userId1: string,
-  userId2: string,
-  options: DirectChatOptions = {},
-): Promise<string> {
-  const chatId = canonicalDirectChatId(userId1, userId2)
-  const store = readStore()
-  const existing = store.threads.find((thread) => thread.id === chatId)
-  if (existing) {
-    if (options.userName1 || options.userName2) {
-      existing.memberNames = {
-        ...(existing.memberNames ?? {}),
-        ...(options.userName1 ? { [userId1]: options.userName1 } : {}),
-        ...(options.userName2 ? { [userId2]: options.userName2 } : {}),
-      }
-      writeStore(store)
-    }
-    return chatId
-  }
-
-  const thread: ChatThread = {
-    id: chatId,
-    members: [userId1, userId2].sort(),
-    title: options.title || 'Direct Chat',
-    updatedAt: new Date().toISOString(),
-    memberNames: {
-      ...(options.userName1 ? { [userId1]: options.userName1 } : {}),
-      ...(options.userName2 ? { [userId2]: options.userName2 } : {}),
-    },
-  }
-
-  store.threads = [thread, ...store.threads]
-  store.messages[chatId] = store.messages[chatId] ?? []
-  writeStore(store)
-  return chatId
-}
-
-export function subscribeToMessages(
-  chatId: string,
-  callback: (messages: ChatMessage[]) => void,
-  onError?: (err: Error) => void,
-): () => void {
-  const emit = () => {
-    try {
-      const store = readStore()
-      const messages = [...(store.messages[chatId] ?? [])].sort((left, right) => {
-        const leftTime = new Date(left.createdAt || 0).getTime()
-        const rightTime = new Date(right.createdAt || 0).getTime()
-        return leftTime - rightTime
-      })
-      callback(messages)
-    } catch (caughtError) {
-      onError?.(caughtError instanceof Error ? caughtError : new Error('Unable to read chat messages.'))
-    }
-  }
-
-  emit()
-  return notifySubscriber(emit)
-}
-
-export async function sendChatMessage(chatId: string, senderId: string, text: string): Promise<void> {
-  const content = text.trim()
-  if (!content) return
-
-  const store = readStore()
-  const now = new Date().toISOString()
-  const nextMessage: ChatMessage = {
-    id: `${chatId}:${Date.now()}`,
-    senderId,
-    text: content,
-    createdAt: now,
-  }
-
-  store.messages[chatId] = [...(store.messages[chatId] ?? []), nextMessage]
-  const threadIndex = store.threads.findIndex((thread) => thread.id === chatId)
-  if (threadIndex >= 0) {
-    const existingThread = store.threads[threadIndex]
-    if (!existingThread) {
-      writeStore(store)
-      return
-    }
-
-    store.threads[threadIndex] = {
-      ...existingThread,
-      lastMessage: content,
-      updatedAt: now,
-    }
-  }
-
-  writeStore(store)
-}
-
-export const sendMessage = sendChatMessage
-
-export async function mergeChatMemberNames(chatId: string, memberNames: Record<string, string>): Promise<void> {
-  const store = readStore()
-  const threadIndex = store.threads.findIndex((thread) => thread.id === chatId)
-  if (threadIndex < 0) return
-  const existingThread = store.threads[threadIndex]
-  if (!existingThread) return
-
-  store.threads[threadIndex] = {
-    ...existingThread,
-    memberNames: {
-      ...(existingThread.memberNames ?? {}),
-      ...memberNames,
-    },
-  }
-
-  writeStore(store)
+export async function markConversationRead(conversationId: string): Promise<{ conversationId: string; lastReadAt: string | null }> {
+  const res = await chatFetch<{ data: { conversationId: string; lastReadAt: string | null } }>(
+    `/conversations/${conversationId}/read`,
+    { method: 'PATCH' },
+  )
+  return res.data
 }

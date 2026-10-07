@@ -14,6 +14,12 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->alias([
+            'org.verified' => \App\Http\Middleware\EnsureOrganizationVerified::class,
+            'user.active' => \App\Http\Middleware\EnsureUserIsActive::class,
+            'auth.optional.sanctum' => \App\Http\Middleware\OptionalSanctumAuth::class,
+        ]);
+
         $middleware->redirectGuestsTo(function (Request $request) {
             if ($request->is('api/*') || $request->expectsJson()) {
                 return null;

@@ -23,6 +23,7 @@ export interface AdminUserRecord {
     address?: string | null
     contactPerson?: string | null
     verificationStatus?: VerificationStatus | null
+    verificationRejectionReason?: string | null
   } | null
   company?: {
     id: string
@@ -30,6 +31,7 @@ export interface AdminUserRecord {
     industry?: string | null
     address?: string | null
     verificationStatus?: VerificationStatus | null
+    verificationRejectionReason?: string | null
   } | null
 }
 
@@ -54,7 +56,13 @@ export async function fetchAdminUsers() {
 
 export async function updateAdminUser(
   userId: string,
-  payload: Partial<{ role: string; isActive: boolean; profileSetupComplete: boolean; verificationStatus: VerificationStatus }>,
+  payload: Partial<{
+    role: string
+    isActive: boolean
+    profileSetupComplete: boolean
+    verificationStatus: VerificationStatus
+    verificationRejectionReason: string
+  }>,
 ) {
   const { data } = await apiClient.patch(`/admin/users/${userId}`, payload)
   return data

@@ -2,9 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Organization;
 use App\Models\Subscription;
 use App\Models\SubscriptionPlanDefinition;
 use App\Models\User;
+use App\Services\PermissionGate;
 use App\Services\SubscriptionPlanService;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Request;
@@ -28,8 +30,10 @@ class SubscriptionCheckoutController extends Controller
         'dob',
     ];
 
-    public function __construct(private readonly SubscriptionPlanService $subscriptionPlans)
-    {
+    public function __construct(
+        private readonly SubscriptionPlanService $subscriptionPlans,
+        private readonly PermissionGate $permissions,
+    ) {
     }
 
     private function resolvePaymongoCaBundle(): string
@@ -149,11 +153,9 @@ class SubscriptionCheckoutController extends Controller
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
-        $organization = $user->primaryOrganizationMembership()?->organization;
-        if (! $organization) {
-            return response()->json([
-                'message' => 'No active organization found for this account.',
-            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        $organization = $this->resolveBillableOrganization($user);
+        if ($organization instanceof \Illuminate\Http\JsonResponse) {
+            return $organization;
         }
 
         if ($organization->type !== $data['role']) {
@@ -322,11 +324,9 @@ class SubscriptionCheckoutController extends Controller
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
-        $organization = $user->primaryOrganizationMembership()?->organization;
-        if (! $organization) {
-            return response()->json([
-                'message' => 'No active organization found for this account.',
-            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        $organization = $this->resolveBillableOrganization($user);
+        if ($organization instanceof \Illuminate\Http\JsonResponse) {
+            return $organization;
         }
 
         $pending = $organization->settings['pending_plan_change'] ?? null;
@@ -430,6 +430,122 @@ class SubscriptionCheckoutController extends Controller
             'paymentStatus' => 'paid',
             'user' => $auth->formatUserProfile($user),
         ]);
+    }
+
+    /**
+     * Switch the caller's primary organization to the free plan.
+     * Does not accept a client-supplied plan slug.
+     */
+    public function switchToFree(Request $request)
+    {
+        /** @var User $user */
+        $user = $request->user();
+        $organization = $this->resolveBillableOrganization($user);
+        if ($organization instanceof \Illuminate\Http\JsonResponse) {
+            return $organization;
+        }
+
+        $subscription = $this->ensureOrganizationSubscription($organization);
+        $subscription->plan = 'free';
+        $subscription->status = 'active';
+        $subscription->billing_cycle = 'monthly';
+        $subscription->save();
+
+        $settings = $organization->settings ?? [];
+        unset($settings['pending_plan_change']);
+        $organization->settings = $settings;
+        $organization->save();
+
+        $this->subscriptionPlans->syncOrganizationCompliance($organization->fresh(['subscription', 'owner']));
+
+        return response()->json($this->formattedUserProfile($user));
+    }
+
+    /**
+     * Cancel an unpaid pending plan upgrade for the caller's primary organization.
+     */
+    public function cancelPending(Request $request)
+    {
+        /** @var User $user */
+        $user = $request->user();
+        $organization = $this->resolveBillableOrganization($user);
+        if ($organization instanceof \Illuminate\Http\JsonResponse) {
+            return $organization;
+        }
+
+        $subscription = $this->ensureOrganizationSubscription($organization);
+        $wasUnpaidPending = strtolower((string) $subscription->status) === 'pending';
+
+        $settings = $organization->settings ?? [];
+        unset($settings['pending_plan_change']);
+        $organization->settings = $settings;
+        $organization->save();
+
+        if ($wasUnpaidPending) {
+            $subscription->plan = 'free';
+            $subscription->status = 'active';
+            $subscription->billing_cycle = 'monthly';
+            $subscription->save();
+        }
+
+        $this->subscriptionPlans->syncOrganizationCompliance($organization->fresh(['subscription', 'owner']));
+
+        return response()->json($this->formattedUserProfile($user));
+    }
+
+    /**
+     * @return Organization|\Illuminate\Http\JsonResponse
+     */
+    private function resolveBillableOrganization(User $user)
+    {
+        $organization = $user->primaryOrganizationMembership()?->organization;
+        if (! $organization) {
+            return response()->json([
+                'message' => 'No active organization found for this account.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        if (! $this->permissions->userCan($user, 'org.manage_subscription')) {
+            return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
+        }
+
+        return $organization;
+    }
+
+    private function ensureOrganizationSubscription(Organization $organization): Subscription
+    {
+        $subscription = $organization->subscription;
+        if ($subscription) {
+            return $subscription;
+        }
+
+        $subscription = Subscription::query()->create([
+            'plan' => 'free',
+            'status' => 'active',
+            'billing_cycle' => 'monthly',
+        ]);
+        $organization->subscription_id = $subscription->id;
+        $organization->save();
+
+        return $subscription;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function formattedUserProfile(User $user): array
+    {
+        $user->refresh();
+        $user->load([
+            'student',
+            'company',
+            'school',
+            'platformRole.permissions',
+            'organizationMemberships.role.permissions',
+            'organizationMemberships.organization.subscription',
+        ]);
+
+        return app(AuthController::class)->formatUserProfile($user);
     }
 
     /**

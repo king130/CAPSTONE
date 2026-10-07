@@ -9,6 +9,7 @@ import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
 import Card from '@/components/ui/card/Card.vue'
 import CardContent from '@/components/ui/card/CardContent.vue'
+import Textarea from '@/components/ui/textarea/Textarea.vue'
 import { useToast } from '@/composables/useToast'
 import { fetchAdminApplications, fetchAdminUsers, updateAdminApplicationStatus, updateAdminUser, type AdminApplicationRecord, type AdminUserRecord, type VerificationStatus } from '@/services/admin'
 
@@ -33,6 +34,7 @@ interface OrganizationRow {
   tertiary: string
   status: VerificationStatus
   email: string
+  rejectionReason?: string | null
 }
 
 type SelectedRecord = InternRow | OrganizationRow
@@ -43,6 +45,9 @@ const { success, error } = useToast()
 const users = ref<AdminUserRecord[]>([])
 const applications = ref<AdminApplicationRecord[]>([])
 const selectedRecord = ref<SelectedRecord | null>(null)
+const rejectTarget = ref<OrganizationRow | null>(null)
+const rejectionReason = ref('')
+const rejectSubmitting = ref(false)
 
 const mode = computed<ManagementMode>(() => {
   if (route.name === 'admin-manage-schools') return 'schools'
@@ -124,6 +129,7 @@ const schoolRows = computed<OrganizationRow[]>(() =>
       tertiary: user.school?.contactPerson || 'No contact person',
       status: user.school?.verificationStatus || 'pending',
       email: user.email || 'No email',
+      rejectionReason: user.school?.verificationRejectionReason || null,
     })),
 )
 
@@ -138,6 +144,7 @@ const companyRows = computed<OrganizationRow[]>(() =>
       tertiary: user.company?.address || 'No address provided',
       status: user.company?.verificationStatus || 'pending',
       email: user.email || 'No email',
+      rejectionReason: user.company?.verificationRejectionReason || null,
     })),
 )
 
@@ -169,15 +176,51 @@ async function handleInternDecision(row: InternRow, status: 'approved' | 'reject
   }
 }
 
-async function handleOrganizationDecision(row: OrganizationRow, status: VerificationStatus) {
+function openOrganizationRejectDialog(row: OrganizationRow) {
+  rejectTarget.value = row
+  rejectionReason.value = ''
+}
+
+function closeOrganizationRejectDialog() {
+  rejectTarget.value = null
+  rejectionReason.value = ''
+  rejectSubmitting.value = false
+}
+
+async function handleOrganizationDecision(row: OrganizationRow, status: VerificationStatus, reason?: string) {
   try {
-    await updateAdminUser(row.userId, { verificationStatus: status })
+    await updateAdminUser(row.userId, {
+      verificationStatus: status,
+      ...(status === 'rejected' ? { verificationRejectionReason: reason?.trim() || '' } : {}),
+    })
     await loadRows()
     success(status === 'approved' ? 'Organization approved.' : 'Organization rejected.')
   } catch (caughtError) {
     error(caughtError, {
       fallback: 'Unable to update organization status.',
     })
+    throw caughtError
+  }
+}
+
+async function submitOrganizationRejection() {
+  if (!rejectTarget.value) return
+  const reason = rejectionReason.value.trim()
+  if (!reason) {
+    error(new Error('A rejection reason is required.'), {
+      fallback: 'A rejection reason is required.',
+    })
+    return
+  }
+
+  rejectSubmitting.value = true
+  try {
+    await handleOrganizationDecision(rejectTarget.value, 'rejected', reason)
+    closeOrganizationRejectDialog()
+  } catch {
+    // Toast already shown by handleOrganizationDecision.
+  } finally {
+    rejectSubmitting.value = false
   }
 }
 
@@ -261,7 +304,7 @@ const organizationColumns = computed(() => [
           selectedRecord.value = row.original
         },
         onApprove: () => handleOrganizationDecision(row.original, 'approved'),
-        onReject: () => handleOrganizationDecision(row.original, 'rejected'),
+        onReject: () => openOrganizationRejectDialog(row.original),
       }),
   }),
 ])
@@ -327,6 +370,41 @@ onMounted(() => {
             <button class="text-sm font-medium text-slate-600 transition hover:text-slate-950" @click="selectedRecord = null">
               Close
             </button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+
+    <div
+      v-if="rejectTarget"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 backdrop-blur-sm"
+      @click.self="closeOrganizationRejectDialog"
+    >
+      <Card class="w-full max-w-lg shadow-2xl">
+        <CardContent class="space-y-5 p-6">
+          <div>
+            <h3 class="text-xl font-semibold text-slate-950">Reject organization</h3>
+            <p class="mt-2 text-sm text-slate-600">
+              Provide a rejection reason for <span class="font-medium text-slate-900">{{ rejectTarget.name }}</span>.
+              The organization owner will stay able to sign in and read this reason.
+            </p>
+          </div>
+
+          <div class="space-y-2">
+            <label class="text-sm font-medium text-slate-900" for="organization-rejection-reason">Rejection reason</label>
+            <Textarea
+              id="organization-rejection-reason"
+              v-model="rejectionReason"
+              :rows="5"
+              placeholder="Explain why this organization is being rejected"
+            />
+          </div>
+
+          <div class="flex justify-end gap-3">
+            <Button variant="outline" @click="closeOrganizationRejectDialog">Cancel</Button>
+            <Button variant="destructive" :disabled="rejectSubmitting || !rejectionReason.trim()" @click="submitOrganizationRejection">
+              {{ rejectSubmitting ? 'Rejecting...' : 'Reject organization' }}
+            </Button>
           </div>
         </CardContent>
       </Card>

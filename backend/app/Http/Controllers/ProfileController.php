@@ -10,15 +10,14 @@ use App\Models\School;
 use App\Models\Student;
 use App\Models\Subscription;
 use App\Models\User;
-use App\Services\SubscriptionPlanService;
 use App\Services\TenantRoleService;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Validation\Rule;
 
 class ProfileController extends Controller
 {
     public function __construct(
-        private readonly SubscriptionPlanService $subscriptionPlans,
         private readonly TenantRoleService $tenantRoleService,
     )
     {
@@ -29,26 +28,21 @@ class ProfileController extends Controller
         /** @var User $user */
         $user = $request->user();
 
+        if ($request->exists('subscription')) {
+            return response()->json([
+                'message' => 'Subscription changes must be made through the billing endpoints.',
+                'errors' => [
+                    'subscription' => ['Subscription fields are not allowed on the profile endpoint.'],
+                ],
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
         $data = $request->validate([
             'name' => ['sometimes', 'string', 'max:255'],
             'displayName' => ['sometimes', 'string', 'max:255'],
             'profile' => ['sometimes', 'array'],
             'profileSetupComplete' => ['sometimes', 'boolean'],
             'role' => ['sometimes', Rule::in(['student', 'school', 'company', 'guest'])],
-            'subscription' => ['sometimes', 'array'],
-            'subscription.plan' => ['sometimes', 'string', 'max:255'],
-            'subscription.status' => ['sometimes', Rule::in(['active', 'pending', 'inactive'])],
-            'subscription.billingCycle' => ['sometimes', 'string', 'max:255'],
-            'subscription.pendingChange' => ['nullable', 'array'],
-            'subscription.pendingChange.requestId' => ['sometimes', 'string', 'max:255'],
-            'subscription.pendingChange.targetPlan' => ['sometimes', 'string', 'max:255'],
-            'subscription.pendingChange.amount' => ['sometimes', 'numeric'],
-            'subscription.pendingChange.currency' => ['sometimes', 'string', 'max:8'],
-            'subscription.pendingPayment' => ['nullable', 'array'],
-            'subscription.pendingPayment.requestId' => ['sometimes', 'string', 'max:255'],
-            'subscription.pendingPayment.method' => ['sometimes', 'string', 'max:50'],
-            'subscription.pendingPayment.receiptReference' => ['sometimes', 'string', 'max:255'],
-            'subscription.pendingPayment.paidAtIso' => ['sometimes', 'string', 'max:255'],
         ]);
 
         if (isset($data['displayName'])) {
@@ -65,83 +59,23 @@ class ProfileController extends Controller
         }
 
         if (isset($data['role']) && $user->role === 'guest') {
+            if (in_array($data['role'], ['school', 'company'], true)) {
+                return response()->json([
+                    'message' => 'School and company accounts must be created through registration.',
+                ], Response::HTTP_FORBIDDEN);
+            }
+
+            if ($data['role'] === 'student') {
+                return response()->json([
+                    'message' => 'Student accounts are created by your school. Use your school-issued setup link or login credentials.',
+                ], Response::HTTP_FORBIDDEN);
+            }
+
             $this->promoteGuestRole($user, $data['role']);
         }
 
         if (isset($data['profile'])) {
             $this->syncRoleSpecificProfile($user, $data['profile']);
-        }
-
-        if (isset($data['subscription'])) {
-            $user->loadMissing('organizationMemberships.organization.subscription');
-
-            $activeOrganization = $user->primaryOrganizationMembership()?->organization;
-            $subscriptionData = $data['subscription'];
-
-            if ($activeOrganization) {
-                $subscription = $activeOrganization->subscription;
-
-                if (! $subscription) {
-                    $subscription = Subscription::query()->create([
-                        'plan' => 'free',
-                        'status' => 'active',
-                        'billing_cycle' => 'monthly',
-                    ]);
-                    $activeOrganization->subscription_id = $subscription->id;
-                    $activeOrganization->save();
-                }
-
-                $subscriptionUpdates = [];
-                if (array_key_exists('plan', $subscriptionData)) {
-                    $subscriptionUpdates['plan'] = $subscriptionData['plan'];
-                }
-                if (array_key_exists('status', $subscriptionData)) {
-                    $subscriptionUpdates['status'] = $subscriptionData['status'];
-                }
-                if (array_key_exists('billingCycle', $subscriptionData)) {
-                    $subscriptionUpdates['billing_cycle'] = $subscriptionData['billingCycle'];
-                }
-                if ($subscriptionUpdates !== []) {
-                    $subscription->fill($subscriptionUpdates);
-                    $subscription->save();
-                }
-
-                $settings = $activeOrganization->settings ?? [];
-                $settingsChanged = false;
-
-                if (array_key_exists('pendingChange', $subscriptionData)) {
-                    if ($subscriptionData['pendingChange'] === null) {
-                        unset($settings['pending_plan_change']);
-                    } else {
-                        $settings['pending_plan_change'] = $subscriptionData['pendingChange'];
-                    }
-                    $settingsChanged = true;
-                }
-
-                if (array_key_exists('pendingPayment', $subscriptionData)) {
-                    $existingPending = $settings['pending_plan_change'] ?? [];
-                    if ($subscriptionData['pendingPayment'] === null) {
-                        unset($existingPending['payment']);
-                    } else {
-                        $existingPending['payment'] = $subscriptionData['pendingPayment'];
-                    }
-                    if ($existingPending === []) {
-                        unset($settings['pending_plan_change']);
-                    } else {
-                        $settings['pending_plan_change'] = $existingPending;
-                    }
-                    $settingsChanged = true;
-                }
-
-                if ($settingsChanged) {
-                    $activeOrganization->settings = $settings;
-                    $activeOrganization->save();
-                }
-
-                if ($subscriptionUpdates !== [] || $settingsChanged) {
-                    $this->subscriptionPlans->syncOrganizationCompliance($activeOrganization->fresh(['subscription', 'owner']));
-                }
-            }
         }
 
         $user->save();
@@ -206,13 +140,11 @@ class ProfileController extends Controller
         }
 
         if ($user->role === 'student' && $user->student) {
-            $resolvedSchool = $this->resolveStudentSchoolFromProfile($profile, $user->student);
+            // School membership is not client-controlled. Attachment may only occur via
+            // validated subscription-code registration or school invitation flows.
             $user->student->fill([
-                'school_id' => $resolvedSchool?->id ?? $user->student->school_id,
-                'organization_id' => $resolvedSchool?->organization_id ?? $user->student->organization_id,
                 'student_id_number' => $profile['studentNumber'] ?? $profile['studentId'] ?? $user->student->student_id_number,
-                'school_name' => $resolvedSchool?->institution_name ?? $profile['schoolName'] ?? $user->student->school_name,
-                'school_subscription_code' => $resolvedSchool?->subscription_code ?? $profile['schoolSubscriptionCode'] ?? $user->student->school_subscription_code,
+                'school_name' => $profile['schoolName'] ?? $user->student->school_name,
                 'course' => $profile['course'] ?? $user->student->course,
                 'year_level' => $profile['yearLevel'] ?? $user->student->year_level,
                 'preferred_field' => $profile['preferredField'] ?? $user->student->preferred_field,
@@ -222,59 +154,12 @@ class ProfileController extends Controller
         }
     }
 
-    /**
-     * @param array<string, mixed> $profile
-     */
-    private function resolveStudentSchoolFromProfile(array $profile, Student $student): ?School
-    {
-        $schoolId = isset($profile['schoolId']) ? (int) $profile['schoolId'] : (int) ($student->school_id ?? 0);
-        if ($schoolId > 0) {
-            $school = School::query()->find($schoolId);
-            if ($school) {
-                return $school;
-            }
-        }
-
-        $organizationId = isset($profile['organizationId']) ? (int) $profile['organizationId'] : (int) ($student->organization_id ?? 0);
-        if ($organizationId > 0) {
-            $school = School::query()->where('organization_id', $organizationId)->first();
-            if ($school) {
-                return $school;
-            }
-        }
-
-        $subscriptionCode = trim((string) ($profile['schoolSubscriptionCode'] ?? $student->school_subscription_code ?? ''));
-        if ($subscriptionCode !== '') {
-            $school = School::query()->where('subscription_code', $subscriptionCode)->first();
-            if ($school) {
-                return $school;
-            }
-        }
-
-        $schoolName = trim((string) ($profile['schoolName'] ?? $student->school_name ?? ''));
-        if ($schoolName !== '') {
-            return School::query()->where('institution_name', $schoolName)->first();
-        }
-
-        return null;
-    }
-
     private function promoteGuestRole(User $user, string $newRole): void
     {
         $profile = $user->profile ?? [];
 
         if ($newRole === 'student') {
-            if (! $user->student) {
-                Student::query()->create([
-                    'user_id' => $user->id,
-                    'school_name' => $profile['schoolName'] ?? null,
-                    'course' => $profile['course'] ?? null,
-                    'year_level' => $profile['yearLevel'] ?? null,
-                ]);
-            }
-            $user->role = 'student';
-            $user->profile_setup_complete = true;
-
+            // Student accounts must be school-provisioned. Public guest promotion is blocked upstream.
             return;
         }
 

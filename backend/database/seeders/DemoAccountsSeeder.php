@@ -19,6 +19,7 @@ class DemoAccountsSeeder extends Seeder
         $platformAdminRole = Role::query()->where('slug', 'platform_super_admin')->first();
         $companyAdminRole = Role::query()->where('slug', 'company_admin')->first();
         $schoolAdminRole = Role::query()->where('slug', 'school_admin')->first();
+        $schoolDepartmentHeadRole = Role::query()->where('slug', 'school_department_head')->first();
         $studentRole = Role::query()->where('slug', 'student_member')->first();
 
         $admin = User::query()->updateOrCreate(
@@ -150,6 +151,32 @@ class DemoAccountsSeeder extends Seeder
             OrganizationMembership::query()->updateOrCreate(
                 ['organization_id' => $schoolOrg->id, 'user_id' => $schoolUser->id],
                 ['role_id' => $schoolAdminRole->id, 'status' => 'active', 'title' => 'Primary Admin']
+            );
+        }
+
+        $departmentHead = User::query()->updateOrCreate(
+            ['email' => 'depthead@cvsu.edu.ph'],
+            [
+                'name' => 'CvSU Department Head',
+                'password' => 'DeptHead@2026!',
+                'role' => 'school',
+                'profile' => [
+                    'institutionName' => 'Cavite State University',
+                    'officialSchoolEmail' => 'depthead@cvsu.edu.ph',
+                    'title' => 'Department Head',
+                    'courses' => ['BS Computer Science', 'BS Information Technology'],
+                ],
+                'is_active' => true,
+                'is_temporary' => false,
+                'must_change_password' => false,
+                'profile_setup_complete' => true,
+            ]
+        );
+
+        if ($schoolDepartmentHeadRole) {
+            OrganizationMembership::query()->updateOrCreate(
+                ['organization_id' => $schoolOrg->id, 'user_id' => $departmentHead->id],
+                ['role_id' => $schoolDepartmentHeadRole->id, 'status' => 'active', 'title' => 'Department Head']
             );
         }
 

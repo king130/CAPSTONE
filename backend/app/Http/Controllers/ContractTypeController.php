@@ -6,6 +6,7 @@ use App\Models\ContractType;
 use App\Models\Organization;
 use App\Models\User;
 use App\Services\Contracts\ContractTypeResolver;
+use App\Services\PermissionGate;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Str;
@@ -15,7 +16,8 @@ use Illuminate\Validation\ValidationException;
 class ContractTypeController extends Controller
 {
     public function __construct(
-        private readonly ContractTypeResolver $resolver
+        private readonly ContractTypeResolver $resolver,
+        private readonly PermissionGate $permissions
     ) {
     }
 
@@ -102,6 +104,9 @@ class ContractTypeController extends Controller
     {
         /** @var User $user */
         $user = $request->user();
+        if (! $this->permissions->userCan($user, 'org.manage_agreements')) {
+            return response()->json(['message' => 'Missing permission to manage agreements.'], Response::HTTP_FORBIDDEN);
+        }
         $organization = $user->activeOrganization();
 
         if (! $organization) {
@@ -113,7 +118,8 @@ class ContractTypeController extends Controller
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
-            'baseContractTypeId' => ['nullable', 'integer', 'exists:contract_types,id'],
+            'baseContractTypeId' => ['nullable', 'integer', 'exists:'.(\Illuminate\Support\Facades\Schema::hasTable('agreement_types') ? 'agreement_types' : 'contract_types').',id'],
+            'baseAgreementTypeId' => ['nullable', 'integer', 'exists:'.(\Illuminate\Support\Facades\Schema::hasTable('agreement_types') ? 'agreement_types' : 'contract_types').',id'],
             'fieldsSchema' => ['required', 'array', 'min:1'],
             'fieldsSchema.*.key' => ['required', 'string', 'max:100'],
             'fieldsSchema.*.label' => ['required', 'string', 'max:255'],
@@ -135,7 +141,7 @@ class ContractTypeController extends Controller
             'organization_id' => $organization->id,
             'organization_type' => $organization->type,
             'created_by_user_id' => $user->id,
-            'base_contract_type_id' => $data['baseContractTypeId'] ?? null,
+            'base_contract_type_id' => $data['baseContractTypeId'] ?? $data['baseAgreementTypeId'] ?? null,
             'description' => $data['description'] ?? null,
             'fields_schema' => $data['fieldsSchema'],
             'default_values' => $data['defaultValues'] ?? [],
@@ -153,6 +159,9 @@ class ContractTypeController extends Controller
     {
         /** @var User $user */
         $user = $request->user();
+        if (! $this->permissions->userCan($user, 'org.manage_agreements')) {
+            return response()->json(['message' => 'Missing permission to manage agreements.'], Response::HTTP_FORBIDDEN);
+        }
         $organization = $user->activeOrganization();
 
         $this->assertOwnsType($user, $organization, $contractType);
@@ -194,6 +203,9 @@ class ContractTypeController extends Controller
     {
         /** @var User $user */
         $user = $request->user();
+        if (! $this->permissions->userCan($user, 'org.manage_agreements')) {
+            return response()->json(['message' => 'Missing permission to manage agreements.'], Response::HTTP_FORBIDDEN);
+        }
         $organization = $user->activeOrganization();
 
         $this->assertOwnsType($user, $organization, $contractType);

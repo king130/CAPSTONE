@@ -46,6 +46,7 @@ export default defineConfig(({ mode }) => {
       environment: 'happy-dom',
       css: true,
       setupFiles: ['./src/test-setup.ts'],
+      exclude: ['**/node_modules/**', '**/dist/**', '**/e2e/**', '**/.{idea,git,cache,output,temp}/**'],
       server: {
         deps: {
           inline: ['vue-router'],

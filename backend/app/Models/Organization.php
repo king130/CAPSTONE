@@ -16,12 +16,20 @@ class Organization extends Model
         'owner_user_id',
         'settings',
         'is_active',
+        'tagline',
+        'description',
+        'address',
+        'city',
+        'website',
+        'industry',
+        'perks',
     ];
 
     protected function casts(): array
     {
         return [
             'settings' => 'array',
+            'perks' => 'array',
             'is_active' => 'boolean',
         ];
     }
@@ -56,5 +64,15 @@ class Organization extends Model
     public function contractTypes(): HasMany
     {
         return $this->hasMany(ContractType::class);
+    }
+
+    public function media(): HasMany
+    {
+        return $this->hasMany(OrganizationMedia::class)->orderBy('sort_order')->orderBy('id');
+    }
+
+    public function coverMedia(): HasMany
+    {
+        return $this->hasMany(OrganizationMedia::class)->where('is_cover', true);
     }
 }

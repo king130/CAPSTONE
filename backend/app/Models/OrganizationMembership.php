@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\PermissionGate;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -56,5 +57,10 @@ class OrganizationMembership extends Model
         $deny = collect($override['deny'] ?? [])->filter()->values()->all();
 
         return array_values(array_unique(array_diff(array_merge($base, $grant), $deny)));
+    }
+
+    public function can(string $permission): bool
+    {
+        return app(PermissionGate::class)->membershipCan($this, $permission);
     }
 }

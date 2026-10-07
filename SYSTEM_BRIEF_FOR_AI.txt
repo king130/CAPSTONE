@@ -1,0 +1,420 @@
+================================================================================
+CAPSTONE / OJT INTERN PATH — FULL SYSTEM BRIEF FOR AI ASSISTANTS
+================================================================================
+Last updated: 2026-08-19
+Repo root: CAPSTONE (Windows paths like C:\Users\...\Codes\CAPSTONE)
+
+PURPOSE OF THIS FILE
+--------------------
+Give another AI (or developer) enough context to understand the whole product,
+architecture, features, auth, APIs, roles, how to run it, and known conventions
+without reading the entire codebase first.
+
+PRODUCT IN ONE SENTENCE
+-----------------------
+OJT Intern Path is a multi-tenant web platform that connects schools, companies,
+and student interns for internship discovery, school endorsement, company hiring,
+school–company agreements (MOAs), OJT hour logging, assessments, KPIs, reports,
+and certificates — with subscription billing via PayMongo.
+
+================================================================================
+1. HIGH-LEVEL ARCHITECTURE
+================================================================================
+
+Monorepo-style layout:
+
+  CAPSTONE/
+    src/                     Vue 3 SPA (frontend)
+    backend/                 Laravel 12 API + can also serve built SPA from public/
+    package.json             Frontend npm scripts
+    .env                     Frontend Vite env (VITE_API_BASE_URL)
+    scripts/stage-frontend.ps1
+                           Copies dist/ → backend/public/
+
+Pattern:
+  - Frontend talks to Laravel REST API under /api
+  - Auth = Laravel Sanctum personal access tokens (Bearer)
+  - Not a classic cookie SPA session as primary auth
+  - Organizations (school | company) are tenants; users have memberships + roles
+
+Typical local run (TWO processes):
+  1) backend:  php artisan serve --host=127.0.0.1 --port=8000
+  2) root:     npm run dev   → http://127.0.0.1:5173
+  Frontend .env: VITE_API_BASE_URL=http://127.0.0.1:8000/api
+  Backend .env:  APP_URL=http://127.0.0.1:8000
+                 FRONTEND_URL=http://127.0.0.1:5173
+                 DB_CONNECTION=sqlite (default in many local setups)
+
+Production-ish local (SPA served by Laravel):
+  npm run build
+  npm run deploy:backend-public   # stages dist into backend/public
+  php artisan serve
+  Then open http://127.0.0.1:8000 — if VITE_API_BASE_URL was empty at build time,
+  API calls use same-origin /api (works). If set to absolute URL, that is baked in.
+
+================================================================================
+2. TECH STACK
+================================================================================
+
+FRONTEND
+  - Vue 3.5 + TypeScript
+  - Vite 7
+  - Pinia 3
+  - Vue Router 4
+  - Tailwind CSS + local shadcn-like UI under src/components/ui/
+  - vee-validate + zod
+  - axios (apiClient) + fetch (apiFetch in http.ts)
+  - lucide-vue-next, sweetalert2, vue-sonner, xlsx
+
+BACKEND
+  - PHP 8.2+
+  - Laravel 12
+  - Laravel Sanctum 4
+  - Custom RBAC (no Spatie): Permission, Role, OrgPermissions, PermissionGate
+  - SQLite or MySQL via .env
+
+================================================================================
+3. USER ROLES (APP-LEVEL)
+================================================================================
+
+User.role (app routing role) values:
+  admin | company | school | student | guest | null
+
+Post-login dashboards:
+  admin   → /admin/overview
+  company → /dashboard
+  school  → /school
+  student → /intern   (product language: Intern)
+  guest   → /guest
+
+Important naming caveat:
+  - API/DB role is often "student"
+  - UI routes say /intern and "Intern"
+
+ORG-SCOPED RBAC ROLES (seeded in RbacSeeder / OrgPermissions):
+  Platform:
+    system_admin, platform_super_admin, platform_support_admin
+  School:
+    school_admin, school_department_head, student_member
+  Company:
+    company_admin, company_hr_manager
+
+Permission categories (canonical org.* keys):
+  View:     org.view_internships, org.view_agreements, org.view_applications,
+            org.view_students, org.view_ojt_progress, org.view_reports
+  Manage:   org.manage_internships, org.manage_agreements, org.manage_applications,
+            org.manage_students, org.manage_assessments, org.manage_members,
+            org.manage_roles, ...
+  Reports:  org.reports_view, org.reports_export
+  Approve:  org.approve_applications, org.approve_agreements, org.approve_ojt_logs,
+            org.approve_certificates
+  Legacy aliases still exist (manage_contracts, review_applications, etc.)
+  Frontend aliases: src/services/permissions.ts
+  Backend gate: app/Services/PermissionGate.php
+  Catalog: app/Support/OrgPermissions.php
+
+UI for tenant RBAC:
+  /access/roles       → TenantRbac.vue mode=roles
+  /access/permissions → TenantRbac.vue mode=permissions
+  Shared by school + company (+ admin can manage multiple tenants)
+
+================================================================================
+4. DEMO ACCOUNTS (DemoAccountsSeeder)
+================================================================================
+
+Run: cd backend && php artisan db:seed --class=DemoAccountsSeeder
+(Also called from DatabaseSeeder with RbacSeeder + ContractTypeSeeder)
+
+  Email                      Password          Role
+  -------------------------  ----------------  --------------------------------
+  admin@ojtpath.com          Admin@2026!       Platform admin
+  school@cvsu.edu.ph         School@2026!      School admin (CvSU)
+  depthead@cvsu.edu.ph       DeptHead@2026!    School department head
+  company@techcorp.com       Company@2026!     Company admin (TechCorp)
+  student@cvsu.edu.ph        Student@2026!     Student / intern
+
+School subscription code for students: CVSU-2026
+
+================================================================================
+5. CORE DOMAIN FLOWS
+================================================================================
+
+A) INTERNSHIP / APPLICATION PIPELINE
+  Company posts internship (flexible schedule fields supported).
+  Student applies.
+  School endorses or rejects (endorsements).
+  Company accepts/rejects endorsed applicants.
+  Statuses roughly: submitted/pending → endorsed → accepted | rejected | school_rejected
+
+B) AGREEMENTS (formerly Contracts)
+  School ↔ Company partnership documents / MOAs.
+  User-facing term: Agreement. Routes: /agreements (alias /contracts).
+  API: /api/agreements (canonical) and /api/contracts (legacy aliases).
+  DB: migration may rename contracts → agreements; models dual-table aware.
+  Amendment: PATCH .../amend → status pending_amendment; both sides re-approve pattern.
+  Types: agreement-types / contract-types.
+
+C) FLEXIBLE INTERNSHIP SCHEDULE
+  Fields on internships: schedule_type, weekly_hours, schedule_days, time_in/out,
+  timezone, is_flexible (+ legacy free-text schedule).
+
+D) INTERVIEWS
+  ApplicationInterview model + InterviewController
+  UI: ApplicationInterviewPanel.vue on company/school applicant views
+
+E) OJT LOGS / HOURS
+  Real API OjtLogController (not localStorage-only).
+  Student logs hours; company/school approve.
+  Dept head can monitor progress (org.view_ojt_progress).
+  UI: OJTHours.vue + school reports/progress panels.
+
+F) ASSESSMENTS
+  ApplicationAssessment — scored/stage assessments on applications.
+  UI: ApplicationAssessmentPanel.vue
+
+G) KPI / REPORTS / CERTIFICATES
+  GET /api/reports/kpi
+  GET /api/reports/export?type=placements|ojt|assessments
+  Certificates generate/download
+  Wired into School/Company dashboards and school reports view
+
+H) SUBSCRIPTIONS / PAYMONGO
+  Plans: free | standard | premium (SubscriptionPlanDefinition)
+  Org billing page: /billing (OrganizationSubscription.vue + SubscriptionManager.vue)
+  Paid upgrade: POST /subscriptions/checkout → PayMongo → return → POST /subscriptions/verify
+  Pending checkout stored in organization.settings.pending_plan_change
+  Cancel pending supported in UI; stuck pending can be replaced on new checkout
+  Unpaid status=pending orgs get FREE limits until verify (SubscriptionPlanService)
+  Active orgs keep current plan during checkout (status not forced to pending if already active)
+  Requires PAYMONGO_SECRET_KEY in backend .env
+
+I) SCHOOL STUDENT ACCOUNTS
+  /school/students — temporary student logins, roster, setup links
+
+================================================================================
+6. FRONTEND STRUCTURE (KEY PATHS)
+================================================================================
+
+  src/main.ts                 Boot Pinia, auth init, router
+  src/config/auth.ts          AUTH_DISABLED (currently false — auth ON)
+  src/stores/auth.ts          Session user + login/logout/refresh
+  src/router/index.ts         All routes + guards
+  src/layouts/MainLayout.vue  Authenticated shell
+  src/layouts/navigation.ts   Nav items per role
+  src/services/http.ts        apiBase(), apiFetch, token storage
+  src/services/apiClient.ts   Axios with Bearer
+  src/services/auth.ts        login/register/me mapping
+  src/services/permissions.ts Client permission helpers
+  src/services/*.ts           Domain API clients
+
+Major views:
+  src/views/Landing.vue
+  src/views/Login.vue
+  src/views/RegisterSimple.vue          School/company signup (Cavite address UX)
+  src/views/FindInternships.vue         Public opportunities
+  src/views/school/School.vue           School workspace (multi-section)
+  src/views/company/Company.vue         Company workspace (multi-section)
+  src/views/intern/Intern.vue           Student/intern workspace
+  src/views/admin/*                     Platform admin
+  src/views/TenantRbac.vue              Roles + permission matrix
+  src/views/OrganizationSubscription.vue
+  src/components/SubscriptionManager.vue
+  src/views/Contracts.vue               Agreements UI
+  src/views/OJTHours.vue
+  src/components/ApplicationInterviewPanel.vue
+  src/components/ApplicationAssessmentPanel.vue
+  src/components/PublicSiteHeader.vue
+
+Recent UX redesigns:
+  - School dashboard: metrics, KPI, needs-attention, compact quick actions
+  - Company dashboard: same pattern (emerald theme)
+  - TenantRbac: cleaner roles layout; sticky permissions matrix with View/Manage/Reports/Approve groups
+  - Billing UI cleaned; PayMongo kept
+
+================================================================================
+7. BACKEND STRUCTURE (KEY PATHS)
+================================================================================
+
+  backend/routes/api.php
+  backend/app/Http/Controllers/AuthController.php
+  backend/app/Http/Controllers/ContractController.php      (+ amend, agreements aliases)
+  backend/app/Http/Controllers/InternshipController.php
+  backend/app/Http/Controllers/Application* / Interview / Assessment / OjtLog /
+                              Certificate / KpiReport / ReportExport /
+                              SubscriptionCheckout / TenantRbac / ...
+  backend/app/Models/*
+  backend/app/Support/OrgPermissions.php
+  backend/app/Services/PermissionGate.php
+  backend/app/Services/SubscriptionPlanService.php
+  backend/database/seeders/RbacSeeder.php
+  backend/database/seeders/DemoAccountsSeeder.php
+  backend/database/seeders/DatabaseSeeder.php
+  backend/database/migrations/... including:
+    2026_08_01_000001_add_flexible_internship_schedule_fields.php
+    2026_08_01_000010_rename_contracts_to_agreements.php
+    2026_04_08_000001..000004 ojt_logs, assessments, certificates, interviews
+
+================================================================================
+8. API SURFACE (SUMMARY)
+================================================================================
+
+Public:
+  POST /api/auth/register
+  POST /api/auth/login
+  POST /api/auth/account-setup/validate|complete
+  GET  /api/internships (public browse)
+  GET  /api/subscription-plans
+
+Authenticated (auth:sanctum) highlights:
+  POST /api/auth/logout
+  GET  /api/auth/me
+  POST /api/auth/password
+  PATCH /api/profile
+  Internships CRUD, applications + status
+  /api/agreements* and /api/contracts* (dual)
+  /api/interviews*
+  /api/ojt-logs* (+ progress)
+  /api/assessments*
+  /api/student-progress
+  /api/reports/kpi, /api/reports/export
+  /api/certificates*
+  /api/subscriptions/checkout, /api/subscriptions/verify
+  /api/rbac/tenants...
+  /api/school-students*
+  notifications, admin users, directory, etc.
+
+Token: Authorization: Bearer <token>
+Stored client-side as localStorage key: capstone_auth_token
+
+================================================================================
+9. AUTH FRONTEND FLAG
+================================================================================
+
+src/config/auth.ts:
+  export const AUTH_DISABLED = false
+
+When true: router skips guards (dev bypass). Leave false for real testing.
+Turning it on again will break realistic login/RBAC/billing QA.
+
+================================================================================
+10. FEATURE CHECKLIST (STAKEHOLDER REQUIREMENTS — STATUS)
+================================================================================
+
+  [x] Flexible internship schedule
+  [x] Terminology Contracts → Agreement (UI + /agreements; legacy aliases remain)
+  [x] Agreement modification/customization (amend + pending_amendment)
+  [x] Interview scheduling
+  [x] RBAC View / Manage / Reports / Approve permissions
+  [x] Department head can monitor student progress
+  [x] Assessment on OJT application
+  [x] KPI
+  [x] Certificate of completion
+  [x] Generation of reports
+
+Caveats for another AI:
+  - Some filenames still say Contract; prefer Agreement in user-facing copy
+  - Dual API routes during transition are intentional
+  - Company/School list pages (interns, endorsements tables) may still look older
+    than the redesigned dashboards — polish was prioritized for dashboards/RBAC/billing
+  - Guest signup / account-distribution flow has known orphaned edges; primary path
+    is Landing → Subscription → Register
+
+================================================================================
+11. HOW TO RUN / FIX COMMON ERRORS
+================================================================================
+
+FIRST TIME BACKEND:
+  cd backend
+  # enable php zip extension if composer fails on Windows/XAMPP
+  composer install
+  copy .env.example .env   # if needed
+  php artisan key:generate
+  php artisan migrate
+  php artisan db:seed
+
+DAILY DEV:
+  Terminal A: cd backend && php artisan serve --host=127.0.0.1 --port=8000
+  Terminal B: cd CAPSTONE && npm run dev
+  Open: http://127.0.0.1:5173/
+
+Error: "Cannot reach the API server. Set VITE_API_BASE_URL..."
+  Means Laravel is not running OR wrong VITE_API_BASE_URL OR Vite not restarted
+  after .env change. Fix:
+    1) Start artisan serve on :8000
+    2) Root .env: VITE_API_BASE_URL=http://127.0.0.1:8000/api
+    3) Restart npm run dev
+    4) Confirm GET http://127.0.0.1:8000/api/subscription-plans returns JSON
+
+UI changes not showing when using artisan-served SPA:
+  Source in src/ is not live — rebuild:
+    npm run build && npm run deploy:backend-public
+  Or use npm run dev for HMR.
+
+PayMongo upgrades:
+  Set PAYMONGO_SECRET_KEY in backend/.env
+  Use /billing while logged in as school or company admin
+
+================================================================================
+12. DATA MODEL (SIMPLIFIED)
+================================================================================
+
+User
+  ├─ platformRole (optional, admin)
+  ├─ organizationMemberships → Organization + Role + permissions
+  ├─ school | company | student profile rows
+
+Organization (type: school|company)
+  ├─ subscription (plan, status, billing_cycle)
+  ├─ settings.pending_plan_change (PayMongo pending)
+  ├─ roles, memberships
+
+School / Company
+  └─ owned by user + linked to organization
+
+Internship (company or school hosted)
+  └─ Applications
+       ├─ Interviews
+       ├─ Assessments
+       ├─ OjtLogs
+       └─ Certificates
+
+Agreement (MOA between school & company orgs)
+  └─ type, status (pending, active, pending_amendment, rejected, cancelled...), amend fields
+
+================================================================================
+13. CONVENTIONS FOR FUTURE AI WORK
+================================================================================
+
+- Prefer additive changes; do not break working application/agreement flows
+- User-facing: say "Agreement" not "Contract" (keep API aliases if needed)
+- School-first redesigns often share TenantRbac / SubscriptionManager with Company
+- Do NOT edit plan files in .cursor/plans unless user asks
+- Do NOT commit unless user asks
+- After UI changes for artisan-served mode: build + deploy:backend-public
+- Keep PayMongo as payment provider unless user explicitly changes it
+- AUTH_DISABLED should stay false unless debugging
+- Ask before large design assumptions; match existing Tailwind/shadcn patterns
+- When serving via Laravel public/, remember Vite source ≠ live assets until rebuild
+
+================================================================================
+14. QUICK FILE INDEX FOR HOTSPOTS
+================================================================================
+
+Auth flag:           src/config/auth.ts
+API base:            src/services/http.ts , project root .env
+Router guards:       src/router/index.ts
+School UI:           src/views/school/School.vue
+Company UI:          src/views/company/Company.vue
+RBAC UI:             src/views/TenantRbac.vue
+Billing UI:          src/views/OrganizationSubscription.vue
+                     src/components/SubscriptionManager.vue
+Agreements UI:       src/views/Contracts.vue
+API routes:          backend/routes/api.php
+Permissions catalog: backend/app/Support/OrgPermissions.php
+Demo users:          backend/database/seeders/DemoAccountsSeeder.php
+PayMongo checkout:   backend/app/Http/Controllers/SubscriptionCheckoutController.php
+Plan limits:         backend/app/Services/SubscriptionPlanService.php
+
+================================================================================
+END OF SYSTEM BRIEF
+================================================================================

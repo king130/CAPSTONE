@@ -40,7 +40,7 @@ async function loadPartners() {
 }
 
 function goBack() {
-  void router.push({ name: 'contracts' })
+  void router.push({ name: 'agreements' })
 }
 
 function resetPartner() {
@@ -49,7 +49,7 @@ function resetPartner() {
 
 function handleSubmitted(_payload?: { id?: string; moaReferenceNo?: string }) {
   selectedPartner.value = null
-  void router.push({ name: 'contracts' })
+  void router.push({ name: 'agreements' })
 }
 
 onMounted(() => {
@@ -58,14 +58,14 @@ onMounted(() => {
 </script>
 
 <template>
-  <MainLayout :role="currentRole" title="New Contract Request" active-item="contracts">
+  <MainLayout :role="currentRole" title="New Agreement Request" active-item="agreements">
     <div class="space-y-6">
       <Card class="border-border/80 shadow-sm">
         <CardHeader class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div class="space-y-2">
-            <p class="text-sm font-semibold uppercase tracking-[0.28em] text-sky-700">Contracts</p>
+            <p class="text-sm font-semibold uppercase tracking-[0.28em] text-primary">Agreements</p>
             <div>
-              <h2 class="text-3xl font-semibold tracking-tight text-foreground">Create a contract request</h2>
+              <h2 class="text-3xl font-semibold tracking-tight text-foreground">Create an agreement request</h2>
               <p class="mt-2 max-w-2xl text-sm text-muted-foreground">
                 Use a dedicated page for building agreements so you can review details comfortably without losing work to an accidental click.
               </p>
@@ -73,7 +73,7 @@ onMounted(() => {
           </div>
           <Button variant="outline" @click="goBack">
             <ArrowLeft class="h-4 w-4" />
-            Back to Contracts
+            Back to Agreements
           </Button>
         </CardHeader>
       </Card>

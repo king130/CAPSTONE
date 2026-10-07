@@ -17,7 +17,7 @@ const props = withDefaults(defineProps<ProgressProps>(), {
 
 const safeValue = computed(() => Math.max(0, Math.min(100, props.value)))
 const indicatorStyle = computed(() => ({ width: `${safeValue.value}%` }))
-const rootClass = computed(() => cn('relative h-3 w-full overflow-hidden rounded-full bg-slate-200', props.class))
+const rootClass = computed(() => cn('relative h-3 w-full overflow-hidden rounded-full bg-muted', props.class))
 const barClass = computed(() => cn('h-full rounded-full bg-primary transition-all', props.indicatorClass))
 </script>
 

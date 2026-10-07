@@ -1,4 +1,4 @@
-import { fetchUserProfile, type UserProfile } from '@/services/auth'
+import { apiFetch, apiBase, getToken } from '@/services/http'
 
 export interface OJTLog {
   id: number
@@ -16,6 +16,8 @@ export interface OJTLog {
   company?: string
   school?: string
   submittedAt?: string
+  applicationId?: string | null
+  internshipId?: string | null
 }
 
 export interface OJTProgress {
@@ -69,64 +71,23 @@ export interface OJTCreateLogPayload {
   timeOut: string
   tasksDone: string
   mood?: 'productive' | 'okay' | 'difficult' | 'great'
+  application_id?: number
+  internship_id?: number
 }
 
 export interface OJTRejectPayload {
   reason: string
 }
 
-interface StoredOJTLog extends OJTLog {
-  internUid: string
-}
-
-interface StoredAdminSettings {
-  requiredHours: string
-}
-
-const OJT_STORAGE_KEY = 'capstone.ojt.logs'
-const ADMIN_SYSTEM_SETTINGS_KEY = 'capstone.admin-system-settings'
-
-function readStorageValue<T>(key: string, fallback: T): T {
-  if (typeof window === 'undefined') return fallback
-
-  const raw = window.localStorage.getItem(key)
-  if (!raw) return fallback
-
-  try {
-    return JSON.parse(raw) as T
-  } catch {
-    return fallback
-  }
-}
-
-function writeStorageValue<T>(key: string, value: T) {
-  if (typeof window === 'undefined') return
-  window.localStorage.setItem(key, JSON.stringify(value))
-}
-
-function readLogs(): StoredOJTLog[] {
-  return readStorageValue<StoredOJTLog[]>(OJT_STORAGE_KEY, [])
-}
-
-function writeLogs(logs: StoredOJTLog[]) {
-  writeStorageValue(OJT_STORAGE_KEY, logs)
-}
-
-function getRequiredHours(): number {
-  const settings = readStorageValue<StoredAdminSettings>(ADMIN_SYSTEM_SETTINGS_KEY, { requiredHours: '500' })
-  return Number(settings.requiredHours || '500') || 500
-}
-
-function stringHashToNumber(value: string): number {
-  return value.split('').reduce((hash, character) => {
-    return (hash * 31 + character.charCodeAt(0)) >>> 0
-  }, 7)
-}
-
-function hoursBetween(timeIn: string, timeOut: string): number {
-  const [inHours = 0, inMinutes = 0] = timeIn.split(':').map(Number)
-  const [outHours = 0, outMinutes = 0] = timeOut.split(':').map(Number)
-  return Math.max(0, (outHours * 60 + outMinutes - (inHours * 60 + inMinutes)) / 60)
+function buildQuery(params: Record<string, string | number | undefined>): string {
+  const search = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') {
+      search.set(key, String(value))
+    }
+  })
+  const qs = search.toString()
+  return qs ? `?${qs}` : ''
 }
 
 function initialsFromName(name: string): string {
@@ -139,94 +100,31 @@ function initialsFromName(name: string): string {
     .toUpperCase()
 }
 
-function getProfileRecord(user: UserProfile | null): Record<string, unknown> {
-  return (user?.profile as Record<string, unknown> | undefined) ?? {}
-}
-
-function resolveSchoolName(user: UserProfile | null): string {
-  const profile = getProfileRecord(user)
-  return String(profile.schoolName ?? profile.institutionName ?? user?.activeOrganization?.name ?? '')
-}
-
-function resolveCompanyName(user: UserProfile | null): string {
-  const profile = getProfileRecord(user)
-  return String(profile.companyName ?? user?.activeOrganization?.name ?? '')
-}
-
 function compareLogs(left: OJTLog, right: OJTLog): number {
   const leftKey = `${left.date}T${left.timeIn || '00:00'}`
   const rightKey = `${right.date}T${right.timeIn || '00:00'}`
   return rightKey.localeCompare(leftKey)
 }
 
-function applyLogQuery(logs: StoredOJTLog[], query: OJTLogQuery): StoredOJTLog[] {
+function applyClientFilters(logs: OJTLog[], filters: OJTAdminFilters): OJTLog[] {
+  const query = (filters.search ?? '').trim().toLowerCase()
   return logs.filter((log) => {
-    if (query.internId !== undefined && log.internId !== query.internId) return false
-    if (query.status && log.status !== query.status) return false
-    if (query.dateFrom && log.date < query.dateFrom) return false
-    if (query.dateTo && log.date > query.dateTo) return false
+    if (filters.school && log.school !== filters.school) return false
+    if (filters.company && log.company !== filters.company) return false
+    if (filters.status && log.status !== filters.status) return false
+    if (filters.dateFrom && log.date < filters.dateFrom) return false
+    if (filters.dateTo && log.date > filters.dateTo) return false
+    if (query) {
+      const haystack = [log.internName, log.school ?? '', log.company ?? '', log.tasksDone].join(' ').toLowerCase()
+      if (!haystack.includes(query)) return false
+    }
     return true
   })
 }
 
-async function requireUser(): Promise<UserProfile> {
-  const user = await fetchUserProfile('')
-  if (!user) {
-    throw new Error('You need to be signed in to manage OJT logs.')
-  }
-  return user
-}
-
-function ensurePending(log: StoredOJTLog) {
-  if (log.status !== 'pending') {
-    throw new Error('Only pending logs can be updated.')
-  }
-}
-
-function summarizeByIntern(logs: StoredOJTLog[]): InternOJTSummary[] {
-  const requiredHours = getRequiredHours()
-  const grouped = new Map<number, StoredOJTLog[]>()
-
-  logs.forEach((log) => {
-    const collection = grouped.get(log.internId) ?? []
-    collection.push(log)
-    grouped.set(log.internId, collection)
-  })
-
-  return Array.from(grouped.entries()).map(([internId, internLogs]) => {
-    const approvedHours = internLogs
-      .filter((log) => log.status === 'approved')
-      .reduce((sum, log) => sum + log.hoursRendered, 0)
-    const totalLoggedHours = internLogs.reduce((sum, log) => sum + log.hoursRendered, 0)
-    const percent = requiredHours > 0 ? (approvedHours / requiredHours) * 100 : 0
-    const status: InternOJTSummary['status'] =
-      approvedHours >= requiredHours && requiredHours > 0
-        ? 'completed'
-        : approvedHours <= 0 && totalLoggedHours <= 0
-          ? 'not_started'
-          : percent >= 60
-            ? 'on_track'
-            : 'at_risk'
-
-    const latestLog = [...internLogs].sort(compareLogs)[0]
-    return {
-      internId,
-      internName: latestLog?.internName ?? 'Intern',
-      company: latestLog?.company ?? '',
-      school: latestLog?.school ?? '',
-      approvedHours,
-      requiredHours,
-      status,
-      avatarFallback: initialsFromName(latestLog?.internName ?? 'Intern'),
-      totalLoggedHours,
-    }
-  })
-}
-
-function analyticsFromLogs(logs: StoredOJTLog[]): OJTAdminAnalytics {
+function analyticsFromLogs(logs: OJTLog[], requiredHours = 500): OJTAdminAnalytics {
   const weeklyHours = new Map<string, number>()
   const bySchool = new Map<string, { approved: number; required: number }>()
-  const requiredHours = getRequiredHours()
 
   logs.forEach((log) => {
     const weekLabel = `${log.date.slice(0, 7)}`
@@ -253,167 +151,122 @@ function analyticsFromLogs(logs: StoredOJTLog[]): OJTAdminAnalytics {
   }
 }
 
-function applyAdminFilters(logs: StoredOJTLog[], filters: OJTAdminFilters): StoredOJTLog[] {
-  const query = (filters.search ?? '').trim().toLowerCase()
-  return logs.filter((log) => {
-    if (filters.school && log.school !== filters.school) return false
-    if (filters.company && log.company !== filters.company) return false
-    if (filters.status && log.status !== filters.status) return false
-    if (filters.dateFrom && log.date < filters.dateFrom) return false
-    if (filters.dateTo && log.date > filters.dateTo) return false
-    if (query) {
-      const haystack = [log.internName, log.school ?? '', log.company ?? '', log.tasksDone].join(' ').toLowerCase()
-      if (!haystack.includes(query)) return false
-    }
-    return true
-  })
-}
-
 export async function createOJTLog(payload: OJTCreateLogPayload): Promise<void> {
-  const user = await requireUser()
-  const logs = readLogs()
-  const profile = getProfileRecord(user)
-  const nextLog: StoredOJTLog = {
-    id: Date.now(),
-    internId: stringHashToNumber(user.uid),
-    internUid: user.uid,
-    internName: user.displayName || user.email,
-    date: payload.date,
-    timeIn: payload.timeIn,
-    timeOut: payload.timeOut,
-    hoursRendered: Number(hoursBetween(payload.timeIn, payload.timeOut).toFixed(2)),
-    tasksDone: payload.tasksDone,
-    mood: payload.mood,
-    status: 'pending',
-    createdAt: new Date().toISOString(),
-    submittedAt: new Date().toISOString(),
-    company: String(profile.companyName ?? ''),
-    school: resolveSchoolName(user),
-  }
-
-  writeLogs([...logs, nextLog])
-}
-
-export async function listInternOJTLogs(query: OJTLogQuery = {}): Promise<OJTLog[]> {
-  const user = await requireUser()
-  const allLogs = readLogs()
-
-  const filtered = user.role === 'student' && query.internId === undefined
-    ? allLogs.filter((log) => log.internUid === user.uid)
-    : allLogs
-
-  return applyLogQuery(filtered, query).sort(compareLogs)
-}
-
-export async function updateOJTLog(logId: number, payload: OJTCreateLogPayload): Promise<void> {
-  const user = await requireUser()
-  const logs = readLogs()
-
-  const nextLogs = logs.map((log) => {
-    if (log.id !== logId) return log
-    if (log.internUid !== user.uid) {
-      throw new Error('You can only edit your own OJT logs.')
-    }
-    ensurePending(log)
-    return {
-      ...log,
+  await apiFetch('/ojt-logs', {
+    method: 'POST',
+    body: JSON.stringify({
       date: payload.date,
       timeIn: payload.timeIn,
       timeOut: payload.timeOut,
       tasksDone: payload.tasksDone,
       mood: payload.mood,
-      hoursRendered: Number(hoursBetween(payload.timeIn, payload.timeOut).toFixed(2)),
-    }
+      application_id: payload.application_id,
+      internship_id: payload.internship_id,
+    }),
   })
+}
 
-  writeLogs(nextLogs)
+export async function listInternOJTLogs(query: OJTLogQuery = {}): Promise<OJTLog[]> {
+  const qs = buildQuery({
+    date_from: query.dateFrom,
+    date_to: query.dateTo,
+    status: query.status,
+    student_id: query.internId,
+  })
+  const res = await apiFetch<{ data: OJTLog[] }>(`/ojt-logs${qs}`)
+  return (res.data ?? []).sort(compareLogs)
+}
+
+export async function updateOJTLog(logId: number, payload: OJTCreateLogPayload): Promise<void> {
+  await apiFetch(`/ojt-logs/${logId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      date: payload.date,
+      timeIn: payload.timeIn,
+      timeOut: payload.timeOut,
+      tasksDone: payload.tasksDone,
+      mood: payload.mood,
+    }),
+  })
 }
 
 export async function deleteOJTLog(logId: number): Promise<void> {
-  const user = await requireUser()
-  const logs = readLogs()
-  const target = logs.find((log) => log.id === logId)
-
-  if (!target) return
-  if (target.internUid !== user.uid) {
-    throw new Error('You can only delete your own OJT logs.')
-  }
-  ensurePending(target)
-
-  writeLogs(logs.filter((log) => log.id !== logId))
+  await apiFetch(`/ojt-logs/${logId}`, { method: 'DELETE' })
 }
 
 export async function listCompanyOJTLogs(status = 'pending'): Promise<OJTLog[]> {
-  const logs = readLogs().sort(compareLogs)
-  return status ? logs.filter((log) => log.status === status) : logs
+  const qs = buildQuery({ status: status || undefined })
+  const res = await apiFetch<{ data: OJTLog[] }>(`/ojt-logs${qs}`)
+  return (res.data ?? []).sort(compareLogs)
 }
 
 export async function approveOJTLog(logId: number): Promise<void> {
-  const logs = readLogs()
-  writeLogs(
-    logs.map((log) => (log.id === logId ? { ...log, status: 'approved', rejectionReason: undefined } : log)),
-  )
+  await apiFetch(`/ojt-logs/${logId}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status: 'approved' }),
+  })
 }
 
 export async function rejectOJTLog(logId: number, payload: OJTRejectPayload): Promise<void> {
-  const logs = readLogs()
-  writeLogs(
-    logs.map((log) =>
-      log.id === logId
-        ? { ...log, status: 'rejected', rejectionReason: payload.reason }
-        : log,
-    ),
-  )
+  await apiFetch(`/ojt-logs/${logId}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status: 'rejected', reason: payload.reason }),
+  })
 }
 
 export async function fetchSchoolOJTSummaries(): Promise<InternOJTSummary[]> {
-  return summarizeByIntern(readLogs()).sort((left, right) => left.internName.localeCompare(right.internName))
+  const res = await apiFetch<{ data: InternOJTSummary[] }>('/ojt-logs/progress')
+  return (res.data ?? [])
+    .map((row) => ({
+      ...row,
+      avatarFallback: row.avatarFallback ?? initialsFromName(row.internName || 'Intern'),
+    }))
+    .sort((left, right) => left.internName.localeCompare(right.internName))
 }
 
 export async function exportSchoolOJTLogsCsv(): Promise<Blob> {
-  const rows = summarizeByIntern(readLogs())
-  const csv = [
-    ['Intern Name', 'Company', 'School', 'Approved Hours', 'Required Hours', 'Status'].join(','),
-    ...rows.map((row) =>
-      [
-        row.internName,
-        row.company,
-        row.school,
-        String(row.approvedHours),
-        String(row.requiredHours),
-        row.status,
-      ]
-        .map((value) => `"${String(value).replace(/"/g, '""')}"`)
-        .join(','),
-    ),
-  ].join('\n')
+  const base = apiBase()
+  const path = '/reports/export?type=ojt'
+  const url = base ? `${base}${path}` : `/api${path}`
+  const headers: HeadersInit = { Accept: 'text/csv' }
+  const token = getToken()
+  if (token) headers.Authorization = `Bearer ${token}`
 
-  return new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const response = await fetch(url, { headers })
+  if (!response.ok) {
+    throw new Error('Unable to export OJT logs.')
+  }
+  return response.blob()
 }
 
 export async function fetchAdminOJTLogs(filters: OJTAdminFilters = {}): Promise<OJTLog[]> {
-  return applyAdminFilters(readLogs(), filters).sort(compareLogs)
+  const qs = buildQuery({
+    status: filters.status,
+    date_from: filters.dateFrom,
+    date_to: filters.dateTo,
+  })
+  const res = await apiFetch<{ data: OJTLog[] }>(`/ojt-logs${qs}`)
+  return applyClientFilters(res.data ?? [], filters).sort(compareLogs)
 }
 
 export async function fetchAdminOJTAnalytics(): Promise<OJTAdminAnalytics> {
-  return analyticsFromLogs(readLogs())
+  const logs = await fetchAdminOJTLogs()
+  return analyticsFromLogs(logs)
 }
 
 export async function fetchOJTProgress(): Promise<OJTProgress> {
-  const user = await requireUser()
-  const logs = readLogs().filter((log) => log.internUid === user.uid)
-  const requiredHours = getRequiredHours()
-  const totalLogged = logs.reduce((sum, log) => sum + log.hoursRendered, 0)
-  const totalApproved = logs.filter((log) => log.status === 'approved').reduce((sum, log) => sum + log.hoursRendered, 0)
-  const totalPending = logs.filter((log) => log.status === 'pending').reduce((sum, log) => sum + log.hoursRendered, 0)
-  const totalRejected = logs.filter((log) => log.status === 'rejected').reduce((sum, log) => sum + log.hoursRendered, 0)
+  const res = await apiFetch<{ data: OJTProgress }>('/ojt-logs/progress')
+  const data = res.data
+  if (data && 'totalLogged' in data) {
+    return data
+  }
 
   return {
-    totalLogged,
-    totalApproved,
-    totalPending,
-    totalRejected,
-    requiredHours,
-    percentComplete: requiredHours > 0 ? Math.min(100, (totalApproved / requiredHours) * 100) : 0,
+    totalLogged: 0,
+    totalApproved: 0,
+    totalPending: 0,
+    totalRejected: 0,
+    requiredHours: 500,
+    percentComplete: 0,
   }
 }

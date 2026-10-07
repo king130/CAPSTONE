@@ -18,6 +18,7 @@ class SubscriptionPlanDefinition extends Model
         'school_students_limit',
         'company_accounts_limit',
         'company_internships_limit',
+        'organization_photos_limit',
         'is_active',
     ];
 

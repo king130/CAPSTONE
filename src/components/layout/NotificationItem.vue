@@ -36,27 +36,27 @@ const iconConfig = computed(() => {
     case 'application':
       return {
         icon: BriefcaseBusiness,
-        class: 'bg-sky-100 text-sky-700',
+        class: 'bg-sky-100 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300',
       }
     case 'endorsement':
       return {
         icon: GraduationCap,
-        class: 'bg-emerald-100 text-emerald-700',
+        class: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300',
       }
     case 'hours':
       return {
         icon: Clock3,
-        class: 'bg-amber-100 text-amber-700',
+        class: 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300',
       }
     case 'registration':
       return {
         icon: UserPlus,
-        class: 'bg-violet-100 text-violet-700',
+        class: 'bg-violet-100 text-violet-700 dark:bg-violet-950/50 dark:text-violet-300',
       }
     default:
       return {
         icon: ShieldAlert,
-        class: 'bg-rose-100 text-rose-700',
+        class: 'bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300',
       }
   }
 })
@@ -86,12 +86,12 @@ function handleMarkRead() {
 
       <div class="min-w-0 flex-1">
         <p
-          class="leading-6 text-slate-700"
-          :class="props.notification.isRead ? 'font-medium' : 'font-semibold text-slate-950'"
+          class="leading-6 text-muted-foreground"
+          :class="props.notification.isRead ? 'font-medium' : 'font-semibold text-foreground'"
         >
           {{ props.notification.message }}
         </p>
-        <div class="mt-2 flex items-center gap-2 text-sm text-slate-500">
+        <div class="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
           <BellRing class="h-3.5 w-3.5" />
           <span>{{ timeAgo }}</span>
         </div>

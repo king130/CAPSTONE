@@ -41,9 +41,12 @@ import TableHead from '@/components/ui/table/TableHead.vue'
 import TableHeader from '@/components/ui/table/TableHeader.vue'
 import TableRow from '@/components/ui/table/TableRow.vue'
 import { caviteBarangaysByLocation, caviteLocationGroups } from '@/config/courseCatalog'
+import ApplicationAssessmentPanel from '@/components/ApplicationAssessmentPanel.vue'
+import ApplicationInterviewPanel from '@/components/ApplicationInterviewPanel.vue'
 import { useToast } from '@/composables/useToast'
 import MainLayout from '@/layouts/MainLayout.vue'
 import { subscribeCompanyApplications, updateApplicationStatus, type ApplicationRecord } from '@/services/applications'
+import { fetchKpiReport, type KpiReport } from '@/services/kpi'
 import {
   createInternship,
   deleteInternship,
@@ -75,6 +78,9 @@ interface JobFormState {
   scheduleDays: string[]
   scheduleStartTime: string
   scheduleEndTime: string
+  scheduleType: string
+  weeklyHours: string
+  isFlexible: boolean
   tasks: string
   requiredSkillsText: string
   internGains: string
@@ -111,6 +117,7 @@ const pendingDeleteJobId = ref<string | null>(null)
 const deletingJobId = ref<string | null>(null)
 const processingApplicantId = ref<string | null>(null)
 const editingJobId = ref<string | null>(null)
+const kpi = ref<KpiReport | null>(null)
 const jobEditorRef = ref<HTMLElement | null>(null)
 const currentJobStep = ref<JobWizardStep>('basic')
 const chipInput = ref<ChipFieldState>({
@@ -190,6 +197,7 @@ const wizardStepIndex = computed(() => wizardSteps.findIndex((step) => step.id =
 const dashboardStats = computed(() => {
   const openPositions = internships.value.filter((job) => normalizeJobStatus(job.status) === 'active').length
   const totalApplicants = applications.value.length
+  const pendingReview = applications.value.filter((item) => normalizeApplicationStatus(item.status) === 'endorsed').length
   const acceptedInterns = applications.value.filter((item) => normalizeApplicationStatus(item.status) === 'accepted').length
 
   return [
@@ -197,40 +205,61 @@ const dashboardStats = computed(() => {
       label: 'Open Positions',
       value: openPositions,
       icon: BriefcaseBusiness,
-      iconClass: 'bg-sky-100 text-sky-700',
-      caption: 'Active roles currently accepting applications',
+      iconClass: 'bg-emerald-100 text-emerald-700',
+      caption: 'Accepting applications',
     },
     {
       label: 'Total Applicants',
       value: totalApplicants,
       icon: Users,
       iconClass: 'bg-violet-100 text-violet-700',
-      caption: 'Applicants received across all posted jobs',
+      caption: 'Across all postings',
+    },
+    {
+      label: 'Needs Review',
+      value: pendingReview,
+      icon: Eye,
+      iconClass: 'bg-amber-100 text-amber-700',
+      caption: 'Endorsed, awaiting decision',
     },
     {
       label: 'Accepted Interns',
       value: acceptedInterns,
       icon: CheckCircle2,
-      iconClass: 'bg-emerald-100 text-emerald-700',
-      caption: 'Candidates moved forward into placement',
+      iconClass: 'bg-accent text-primary',
+      caption: 'Moved into placement',
     },
   ]
 })
 
-const quickActions = computed(() => [
+const attentionApplicants = computed(() =>
+  applications.value
+    .filter((item) => normalizeApplicationStatus(item.status) === 'endorsed')
+    .slice(0, 5),
+)
+
+const compactQuickActions = computed(() => [
   {
-    label: 'Contracts',
-    copy: 'Review school agreements, respond to incoming contract requests, and create new partnership paperwork.',
+    label: 'Post a job',
+    icon: Plus,
+    action: () => {
+      void openCreateJobDialog()
+    },
+  },
+  {
+    label: 'Review applicants',
+    icon: Users,
+    action: () => handleMenuClick('applications'),
+  },
+  {
+    label: 'Agreements',
     icon: FileText,
-    action: () => router.push({ name: 'contracts' }),
-    buttonLabel: 'Open Contracts',
+    action: () => router.push({ name: 'agreements' }),
   },
   {
     label: 'Messages',
-    copy: 'Launch the restored chat workspace to talk with schools and keep hiring conversations moving.',
     icon: MessageSquare,
     action: () => window.dispatchEvent(new CustomEvent('chat:open')),
-    buttonLabel: 'Open Messages',
   },
 ])
 
@@ -294,6 +323,9 @@ function defaultJobForm(): JobFormState {
     scheduleDays: [],
     scheduleStartTime: '',
     scheduleEndTime: '',
+    scheduleType: 'fixed',
+    weeklyHours: '',
+    isFlexible: false,
     tasks: '',
     requiredSkillsText: '',
     internGains: '',
@@ -517,9 +549,12 @@ function fillJobForm(job?: InternshipRecord) {
     allowance: job.allowance || '',
     startDate: job.startDate || '',
     endDate: job.endDate || '',
-    scheduleDays: scheduleParts.scheduleDays,
-    scheduleStartTime: scheduleParts.scheduleStartTime,
-    scheduleEndTime: scheduleParts.scheduleEndTime,
+    scheduleDays: job.scheduleDays?.length ? [...job.scheduleDays] : scheduleParts.scheduleDays,
+    scheduleStartTime: job.timeIn || scheduleParts.scheduleStartTime,
+    scheduleEndTime: job.timeOut || scheduleParts.scheduleEndTime,
+    scheduleType: job.scheduleType || 'fixed',
+    weeklyHours: job.weeklyHours != null ? String(job.weeklyHours) : '',
+    isFlexible: Boolean(job.isFlexible),
     tasks: job.tasks || '',
     requiredSkillsText: (job.requiredSkills || job.requirements || []).join(', '),
     internGains: job.internGains || '',
@@ -599,6 +634,12 @@ async function saveJob() {
       startDate: jobForm.value.startDate || undefined,
       endDate: jobForm.value.endDate || undefined,
       schedule: buildSchedule() || undefined,
+      scheduleType: jobForm.value.scheduleType || undefined,
+      weeklyHours: jobForm.value.weeklyHours ? Number(jobForm.value.weeklyHours) : undefined,
+      scheduleDays: jobForm.value.scheduleDays,
+      timeIn: jobForm.value.scheduleStartTime || undefined,
+      timeOut: jobForm.value.scheduleEndTime || undefined,
+      isFlexible: jobForm.value.isFlexible,
       tasks: jobForm.value.tasks.trim() || undefined,
       requiredSkills: requiredSkills,
       internGains: jobForm.value.internGains.trim() || undefined,
@@ -703,6 +744,14 @@ onMounted(() => {
     applications.value = items
     loadingApplications.value = false
   })
+
+  void fetchKpiReport()
+    .then((report) => {
+      kpi.value = report
+    })
+    .catch(() => {
+      kpi.value = null
+    })
 })
 
 onUnmounted(() => {
@@ -730,71 +779,136 @@ watch(
 <template>
   <MainLayout role="company" :title="pageTitle" :active-item="currentView" @navigate="handleMenuClick($event.key)">
     <div class="space-y-6">
-      <Card v-if="currentView === 'dashboard'" class="border-border/80 shadow-sm">
-        <CardHeader>
-          <div class="flex items-center gap-3">
-            <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 text-sky-700">
-              <Building2 class="h-5 w-5" />
-            </div>
-            <div>
-              <h2 class="text-2xl font-semibold text-slate-950">Company Dashboard</h2>
-              <p class="text-sm text-slate-600">Track your hiring pipeline, open opportunities, and accepted interns from one workspace.</p>
+      <template v-if="currentView === 'dashboard'">
+        <section class="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+          <div class="border-b border-border bg-gradient-to-r from-emerald-50/80 via-card to-accent/60 px-6 py-6 sm:px-8">
+            <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div class="flex items-start gap-4">
+                <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700">
+                  <Building2 class="h-5 w-5" />
+                </div>
+                <div>
+                  <p class="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">Overview</p>
+                  <h2 class="mt-1 text-2xl font-semibold tracking-tight text-foreground">{{ companyName }}</h2>
+                  <p class="mt-1 text-sm text-muted-foreground">
+                    {{ dashboardStats[2]?.value || 0 }} applicant{{ (dashboardStats[2]?.value || 0) === 1 ? '' : 's' }} need review ·
+                    {{ dashboardStats[0]?.value || 0 }} open position{{ (dashboardStats[0]?.value || 0) === 1 ? '' : 's' }}
+                  </p>
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" @click="handleMenuClick('applications')">Review applicants</Button>
+                <Button size="sm" @click="void openCreateJobDialog()">Post a job</Button>
+              </div>
             </div>
           </div>
-        </CardHeader>
-        <CardContent class="grid gap-4 md:grid-cols-3">
-          <Card v-for="stat in dashboardStats" :key="stat.label" class="border-border/70 shadow-none">
-            <CardContent class="p-5">
+
+          <div class="grid gap-px bg-muted sm:grid-cols-2 xl:grid-cols-4">
+            <div v-for="stat in dashboardStats" :key="stat.label" class="bg-card px-5 py-5">
               <template v-if="loadingJobs || loadingApplications">
-                <Skeleton class="h-11 w-11 rounded-2xl" />
-                <Skeleton class="mt-5 h-4 w-28" />
-                <Skeleton class="mt-3 h-8 w-16" />
-                <Skeleton class="mt-3 h-4 w-40" />
+                <Skeleton class="h-9 w-9 rounded-xl" />
+                <Skeleton class="mt-4 h-3 w-24" />
+                <Skeleton class="mt-2 h-8 w-14" />
               </template>
               <template v-else>
-                <div :class="['flex h-11 w-11 items-center justify-center rounded-2xl', stat.iconClass]">
-                  <component :is="stat.icon" class="h-5 w-5" />
+                <div class="flex items-center justify-between gap-3">
+                  <div :class="['flex h-9 w-9 items-center justify-center rounded-xl', stat.iconClass]">
+                    <component :is="stat.icon" class="h-4 w-4" />
+                  </div>
+                  <p class="text-xs font-medium text-muted-foreground">{{ stat.caption }}</p>
                 </div>
-                <p class="mt-5 text-sm font-medium text-slate-500">{{ stat.label }}</p>
-                <p class="mt-2 text-3xl font-semibold text-slate-950">{{ stat.value }}</p>
-                <p class="mt-3 text-sm text-slate-600">{{ stat.caption }}</p>
+                <p class="mt-4 text-sm font-medium text-muted-foreground">{{ stat.label }}</p>
+                <p class="mt-1 text-3xl font-semibold tracking-tight text-foreground">{{ stat.value }}</p>
               </template>
-            </CardContent>
-          </Card>
-        </CardContent>
-      </Card>
+            </div>
+          </div>
+        </section>
 
-      <Card v-if="currentView === 'dashboard'" class="border-border/80 shadow-sm">
-        <CardHeader>
-          <h2 class="text-2xl font-semibold text-slate-950">Company Tools</h2>
-          <p class="text-sm text-slate-600">
-            Bring back the contract and messaging workflows that lived in the older company experience.
-          </p>
-        </CardHeader>
-        <CardContent class="grid gap-4 md:grid-cols-2">
-          <Card v-for="action in quickActions" :key="action.label" class="border-border/70 shadow-none">
-            <CardContent class="space-y-4 p-5">
-              <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
-                <component :is="action.icon" class="h-5 w-5" />
-              </div>
+        <section v-if="kpi" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Placement rate</p>
+            <p class="mt-2 text-2xl font-semibold text-foreground">{{ kpi.placementRate }}%</p>
+          </div>
+          <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Agreements</p>
+            <p class="mt-2 text-2xl font-semibold text-foreground">{{ kpi.totalAgreements }}</p>
+          </div>
+          <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Avg approved OJT hrs</p>
+            <p class="mt-2 text-2xl font-semibold text-foreground">{{ kpi.avgApprovedOjtHours }}</p>
+          </div>
+          <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Avg assessment score</p>
+            <p class="mt-2 text-2xl font-semibold text-foreground">{{ kpi.avgAssessmentScore }}</p>
+          </div>
+        </section>
+
+        <div class="grid gap-6 xl:grid-cols-[1.4fr_0.9fr]">
+          <section class="rounded-2xl border border-border bg-card shadow-sm">
+            <div class="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
               <div>
-                <p class="text-lg font-semibold text-slate-950">{{ action.label }}</p>
-                <p class="mt-2 text-sm leading-6 text-slate-600">{{ action.copy }}</p>
+                <h3 class="text-lg font-semibold text-foreground">Needs attention</h3>
+                <p class="text-sm text-muted-foreground">Applicants waiting for a company decision.</p>
               </div>
-              <Button class="w-full justify-center" variant="outline" @click="action.action()">
-                {{ action.buttonLabel }}
-              </Button>
-            </CardContent>
-          </Card>
-        </CardContent>
-      </Card>
+              <Button size="sm" variant="outline" @click="handleMenuClick('applications')">View all</Button>
+            </div>
+            <div class="divide-y divide-slate-100">
+              <template v-if="loadingApplications">
+                <div v-for="index in 3" :key="index" class="space-y-2 px-5 py-4">
+                  <Skeleton class="h-4 w-40" />
+                  <Skeleton class="h-3 w-56" />
+                </div>
+              </template>
+              <template v-else-if="attentionApplicants.length">
+                <div
+                  v-for="item in attentionApplicants"
+                  :key="item.id"
+                  class="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div class="min-w-0">
+                    <p class="font-medium text-foreground">{{ item.studentName || 'Unnamed applicant' }}</p>
+                    <p class="truncate text-sm text-muted-foreground">
+                      {{ item.internshipTitle || 'Untitled role' }} · {{ item.schoolName || 'School' }}
+                    </p>
+                  </div>
+                  <Button size="sm" variant="outline" class="shrink-0" @click="openApplicantProfile(item)">
+                    Review
+                  </Button>
+                </div>
+              </template>
+              <div v-else class="px-5 py-10 text-center text-sm text-muted-foreground">
+                No applicants need review right now.
+              </div>
+            </div>
+          </section>
+
+          <section class="rounded-2xl border border-border bg-card p-5 shadow-sm">
+            <h3 class="text-lg font-semibold text-foreground">Quick actions</h3>
+            <p class="mt-1 text-sm text-muted-foreground">Jump to common hiring workflows.</p>
+            <div class="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+              <button
+                v-for="action in compactQuickActions"
+                :key="action.label"
+                type="button"
+                class="flex items-center gap-3 rounded-xl border border-border px-4 py-3 text-left transition hover:border-emerald-200 hover:bg-emerald-50/60"
+                @click="action.action()"
+              >
+                <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-foreground">
+                  <component :is="action.icon" class="h-4 w-4" />
+                </span>
+                <span class="text-sm font-medium text-foreground">{{ action.label }}</span>
+              </button>
+            </div>
+          </section>
+        </div>
+      </template>
 
       <Card v-else-if="currentView === 'internships'" class="border-border/80 shadow-sm">
         <CardHeader class="space-y-4">
           <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h2 class="text-2xl font-semibold text-slate-950">Posted Jobs</h2>
-              <p class="text-sm text-slate-600">Create openings, manage availability, and monitor how many applicants each role is bringing in.</p>
+              <h2 class="text-2xl font-semibold text-foreground">Posted Jobs</h2>
+              <p class="text-sm text-muted-foreground">Create openings, manage availability, and monitor how many applicants each role is bringing in.</p>
             </div>
             <Button class="gap-2 self-start" @click="openCreateJobDialog">
               <Plus class="h-4 w-4" />
@@ -802,20 +916,20 @@ watch(
             </Button>
           </div>
           <div class="relative max-w-md">
-            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input v-model="searchJobs" placeholder="Search posted jobs..." class="pl-9" />
           </div>
         </CardHeader>
         <CardContent class="space-y-6">
           <div v-if="jobEditorOpen" ref="jobEditorRef">
-            <Card class="border-sky-200 bg-sky-50/40 shadow-none">
+            <Card class="border-border bg-accent/40 shadow-none">
             <CardHeader class="space-y-2">
               <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
-                  <h3 class="text-xl font-semibold text-slate-950">
+                  <h3 class="text-xl font-semibold text-foreground">
                     {{ editingJobId ? 'Edit Job Posting' : 'Create Job Posting' }}
                   </h3>
-                  <p class="text-sm text-slate-600">
+                  <p class="text-sm text-muted-foreground">
                     Build a complete internship posting with the role fit, Cavite location, accepted programs, and contact flow schools need to review.
                   </p>
                 </div>
@@ -826,27 +940,27 @@ watch(
             </CardHeader>
             <CardContent>
               <div class="space-y-6">
-                <div class="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 md:grid-cols-4">
+                <div class="grid gap-3 rounded-2xl border border-border bg-card p-4 md:grid-cols-4">
                   <button
                     v-for="(step, index) in wizardSteps"
                     :key="step.id"
                     type="button"
                     class="rounded-2xl border p-4 text-left transition"
-                    :class="currentJobStep === step.id ? 'border-sky-300 bg-sky-50 shadow-sm' : 'border-slate-200 bg-slate-50 hover:border-slate-300'"
+                    :class="currentJobStep === step.id ? 'border-primary/40 bg-accent shadow-sm' : 'border-border bg-muted hover:border-border'"
                     @click="currentJobStep = step.id"
                   >
-                    <p class="text-xs font-semibold uppercase tracking-[0.2em]" :class="currentJobStep === step.id ? 'text-sky-700' : 'text-slate-500'">
+                    <p class="text-xs font-semibold uppercase tracking-[0.2em]" :class="currentJobStep === step.id ? 'text-primary' : 'text-muted-foreground'">
                       Step {{ index + 1 }}
                     </p>
-                    <p class="mt-2 text-sm font-semibold text-slate-950">{{ step.label }}</p>
-                    <p class="mt-1 text-xs leading-5 text-slate-600">{{ step.caption }}</p>
+                    <p class="mt-2 text-sm font-semibold text-foreground">{{ step.label }}</p>
+                    <p class="mt-1 text-xs leading-5 text-muted-foreground">{{ step.caption }}</p>
                   </button>
                 </div>
 
-                <section v-if="currentJobStep === 'basic'" class="grid gap-4 rounded-2xl border border-slate-200 bg-white p-5 sm:grid-cols-2">
+                <section v-if="currentJobStep === 'basic'" class="grid gap-4 rounded-2xl border border-border bg-card p-5 sm:grid-cols-2">
                   <div class="sm:col-span-2">
-                    <p class="text-sm font-semibold text-slate-950">Basic Information</p>
-                    <p class="mt-1 text-sm text-slate-600">Start with the subject or title, then confirm the company profile details and Cavite location.</p>
+                    <p class="text-sm font-semibold text-foreground">Basic Information</p>
+                    <p class="mt-1 text-sm text-muted-foreground">Start with the subject or title, then confirm the company profile details and Cavite location.</p>
                   </div>
                   <FormItem class="sm:col-span-2">
                     <FormLabel for="jobTitle">Subject or Title</FormLabel>
@@ -857,13 +971,13 @@ watch(
                   <FormItem>
                     <FormLabel for="jobCompanyName">Company Name</FormLabel>
                     <FormControl>
-                      <Input id="jobCompanyName" v-model="jobForm.companyName" readonly class="bg-slate-50 text-slate-600" />
+                      <Input id="jobCompanyName" v-model="jobForm.companyName" readonly class="bg-muted text-muted-foreground" />
                     </FormControl>
                   </FormItem>
                   <FormItem>
                     <FormLabel for="jobIndustry">Industry Based on Company Profile</FormLabel>
                     <FormControl>
-                      <Input id="jobIndustry" v-model="jobForm.industry" readonly class="bg-slate-50 text-slate-600" />
+                      <Input id="jobIndustry" v-model="jobForm.industry" readonly class="bg-muted text-muted-foreground" />
                     </FormControl>
                   </FormItem>
                   <FormItem class="sm:col-span-2">
@@ -875,11 +989,11 @@ watch(
                           :key="option.value"
                           type="button"
                           class="rounded-2xl border p-4 text-left transition"
-                          :class="jobForm.type === option.value ? 'border-sky-300 bg-sky-50 shadow-sm' : 'border-slate-200 bg-slate-50 hover:border-slate-300'"
+                          :class="jobForm.type === option.value ? 'border-primary/40 bg-accent shadow-sm' : 'border-border bg-muted hover:border-border'"
                           @click="jobForm.type = option.value"
                         >
-                          <p class="text-sm font-semibold text-slate-950">{{ option.label }}</p>
-                          <p class="mt-1 text-xs leading-5 text-slate-600">{{ option.description }}</p>
+                          <p class="text-sm font-semibold text-foreground">{{ option.label }}</p>
+                          <p class="mt-1 text-xs leading-5 text-muted-foreground">{{ option.description }}</p>
                         </button>
                       </div>
                     </FormControl>
@@ -922,10 +1036,10 @@ watch(
                 </section>
 
                 <section v-else-if="currentJobStep === 'details'" class="space-y-6">
-                  <div class="grid gap-4 rounded-2xl border border-slate-200 bg-white p-5 sm:grid-cols-2 lg:grid-cols-3">
+                  <div class="grid gap-4 rounded-2xl border border-border bg-card p-5 sm:grid-cols-2 lg:grid-cols-3">
                   <div class="sm:col-span-2 lg:col-span-3">
-                    <p class="text-sm font-semibold text-slate-950">Internship Details</p>
-                    <p class="mt-1 text-sm text-slate-600">Keep the duration, slots, and allowance, but use guided date and schedule inputs to avoid repetitive typing.</p>
+                    <p class="text-sm font-semibold text-foreground">Internship Details</p>
+                    <p class="mt-1 text-sm text-muted-foreground">Keep the duration, slots, and allowance, but use guided date and schedule inputs to avoid repetitive typing.</p>
                   </div>
                   <FormItem>
                     <FormLabel for="jobDuration">Duration</FormLabel>
@@ -955,7 +1069,7 @@ watch(
                     <FormLabel for="jobStartDate">Start Date</FormLabel>
                     <FormControl>
                       <div class="relative">
-                        <CalendarDays class="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                        <CalendarDays class="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                         <Input id="jobStartDate" v-model="jobForm.startDate" type="date" class="pl-10" />
                       </div>
                     </FormControl>
@@ -964,7 +1078,7 @@ watch(
                     <FormLabel for="jobEndDate">End Date</FormLabel>
                     <FormControl>
                       <div class="relative">
-                        <CalendarDays class="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                        <CalendarDays class="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                         <Input id="jobEndDate" v-model="jobForm.endDate" type="date" class="pl-10" />
                       </div>
                     </FormControl>
@@ -978,21 +1092,21 @@ watch(
                           :key="option.value"
                           type="button"
                           class="rounded-2xl border p-4 text-left transition"
-                          :class="jobForm.status === option.value ? 'border-sky-300 bg-sky-50 shadow-sm' : 'border-slate-200 bg-slate-50 hover:border-slate-300'"
+                          :class="jobForm.status === option.value ? 'border-primary/40 bg-accent shadow-sm' : 'border-border bg-muted hover:border-border'"
                           @click="jobForm.status = option.value as JobFormState['status']"
                         >
-                          <p class="text-sm font-semibold text-slate-950">{{ option.label }}</p>
-                          <p class="mt-1 text-xs leading-5 text-slate-600">{{ option.description }}</p>
+                          <p class="text-sm font-semibold text-foreground">{{ option.label }}</p>
+                          <p class="mt-1 text-xs leading-5 text-muted-foreground">{{ option.description }}</p>
                         </button>
                       </div>
                     </FormControl>
                   </FormItem>
                   </div>
 
-                  <div class="grid gap-4 rounded-2xl border border-slate-200 bg-white p-5 sm:grid-cols-2">
+                  <div class="grid gap-4 rounded-2xl border border-border bg-card p-5 sm:grid-cols-2">
                     <div class="sm:col-span-2">
-                      <p class="text-sm font-semibold text-slate-950">Schedule</p>
-                      <p class="mt-1 text-sm text-slate-600">Pick the internship days and time range directly.</p>
+                      <p class="text-sm font-semibold text-foreground">Schedule</p>
+                      <p class="mt-1 text-sm text-muted-foreground">Pick the internship days and time range directly.</p>
                     </div>
                     <div class="sm:col-span-2 grid gap-3 md:grid-cols-4 xl:grid-cols-7">
                       <button
@@ -1000,7 +1114,7 @@ watch(
                         :key="day"
                         type="button"
                         class="rounded-2xl border px-4 py-3 text-sm font-medium transition"
-                        :class="jobForm.scheduleDays.includes(day) ? 'border-sky-300 bg-sky-50 text-sky-900' : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300'"
+                        :class="jobForm.scheduleDays.includes(day) ? 'border-primary/40 bg-accent text-foreground' : 'border-border bg-muted text-foreground hover:border-border'"
                         @click="toggleScheduleDay(day)"
                       >
                         {{ day }}
@@ -1018,12 +1132,38 @@ watch(
                         <Input id="jobScheduleEnd" v-model="jobForm.scheduleEndTime" type="time" />
                       </FormControl>
                     </FormItem>
+                    <FormItem>
+                      <FormLabel for="jobScheduleType">Schedule Type</FormLabel>
+                      <FormControl>
+                        <select
+                          id="jobScheduleType"
+                          v-model="jobForm.scheduleType"
+                          class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                        >
+                          <option value="fixed">Fixed</option>
+                          <option value="rotating">Rotating</option>
+                          <option value="flexible">Flexible</option>
+                        </select>
+                      </FormControl>
+                    </FormItem>
+                    <FormItem>
+                      <FormLabel for="jobWeeklyHours">Weekly Hours</FormLabel>
+                      <FormControl>
+                        <Input id="jobWeeklyHours" v-model="jobForm.weeklyHours" type="number" min="0" max="168" step="0.5" placeholder="e.g. 40" />
+                      </FormControl>
+                    </FormItem>
+                    <FormItem class="sm:col-span-2">
+                      <label class="inline-flex items-center gap-2 text-sm text-foreground">
+                        <input v-model="jobForm.isFlexible" type="checkbox" class="h-4 w-4 rounded border-border" />
+                        Allow flexible schedule adjustments
+                      </label>
+                    </FormItem>
                   </div>
 
-                  <section class="grid gap-4 rounded-2xl border border-slate-200 bg-white p-5 sm:grid-cols-2">
+                  <section class="grid gap-4 rounded-2xl border border-border bg-card p-5 sm:grid-cols-2">
                   <div class="sm:col-span-2">
-                    <p class="text-sm font-semibold text-slate-950">Role Description</p>
-                    <p class="mt-1 text-sm text-slate-600">These fields help schools evaluate whether the internship is aligned with their students and course outcomes.</p>
+                    <p class="text-sm font-semibold text-foreground">Role Description</p>
+                    <p class="mt-1 text-sm text-muted-foreground">These fields help schools evaluate whether the internship is aligned with their students and course outcomes.</p>
                   </div>
                   <FormItem class="sm:col-span-2">
                     <FormLabel for="jobDescription">Overview</FormLabel>
@@ -1052,16 +1192,16 @@ watch(
                   <FormItem class="sm:col-span-2">
                     <FormLabel for="jobRequiredSkills">Required Skills or Tools</FormLabel>
                     <FormControl>
-                      <div class="space-y-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                      <div class="space-y-4 rounded-2xl border border-border bg-muted/80 p-4">
                         <div class="flex flex-col gap-3 sm:flex-row">
                           <Input
                             id="jobRequiredSkills"
                             v-model="chipInput.requiredSkill"
-                            class="bg-white"
+                            class="bg-card"
                             placeholder="Add a skill like Communication, Git, or Excel"
                             @keydown.enter.prevent="commitChipInput('requiredSkill')"
                           />
-                          <Button type="button" variant="outline" class="shrink-0 bg-white" @click="commitChipInput('requiredSkill')">
+                          <Button type="button" variant="outline" class="shrink-0 bg-card" @click="commitChipInput('requiredSkill')">
                             Add Skill
                           </Button>
                         </div>
@@ -1069,19 +1209,19 @@ watch(
                           <span
                             v-for="skill in asList(jobForm.requiredSkillsText)"
                             :key="skill"
-                            class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm"
+                            class="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground shadow-sm"
                           >
                             {{ skill }}
                             <button
                               type="button"
-                              class="rounded-full px-1 text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+                              class="rounded-full px-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
                               @click="removeListItem('requiredSkillsText', skill)"
                             >
                               x
                             </button>
                           </span>
                         </div>
-                        <p v-else class="text-sm text-slate-500">No required skills added yet.</p>
+                        <p v-else class="text-sm text-muted-foreground">No required skills added yet.</p>
                       </div>
                     </FormControl>
                   </FormItem>
@@ -1100,14 +1240,14 @@ watch(
                   </section>
                 </section>
 
-                <section v-else-if="currentJobStep === 'programs'" class="grid gap-4 rounded-2xl border border-slate-200 bg-white p-5">
+                <section v-else-if="currentJobStep === 'programs'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
                   <div class="sm:col-span-2">
-                    <p class="text-sm font-semibold text-slate-950">Accepted Programs</p>
-                    <p class="mt-1 text-sm text-slate-600">These courses come from the company account so you only choose which of your accepted programs apply to this post.</p>
+                    <p class="text-sm font-semibold text-foreground">Accepted Programs</p>
+                    <p class="mt-1 text-sm text-muted-foreground">These courses come from the company account so you only choose which of your accepted programs apply to this post.</p>
                   </div>
                   <div
                     v-if="companyAcceptedCourses.length"
-                    class="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900"
+                    class="rounded-2xl border border-border bg-accent px-4 py-3 text-sm text-foreground"
                   >
                     Company profile courses: {{ companyAcceptedCourses.join(', ') }}
                   </div>
@@ -1117,11 +1257,11 @@ watch(
                       :key="course"
                       type="button"
                       class="rounded-2xl border p-4 text-left transition"
-                      :class="asList(jobForm.eligibleCoursesText).includes(course) ? 'border-sky-300 bg-sky-50 shadow-sm' : 'border-slate-200 bg-slate-50 hover:border-slate-300'"
+                      :class="asList(jobForm.eligibleCoursesText).includes(course) ? 'border-primary/40 bg-accent shadow-sm' : 'border-border bg-muted hover:border-border'"
                       @click="asList(jobForm.eligibleCoursesText).includes(course) ? removeListItem('eligibleCoursesText', course) : addListItem('eligibleCoursesText', course)"
                     >
-                      <p class="text-sm font-semibold text-slate-950">{{ course }}</p>
-                      <p class="mt-1 text-xs text-slate-600">
+                      <p class="text-sm font-semibold text-foreground">{{ course }}</p>
+                      <p class="mt-1 text-xs text-muted-foreground">
                         {{ asList(jobForm.eligibleCoursesText).includes(course) ? 'Included in this post' : 'Click to include this course' }}
                       </p>
                     </button>
@@ -1129,15 +1269,15 @@ watch(
                   <div v-else class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                     No accepted courses are saved on the company account yet. Add them in the company settings page first.
                   </div>
-                  <div v-if="asList(jobForm.eligibleCoursesText).length" class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                  <div v-if="asList(jobForm.eligibleCoursesText).length" class="rounded-2xl border border-border bg-muted px-4 py-3 text-sm text-foreground">
                     Selected for this post: {{ asList(jobForm.eligibleCoursesText).join(', ') }}
                   </div>
                 </section>
 
-                <section v-else class="grid gap-4 rounded-2xl border border-slate-200 bg-white p-5 sm:grid-cols-2">
+                <section v-else class="grid gap-4 rounded-2xl border border-border bg-card p-5 sm:grid-cols-2">
                   <div class="sm:col-span-2">
-                    <p class="text-sm font-semibold text-slate-950">Requirements</p>
-                    <p class="mt-1 text-sm text-slate-600">Document requirements, how to apply, and who schools or students should contact.</p>
+                    <p class="text-sm font-semibold text-foreground">Requirements</p>
+                    <p class="mt-1 text-sm text-muted-foreground">Document requirements, how to apply, and who schools or students should contact.</p>
                   </div>
                   <FormItem class="sm:col-span-2">
                     <FormLabel for="jobRequiredDocuments">Required Documents</FormLabel>
@@ -1147,11 +1287,11 @@ watch(
                           <Input
                             id="jobRequiredDocuments"
                             v-model="chipInput.requiredDocument"
-                            class="bg-white"
+                            class="bg-card"
                             placeholder="Add a document like Resume, MOA, or Endorsement Letter"
                             @keydown.enter.prevent="commitChipInput('requiredDocument')"
                           />
-                          <Button type="button" variant="outline" class="shrink-0 bg-white" @click="commitChipInput('requiredDocument')">
+                          <Button type="button" variant="outline" class="shrink-0 bg-card" @click="commitChipInput('requiredDocument')">
                             Add Document
                           </Button>
                         </div>
@@ -1159,7 +1299,7 @@ watch(
                           <span
                             v-for="document in asList(jobForm.requiredDocumentsText)"
                             :key="document"
-                            class="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 shadow-sm"
+                            class="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-card px-3 py-1.5 text-xs font-semibold text-amber-700 shadow-sm"
                           >
                             {{ document }}
                             <button
@@ -1171,7 +1311,7 @@ watch(
                             </button>
                           </span>
                         </div>
-                        <p v-else class="text-sm text-slate-500">No document requirements added yet.</p>
+                        <p v-else class="text-sm text-muted-foreground">No document requirements added yet.</p>
                       </div>
                     </FormControl>
                   </FormItem>
@@ -1190,14 +1330,14 @@ watch(
                   <FormItem class="sm:col-span-2">
                     <FormLabel for="jobContact">Contact Information</FormLabel>
                     <FormControl>
-                      <Input id="jobContact" v-model="jobForm.contactInfo" readonly class="bg-slate-50 text-slate-600" />
+                      <Input id="jobContact" v-model="jobForm.contactInfo" readonly class="bg-muted text-muted-foreground" />
                     </FormControl>
                   </FormItem>
                 </section>
               </div>
 
-              <div class="mt-6 flex flex-col gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between">
-                <div class="text-sm text-slate-500">Step {{ wizardStepIndex + 1 }} of {{ wizardSteps.length }}</div>
+              <div class="mt-6 flex flex-col gap-3 border-t border-border pt-6 sm:flex-row sm:items-center sm:justify-between">
+                <div class="text-sm text-muted-foreground">Step {{ wizardStepIndex + 1 }} of {{ wizardSteps.length }}</div>
                 <div class="flex flex-wrap justify-end gap-3">
                   <Button type="button" variant="outline" @click="closeJobEditor">
                     Cancel
@@ -1220,7 +1360,7 @@ watch(
             </Card>
           </div>
 
-          <div class="rounded-xl border border-border bg-white">
+          <div class="rounded-xl border border-border bg-card">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1245,12 +1385,12 @@ watch(
                   <TableRow v-for="job in jobRows" :key="job.id">
                     <TableCell>
                       <div class="space-y-1">
-                        <p class="font-medium text-slate-950">{{ job.title }}</p>
-                        <p class="text-sm text-slate-500">{{ job.location || 'Location not set' }}</p>
+                        <p class="font-medium text-foreground">{{ job.title }}</p>
+                        <p class="text-sm text-muted-foreground">{{ job.location || 'Location not set' }}</p>
                       </div>
                     </TableCell>
-                    <TableCell class="text-slate-700">{{ job.slotsAvailable }}</TableCell>
-                    <TableCell class="text-slate-700">{{ job.applicationCount }}</TableCell>
+                    <TableCell class="text-foreground">{{ job.slotsAvailable }}</TableCell>
+                    <TableCell class="text-foreground">{{ job.applicationCount }}</TableCell>
                     <TableCell>
                       <Badge :variant="jobBadgeVariant(job.status)">{{ badgeLabel(job.status) }}</Badge>
                     </TableCell>
@@ -1292,16 +1432,16 @@ watch(
       <Card v-else class="border-border/80 shadow-sm">
         <CardHeader class="space-y-4">
           <div>
-            <h2 class="text-2xl font-semibold text-slate-950">Applicants</h2>
-            <p class="text-sm text-slate-600">Review endorsed applicants, open their profile summary, and make the final company decision.</p>
+            <h2 class="text-2xl font-semibold text-foreground">Applicants</h2>
+            <p class="text-sm text-muted-foreground">Review endorsed applicants, open their profile summary, and make the final company decision.</p>
           </div>
           <div class="relative max-w-md">
-            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input v-model="searchApplicants" placeholder="Search applicants..." class="pl-9" />
           </div>
         </CardHeader>
         <CardContent>
-          <div class="rounded-xl border border-border bg-white">
+          <div class="rounded-xl border border-border bg-card">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1326,12 +1466,12 @@ watch(
                   <TableRow v-for="applicant in applicantRows" :key="applicant.id">
                     <TableCell>
                       <div class="space-y-1">
-                        <p class="font-medium text-slate-950">{{ applicant.studentName || 'Unnamed intern' }}</p>
-                        <p class="text-sm text-slate-500">{{ applicant.internshipTitle || 'Untitled role' }}</p>
+                        <p class="font-medium text-foreground">{{ applicant.studentName || 'Unnamed intern' }}</p>
+                        <p class="text-sm text-muted-foreground">{{ applicant.internshipTitle || 'Untitled role' }}</p>
                       </div>
                     </TableCell>
-                    <TableCell class="text-slate-700">{{ applicant.schoolName || 'School not provided' }}</TableCell>
-                    <TableCell class="text-slate-600">{{ formatDate(applicant.createdAt) }}</TableCell>
+                    <TableCell class="text-foreground">{{ applicant.schoolName || 'School not provided' }}</TableCell>
+                    <TableCell class="text-muted-foreground">{{ formatDate(applicant.createdAt) }}</TableCell>
                     <TableCell>
                       <Badge :variant="applicantBadgeVariant(applicant.status)">{{ badgeLabel(applicant.status) }}</Badge>
                     </TableCell>
@@ -1379,36 +1519,41 @@ watch(
       <template #default="{ close }">
         <DialogHeader>
           <DialogTitle>Applicant Profile</DialogTitle>
-          <p class="text-sm text-slate-600">Review the applicant details before you decide how to move their application forward.</p>
+          <p class="text-sm text-muted-foreground">Review the applicant details before you decide how to move their application forward.</p>
         </DialogHeader>
 
         <div v-if="selectedApplicant" class="mt-6 grid gap-4 sm:grid-cols-2">
-          <div class="rounded-2xl bg-slate-50 p-4">
-            <p class="text-sm font-medium text-slate-500">Intern Name</p>
-            <p class="mt-2 text-sm font-semibold text-slate-950">{{ selectedApplicant.studentName || 'Not provided' }}</p>
+          <div class="rounded-2xl bg-muted p-4">
+            <p class="text-sm font-medium text-muted-foreground">Intern Name</p>
+            <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedApplicant.studentName || 'Not provided' }}</p>
           </div>
-          <div class="rounded-2xl bg-slate-50 p-4">
-            <p class="text-sm font-medium text-slate-500">Email</p>
-            <p class="mt-2 text-sm font-semibold text-slate-950">{{ selectedApplicant.studentEmail || 'Not provided' }}</p>
+          <div class="rounded-2xl bg-muted p-4">
+            <p class="text-sm font-medium text-muted-foreground">Email</p>
+            <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedApplicant.studentEmail || 'Not provided' }}</p>
           </div>
-          <div class="rounded-2xl bg-slate-50 p-4">
-            <p class="text-sm font-medium text-slate-500">School</p>
-            <p class="mt-2 text-sm font-semibold text-slate-950">{{ selectedApplicant.schoolName || 'Not provided' }}</p>
+          <div class="rounded-2xl bg-muted p-4">
+            <p class="text-sm font-medium text-muted-foreground">School</p>
+            <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedApplicant.schoolName || 'Not provided' }}</p>
           </div>
-          <div class="rounded-2xl bg-slate-50 p-4">
-            <p class="text-sm font-medium text-slate-500">Course</p>
-            <p class="mt-2 text-sm font-semibold text-slate-950">{{ selectedApplicant.studentCourse || 'Not provided' }}</p>
+          <div class="rounded-2xl bg-muted p-4">
+            <p class="text-sm font-medium text-muted-foreground">Course</p>
+            <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedApplicant.studentCourse || 'Not provided' }}</p>
           </div>
-          <div class="rounded-2xl bg-slate-50 p-4">
-            <p class="text-sm font-medium text-slate-500">Applied Role</p>
-            <p class="mt-2 text-sm font-semibold text-slate-950">{{ selectedApplicant.internshipTitle || 'Not provided' }}</p>
+          <div class="rounded-2xl bg-muted p-4">
+            <p class="text-sm font-medium text-muted-foreground">Applied Role</p>
+            <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedApplicant.internshipTitle || 'Not provided' }}</p>
           </div>
-          <div class="rounded-2xl bg-slate-50 p-4">
-            <p class="text-sm font-medium text-slate-500">Current Status</p>
+          <div class="rounded-2xl bg-muted p-4">
+            <p class="text-sm font-medium text-muted-foreground">Current Status</p>
             <div class="mt-2">
               <Badge :variant="applicantBadgeVariant(selectedApplicant.status)">{{ badgeLabel(selectedApplicant.status) }}</Badge>
             </div>
           </div>
+        </div>
+
+        <div v-if="selectedApplicant" class="mt-6 space-y-4">
+          <ApplicationInterviewPanel :application-id="selectedApplicant.id" mode="manage" />
+          <ApplicationAssessmentPanel :application-id="selectedApplicant.id" />
         </div>
 
         <div class="mt-6 flex justify-end gap-3">
@@ -1427,88 +1572,88 @@ watch(
       <template #default>
         <DialogHeader>
           <DialogTitle>{{ selectedJob?.title || 'Job Posting' }}</DialogTitle>
-          <p class="text-sm text-slate-600">Review the posted job details without entering edit mode.</p>
+          <p class="text-sm text-muted-foreground">Review the posted job details without entering edit mode.</p>
         </DialogHeader>
 
         <div v-if="selectedJob" class="mt-6 space-y-6">
           <div class="grid gap-4 sm:grid-cols-2">
-            <div class="rounded-2xl bg-slate-50 p-4">
-              <p class="text-sm font-medium text-slate-500">Company</p>
-              <p class="mt-2 text-sm font-semibold text-slate-950">{{ selectedJob.companyName || 'Not provided' }}</p>
+            <div class="rounded-2xl bg-muted p-4">
+              <p class="text-sm font-medium text-muted-foreground">Company</p>
+              <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedJob.companyName || 'Not provided' }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4">
-              <p class="text-sm font-medium text-slate-500">Status</p>
+            <div class="rounded-2xl bg-muted p-4">
+              <p class="text-sm font-medium text-muted-foreground">Status</p>
               <div class="mt-2">
                 <Badge :variant="jobBadgeVariant(selectedJob.status)">{{ badgeLabel(selectedJob.status) }}</Badge>
               </div>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4">
-              <p class="text-sm font-medium text-slate-500">Location</p>
-              <p class="mt-2 text-sm font-semibold text-slate-950">{{ selectedJob.location || 'Not provided' }}</p>
+            <div class="rounded-2xl bg-muted p-4">
+              <p class="text-sm font-medium text-muted-foreground">Location</p>
+              <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedJob.location || 'Not provided' }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4">
-              <p class="text-sm font-medium text-slate-500">Work Setup</p>
-              <p class="mt-2 text-sm font-semibold text-slate-950">{{ selectedJob.type || 'Not provided' }}</p>
+            <div class="rounded-2xl bg-muted p-4">
+              <p class="text-sm font-medium text-muted-foreground">Work Setup</p>
+              <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedJob.type || 'Not provided' }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4">
-              <p class="text-sm font-medium text-slate-500">Duration</p>
-              <p class="mt-2 text-sm font-semibold text-slate-950">{{ selectedJob.duration || 'Not provided' }}</p>
+            <div class="rounded-2xl bg-muted p-4">
+              <p class="text-sm font-medium text-muted-foreground">Duration</p>
+              <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedJob.duration || 'Not provided' }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4">
-              <p class="text-sm font-medium text-slate-500">Slots</p>
-              <p class="mt-2 text-sm font-semibold text-slate-950">{{ selectedJob.slotsAvailable || 0 }}</p>
+            <div class="rounded-2xl bg-muted p-4">
+              <p class="text-sm font-medium text-muted-foreground">Slots</p>
+              <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedJob.slotsAvailable || 0 }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4">
-              <p class="text-sm font-medium text-slate-500">Applicants</p>
-              <p class="mt-2 text-sm font-semibold text-slate-950">{{ selectedJob.applicationCount ?? 0 }}</p>
+            <div class="rounded-2xl bg-muted p-4">
+              <p class="text-sm font-medium text-muted-foreground">Applicants</p>
+              <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedJob.applicationCount ?? 0 }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4">
-              <p class="text-sm font-medium text-slate-500">Allowance</p>
-              <p class="mt-2 text-sm font-semibold text-slate-950">{{ selectedJob.allowance || 'Not provided' }}</p>
+            <div class="rounded-2xl bg-muted p-4">
+              <p class="text-sm font-medium text-muted-foreground">Allowance</p>
+              <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedJob.allowance || 'Not provided' }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4">
-              <p class="text-sm font-medium text-slate-500">Start Date</p>
-              <p class="mt-2 text-sm font-semibold text-slate-950">{{ formatDate(selectedJob.startDate) }}</p>
+            <div class="rounded-2xl bg-muted p-4">
+              <p class="text-sm font-medium text-muted-foreground">Start Date</p>
+              <p class="mt-2 text-sm font-semibold text-foreground">{{ formatDate(selectedJob.startDate) }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4">
-              <p class="text-sm font-medium text-slate-500">End Date</p>
-              <p class="mt-2 text-sm font-semibold text-slate-950">{{ formatDate(selectedJob.endDate) }}</p>
+            <div class="rounded-2xl bg-muted p-4">
+              <p class="text-sm font-medium text-muted-foreground">End Date</p>
+              <p class="mt-2 text-sm font-semibold text-foreground">{{ formatDate(selectedJob.endDate) }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4 sm:col-span-2">
-              <p class="text-sm font-medium text-slate-500">Schedule</p>
-              <p class="mt-2 text-sm font-semibold text-slate-950">{{ selectedJob.schedule || 'Not provided' }}</p>
+            <div class="rounded-2xl bg-muted p-4 sm:col-span-2">
+              <p class="text-sm font-medium text-muted-foreground">Schedule</p>
+              <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedJob.schedule || 'Not provided' }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4 sm:col-span-2">
-              <p class="text-sm font-medium text-slate-500">Description</p>
-              <p class="mt-2 whitespace-pre-line text-sm text-slate-700">{{ selectedJob.description || 'Not provided' }}</p>
+            <div class="rounded-2xl bg-muted p-4 sm:col-span-2">
+              <p class="text-sm font-medium text-muted-foreground">Description</p>
+              <p class="mt-2 whitespace-pre-line text-sm text-foreground">{{ selectedJob.description || 'Not provided' }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4 sm:col-span-2">
-              <p class="text-sm font-medium text-slate-500">Tasks</p>
-              <p class="mt-2 whitespace-pre-line text-sm text-slate-700">{{ selectedJob.tasks || 'Not provided' }}</p>
+            <div class="rounded-2xl bg-muted p-4 sm:col-span-2">
+              <p class="text-sm font-medium text-muted-foreground">Tasks</p>
+              <p class="mt-2 whitespace-pre-line text-sm text-foreground">{{ selectedJob.tasks || 'Not provided' }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4 sm:col-span-2">
-              <p class="text-sm font-medium text-slate-500">Accepted Programs</p>
-              <p class="mt-2 text-sm text-slate-700">{{ (selectedJob.eligibleCourses || []).join(', ') || 'Not provided' }}</p>
+            <div class="rounded-2xl bg-muted p-4 sm:col-span-2">
+              <p class="text-sm font-medium text-muted-foreground">Accepted Programs</p>
+              <p class="mt-2 text-sm text-foreground">{{ (selectedJob.eligibleCourses || []).join(', ') || 'Not provided' }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4 sm:col-span-2">
-              <p class="text-sm font-medium text-slate-500">Required Skills</p>
-              <p class="mt-2 text-sm text-slate-700">{{ (selectedJob.requiredSkills || selectedJob.requirements || []).join(', ') || 'Not provided' }}</p>
+            <div class="rounded-2xl bg-muted p-4 sm:col-span-2">
+              <p class="text-sm font-medium text-muted-foreground">Required Skills</p>
+              <p class="mt-2 text-sm text-foreground">{{ (selectedJob.requiredSkills || selectedJob.requirements || []).join(', ') || 'Not provided' }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4 sm:col-span-2">
-              <p class="text-sm font-medium text-slate-500">Required Documents</p>
-              <p class="mt-2 text-sm text-slate-700">{{ (selectedJob.requiredDocuments || []).join(', ') || 'Not provided' }}</p>
+            <div class="rounded-2xl bg-muted p-4 sm:col-span-2">
+              <p class="text-sm font-medium text-muted-foreground">Required Documents</p>
+              <p class="mt-2 text-sm text-foreground">{{ (selectedJob.requiredDocuments || []).join(', ') || 'Not provided' }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4 sm:col-span-2">
-              <p class="text-sm font-medium text-slate-500">Intern Gains</p>
-              <p class="mt-2 whitespace-pre-line text-sm text-slate-700">{{ selectedJob.internGains || 'Not provided' }}</p>
+            <div class="rounded-2xl bg-muted p-4 sm:col-span-2">
+              <p class="text-sm font-medium text-muted-foreground">Intern Gains</p>
+              <p class="mt-2 whitespace-pre-line text-sm text-foreground">{{ selectedJob.internGains || 'Not provided' }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4 sm:col-span-2">
-              <p class="text-sm font-medium text-slate-500">How to Apply</p>
-              <p class="mt-2 whitespace-pre-line text-sm text-slate-700">{{ selectedJob.applicationInstructions || 'Not provided' }}</p>
+            <div class="rounded-2xl bg-muted p-4 sm:col-span-2">
+              <p class="text-sm font-medium text-muted-foreground">How to Apply</p>
+              <p class="mt-2 whitespace-pre-line text-sm text-foreground">{{ selectedJob.applicationInstructions || 'Not provided' }}</p>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4 sm:col-span-2">
-              <p class="text-sm font-medium text-slate-500">Contact Information</p>
-              <p class="mt-2 text-sm text-slate-700">{{ selectedJob.contactInfo || 'Not provided' }}</p>
+            <div class="rounded-2xl bg-muted p-4 sm:col-span-2">
+              <p class="text-sm font-medium text-muted-foreground">Contact Information</p>
+              <p class="mt-2 text-sm text-foreground">{{ selectedJob.contactInfo || 'Not provided' }}</p>
             </div>
           </div>
 

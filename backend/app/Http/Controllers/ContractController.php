@@ -3,15 +3,18 @@
 namespace App\Http\Controllers;
 
 use App\Models\Contract;
+use App\Models\Notification;
 use App\Models\User;
 use App\Services\Contracts\ContractRequestService;
+use App\Services\PermissionGate;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 
 class ContractController extends Controller
 {
     public function __construct(
-        private readonly ContractRequestService $contractRequestService
+        private readonly ContractRequestService $contractRequestService,
+        private readonly PermissionGate $permissions
     ) {
     }
 
@@ -19,6 +22,9 @@ class ContractController extends Controller
     {
         $user = $request->user();
         $appRole = $user->effectiveAppRole();
+        if ($appRole !== 'admin' && ! $this->permissions->userCanAny($user, ['org.view_agreements', 'org.manage_agreements'])) {
+            return response()->json(['message' => 'Missing permission to view agreements.'], Response::HTTP_FORBIDDEN);
+        }
         $schoolAccount = $user->organizationSchool() ?? $user->school;
         $companyAccount = $user->organizationCompany() ?? $user->company;
         $query = Contract::query()
@@ -81,15 +87,20 @@ class ContractController extends Controller
         $user = $request->user();
         $appRole = $user->effectiveAppRole();
         if (! in_array($appRole, ['school', 'company'], true)) {
-            return response()->json(['message' => 'Only school and company accounts can create contracts.'], Response::HTTP_FORBIDDEN);
+            return response()->json(['message' => 'Only school and company accounts can create agreements.'], Response::HTTP_FORBIDDEN);
+        }
+        if (! $this->permissions->userCan($user, 'org.manage_agreements')) {
+            return response()->json(['message' => 'Missing permission to manage agreements.'], Response::HTTP_FORBIDDEN);
         }
 
         $data = $request->validate([
             'requestedByRole' => ['required', 'in:school,company'],
             'subject' => ['required', 'string', 'max:255'],
             'contractType' => ['nullable', 'string', 'max:255'],
-            'contract_type_id' => ['nullable', 'integer', 'exists:contract_types,id'],
+            'contract_type_id' => ['nullable', 'integer', 'exists:'.(\Illuminate\Support\Facades\Schema::hasTable('agreement_types') ? 'agreement_types' : 'contract_types').',id'],
+            'agreement_type_id' => ['nullable', 'integer', 'exists:'.(\Illuminate\Support\Facades\Schema::hasTable('agreement_types') ? 'agreement_types' : 'contract_types').',id'],
             'contract_type_label' => ['nullable', 'string', 'max:255'],
+            'agreement_type_label' => ['nullable', 'string', 'max:255'],
             'moaReferenceNo' => ['nullable', 'string', 'max:255'],
             'purpose' => ['nullable', 'string'],
             'startDate' => ['nullable', 'date'],
@@ -128,6 +139,25 @@ class ContractController extends Controller
             $request->file('files', [])
         );
 
+        // Service rejects pending duplicates; a successful return is always a newly created agreement.
+        $recipientId = $contract->requested_by_role === 'school'
+            ? $contract->company_user_id
+            : $contract->school_user_id;
+
+        if ($recipientId) {
+            Notification::query()->create([
+                'user_id' => (int) $recipientId,
+                'title' => 'New agreement request',
+                'body' => 'You received a new agreement request: '.($contract->subject ?: 'Agreement').'.',
+                'channel' => 'in_app',
+                'metadata' => [
+                    'type' => 'system',
+                    'agreementId' => (string) $contract->id,
+                    'redirectTo' => '/agreements',
+                ],
+            ]);
+        }
+
         return response()->json(['data' => $this->serialize($contract)], Response::HTTP_CREATED);
     }
 
@@ -135,12 +165,16 @@ class ContractController extends Controller
     {
         $user = $request->user();
         if (! $this->canRespond($contract, $user->id, (string) $user->effectiveAppRole())) {
-            return response()->json(['message' => 'Only the receiving party can accept this contract request.'], Response::HTTP_FORBIDDEN);
+            return response()->json(['message' => 'Only the receiving party can accept this agreement request.'], Response::HTTP_FORBIDDEN);
         }
-        if ($contract->status !== 'pending') {
-            return response()->json(['message' => 'Only pending contracts can be accepted.'], Response::HTTP_UNPROCESSABLE_ENTITY);
+        if (! $this->permissions->userCan($user, 'org.approve_agreements')) {
+            return response()->json(['message' => 'Missing permission to approve agreements.'], Response::HTTP_FORBIDDEN);
+        }
+        if (! in_array($contract->status, ['pending', 'pending_amendment'], true)) {
+            return response()->json(['message' => 'Only pending agreements can be accepted.'], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
+        $previousStatus = (string) $contract->status;
         $contract->update([
             'status' => 'active',
             'rejected_reason' => null,
@@ -148,6 +182,25 @@ class ContractController extends Controller
             'cancelled_at' => null,
             'cancelled_by_role' => null,
         ]);
+
+        if ($previousStatus !== 'active') {
+            $requesterId = $contract->requested_by_user_id
+                ?: ($contract->requested_by_role === 'school' ? $contract->school_user_id : $contract->company_user_id);
+
+            if ($requesterId) {
+                Notification::query()->create([
+                    'user_id' => (int) $requesterId,
+                    'title' => 'Agreement accepted',
+                    'body' => 'Your agreement request "'.($contract->subject ?: 'Agreement').'" is now active.',
+                    'channel' => 'in_app',
+                    'metadata' => [
+                        'type' => 'system',
+                        'agreementId' => (string) $contract->id,
+                        'redirectTo' => '/agreements',
+                    ],
+                ]);
+            }
+        }
 
         return response()->json(['data' => $this->serialize($contract->fresh())]);
     }
@@ -181,7 +234,7 @@ class ContractController extends Controller
         if (! $this->isParticipant($contract, $user->id, (string) $appRole) && $appRole !== 'admin') {
             return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
         }
-        if (! in_array($contract->status, ['pending', 'active'], true)) {
+        if (! in_array($contract->status, ['pending', 'active', 'pending_amendment'], true)) {
             return response()->json(['message' => 'Only pending or active contracts can be cancelled.'], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
@@ -196,6 +249,111 @@ class ContractController extends Controller
             'cancelled_at' => now(),
             'cancelled_by_role' => $data['cancelledByRole'] ?? ($appRole === 'admin' ? null : $appRole),
         ]);
+
+        return response()->json(['data' => $this->serialize($contract->fresh())]);
+    }
+
+    public function amend(Request $request, Contract $contract)
+    {
+        $request->merge($this->normalizeIncomingPayload($request));
+
+        $user = $request->user();
+        $appRole = (string) $user->effectiveAppRole();
+
+        if (! $this->isParticipant($contract, $user->id, $appRole) && $appRole !== 'admin') {
+            return response()->json(['message' => 'Only agreement participants can amend this agreement.'], Response::HTTP_FORBIDDEN);
+        }
+
+        if ($appRole !== 'admin' && ! $this->permissions->userCan($user, 'org.manage_agreements')) {
+            return response()->json(['message' => 'Missing permission to manage agreements.'], Response::HTTP_FORBIDDEN);
+        }
+
+        if (! in_array($contract->status, ['pending', 'active'], true)) {
+            return response()->json(['message' => 'Only pending or active agreements can be amended.'], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $data = $request->validate([
+            'subject' => ['sometimes', 'string', 'max:255'],
+            'purpose' => ['sometimes', 'nullable', 'string'],
+            'startDate' => ['sometimes', 'nullable', 'date'],
+            'endDate' => ['sometimes', 'nullable', 'date', 'after_or_equal:startDate'],
+            'notes' => ['sometimes', 'nullable', 'string'],
+            'terms' => ['sometimes', 'nullable', 'string'],
+            'schoolResponsibilities' => ['sometimes', 'nullable', 'string'],
+            'companyResponsibilities' => ['sometimes', 'nullable', 'string'],
+            'internshipSlots' => ['sometimes', 'nullable', 'integer', 'min:1'],
+            'studentPrograms' => ['sometimes', 'nullable', 'string'],
+            'courseAllocations' => ['sometimes', 'nullable', 'array'],
+            'courseAllocations.*.course' => ['required_with:courseAllocations', 'string', 'max:255'],
+            'courseAllocations.*.slots' => ['required_with:courseAllocations', 'integer', 'min:1'],
+            'dynamic_fields' => ['sometimes', 'nullable'],
+            'attachments' => ['sometimes', 'nullable', 'array'],
+            'attachments.*.name' => ['required_with:attachments', 'string', 'max:255'],
+            'attachments.*.size' => ['nullable', 'integer', 'min:0'],
+            'attachments.*.type' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $fieldMap = [
+            'subject' => 'subject',
+            'purpose' => 'purpose',
+            'startDate' => 'start_date',
+            'endDate' => 'end_date',
+            'notes' => 'notes',
+            'terms' => 'terms',
+            'schoolResponsibilities' => 'school_responsibilities',
+            'companyResponsibilities' => 'company_responsibilities',
+            'internshipSlots' => 'internship_slots',
+            'studentPrograms' => 'student_programs',
+            'courseAllocations' => 'course_allocations',
+            'dynamic_fields' => 'dynamic_fields',
+            'attachments' => 'attachments',
+        ];
+
+        $changes = [];
+        $updates = [];
+
+        foreach ($fieldMap as $inputKey => $column) {
+            if (! array_key_exists($inputKey, $data)) {
+                continue;
+            }
+
+            $newValue = $data[$inputKey];
+            $oldValue = $contract->{$column};
+
+            if (in_array($column, ['start_date', 'end_date'], true)) {
+                $oldValue = $oldValue?->toDateString();
+            }
+
+            if ($newValue === $oldValue) {
+                continue;
+            }
+
+            $changes[$column] = ['from' => $oldValue, 'to' => $newValue];
+            $updates[$column] = $newValue;
+        }
+
+        if ($changes === []) {
+            return response()->json(['message' => 'No changes were provided.'], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $wasActive = $contract->status === 'active';
+
+        $metadata = $contract->metadata ?? [];
+        $amendments = $metadata['amendments'] ?? [];
+        $amendments[] = [
+            'at' => now()->toIso8601String(),
+            'by_user_id' => $user->id,
+            'by_role' => $appRole,
+            'changes' => $changes,
+        ];
+        $metadata['amendments'] = $amendments;
+        $updates['metadata'] = $metadata;
+
+        if ($wasActive) {
+            $updates['status'] = 'pending_amendment';
+        }
+
+        $contract->update($updates);
 
         return response()->json(['data' => $this->serialize($contract->fresh())]);
     }
@@ -230,7 +388,9 @@ class ContractController extends Controller
             'status' => $contract->status,
             'subject' => $contract->subject,
             'contractType' => $contract->contract_type,
+            'agreementType' => $contract->contract_type,
             'contractTypeId' => $contract->contract_type_id ? (string) $contract->contract_type_id : null,
+            'agreementTypeId' => $contract->contract_type_id ? (string) $contract->contract_type_id : null,
             'moaReferenceNo' => $contract->moa_reference_no,
             'purpose' => $contract->purpose,
             'startDate' => $contract->start_date?->toDateString(),

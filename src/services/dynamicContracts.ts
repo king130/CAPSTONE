@@ -54,14 +54,14 @@ export interface SubmittedContractResponse {
 }
 
 export async function fetchContractTypes(partnerUserId: string) {
-  const response = await apiClient.get<{ data: DynamicContractType[] }>('/contract-types', {
+  const response = await apiClient.get<{ data: DynamicContractType[] }>('/agreement-types', {
     params: { partnerUserId },
   })
   return response.data.data ?? []
 }
 
 export async function fetchManagedContractTypes() {
-  const response = await apiClient.get<{ data: ManagedContractTypesResponse }>('/contract-types/manage')
+  const response = await apiClient.get<{ data: ManagedContractTypesResponse }>('/agreement-types/manage')
   return response.data.data
 }
 
@@ -73,7 +73,7 @@ export async function createContractType(payload: {
   defaultValues?: Record<string, unknown>
   isActive?: boolean
 }) {
-  const response = await apiClient.post<{ data: DynamicContractType }>('/contract-types', payload)
+  const response = await apiClient.post<{ data: DynamicContractType }>('/agreement-types', payload)
   return response.data.data
 }
 
@@ -87,12 +87,12 @@ export async function updateContractType(
     isActive?: boolean
   },
 ) {
-  const response = await apiClient.patch<{ data: DynamicContractType }>(`/contract-types/${contractTypeId}`, payload)
+  const response = await apiClient.patch<{ data: DynamicContractType }>(`/agreement-types/${contractTypeId}`, payload)
   return response.data.data
 }
 
 export async function deleteContractType(contractTypeId: string) {
-  await apiClient.delete(`/contract-types/${contractTypeId}`)
+  await apiClient.delete(`/agreement-types/${contractTypeId}`)
 }
 
 export async function submitDynamicContract(payload: ContractSubmitPayload): Promise<SubmittedContractResponse> {
@@ -116,7 +116,7 @@ export async function submitDynamicContract(payload: ContractSubmitPayload): Pro
     form.append('files[]', file)
   }
 
-  const response = await apiClient.post<SubmittedContractResponse>('/contracts', form, {
+  const response = await apiClient.post<SubmittedContractResponse>('/agreements', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
 

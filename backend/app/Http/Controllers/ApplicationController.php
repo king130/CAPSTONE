@@ -4,15 +4,31 @@ namespace App\Http\Controllers;
 
 use App\Models\Application;
 use App\Models\Internship;
+use App\Models\Notification;
+use App\Services\InternshipEligibilityService;
+use App\Services\PermissionGate;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 
 class ApplicationController extends Controller
 {
+    public function __construct(
+        private readonly PermissionGate $permissions,
+        private readonly InternshipEligibilityService $internshipEligibility,
+    ) {
+    }
+
     public function index(Request $request)
     {
         $user = $request->user();
         $appRole = $user->effectiveAppRole();
+        if (
+            $appRole !== 'admin'
+            && $appRole !== 'student'
+            && ! $this->permissions->userCanAny($user, ['org.view_applications', 'org.approve_applications', 'org.manage_applications'])
+        ) {
+            return response()->json(['message' => 'Missing permission to view applications.'], Response::HTTP_FORBIDDEN);
+        }
         $query = Application::query()
             ->select([
                 'id',
@@ -81,6 +97,17 @@ class ApplicationController extends Controller
         $internship = Internship::query()->with('company')->findOrFail($data['internship_id']);
 
         $student = $user->student;
+        $eligibility = $this->internshipEligibility->evaluate($student, $internship);
+        if (! $eligibility['allowed']) {
+            return response()->json([
+                'message' => $eligibility['message'],
+                'code' => $eligibility['code'],
+                'errors' => [
+                    'internship_id' => [$eligibility['message']],
+                ],
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
         $companyId = $internship->company_id;
 
         $application = Application::query()->create([
@@ -100,9 +127,24 @@ class ApplicationController extends Controller
 
         $application->load([
             'student:id,user_id,school_id,school_subscription_code,school_name',
+            'student.school:id,user_id,institution_name',
             'internship:id,company_id,title',
             'internship.company:id,user_id,company_name',
         ]);
+
+        $schoolUserId = $application->student?->school?->user_id;
+        if ($schoolUserId) {
+            $this->createInAppNotification(
+                (int) $schoolUserId,
+                'New internship application',
+                trim(($application->student_name ?: 'A student').' submitted an application for '.($application->internship_title ?: 'an internship').'.'),
+                [
+                    'type' => 'application',
+                    'applicationId' => (string) $application->id,
+                    'redirectTo' => '/school/endorsements',
+                ]
+            );
+        }
 
         return response()->json(['data' => $this->serialize($application)], Response::HTTP_CREATED);
     }
@@ -145,6 +187,9 @@ class ApplicationController extends Controller
         $currentStatus = strtolower(trim((string) $application->status));
 
         if ($appRole === 'school') {
+            if (! $this->permissions->userCan($user, 'org.approve_applications')) {
+                return response()->json(['message' => 'Missing permission to approve applications.'], Response::HTTP_FORBIDDEN);
+            }
             if (! in_array($nextStatus, ['endorsed', 'school_rejected'], true)) {
                 return response()->json(['message' => 'Schools can only endorse or reject applications.'], Response::HTTP_UNPROCESSABLE_ENTITY);
             }
@@ -155,6 +200,9 @@ class ApplicationController extends Controller
         }
 
         if ($appRole === 'company') {
+            if (! $this->permissions->userCan($user, 'org.approve_applications')) {
+                return response()->json(['message' => 'Missing permission to approve applications.'], Response::HTTP_FORBIDDEN);
+            }
             if (! in_array($nextStatus, ['accepted', 'rejected'], true)) {
                 return response()->json(['message' => 'Companies can only accept or reject endorsed applications.'], Response::HTTP_UNPROCESSABLE_ENTITY);
             }
@@ -168,15 +216,106 @@ class ApplicationController extends Controller
             return response()->json(['message' => 'Students cannot update application decisions.'], Response::HTTP_FORBIDDEN);
         }
 
+        $previousStatus = $currentStatus;
         $application->update(['status' => $nextStatus]);
 
         $freshApplication = $application->fresh([
             'student:id,user_id,school_id,school_subscription_code,school_name',
             'internship:id,company_id,title',
             'internship.company:id,user_id,company_name',
+            'company:id,user_id,company_name',
         ]);
 
+        if ($previousStatus !== $nextStatus) {
+            $this->notifyApplicationStatusChange($freshApplication, $nextStatus);
+        }
+
         return response()->json(['data' => $this->serialize($freshApplication)]);
+    }
+
+    private function notifyApplicationStatusChange(Application $application, string $nextStatus): void
+    {
+        $title = $application->internship_title ?: 'internship application';
+
+        if ($nextStatus === 'endorsed') {
+            $companyUserId = $application->company?->user_id ?? $application->internship?->company?->user_id;
+            if ($companyUserId) {
+                $this->createInAppNotification(
+                    (int) $companyUserId,
+                    'Application endorsed',
+                    trim(($application->student_name ?: 'A student').' was endorsed for '.$title.'.'),
+                    [
+                        'type' => 'endorsement',
+                        'applicationId' => (string) $application->id,
+                        'redirectTo' => '/dashboard/applicants',
+                    ]
+                );
+            }
+
+            return;
+        }
+
+        $studentUserId = $application->student?->user_id;
+        if (! $studentUserId) {
+            return;
+        }
+
+        if ($nextStatus === 'school_rejected') {
+            $this->createInAppNotification(
+                (int) $studentUserId,
+                'Application not endorsed',
+                'Your school did not endorse your application for '.$title.'.',
+                [
+                    'type' => 'application',
+                    'applicationId' => (string) $application->id,
+                    'redirectTo' => '/intern/applications',
+                ]
+            );
+
+            return;
+        }
+
+        if ($nextStatus === 'accepted') {
+            $this->createInAppNotification(
+                (int) $studentUserId,
+                'Application accepted',
+                'Your application for '.$title.' was accepted.',
+                [
+                    'type' => 'application',
+                    'applicationId' => (string) $application->id,
+                    'redirectTo' => '/intern/applications',
+                ]
+            );
+
+            return;
+        }
+
+        if ($nextStatus === 'rejected') {
+            $this->createInAppNotification(
+                (int) $studentUserId,
+                'Application rejected',
+                'Your application for '.$title.' was rejected by the company.',
+                [
+                    'type' => 'application',
+                    'applicationId' => (string) $application->id,
+                    'redirectTo' => '/intern/applications',
+                ]
+            );
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $metadata
+     */
+    private function createInAppNotification(int $userId, string $title, string $body, array $metadata): void
+    {
+        Notification::query()->create([
+            'user_id' => $userId,
+            'title' => $title,
+            'body' => $body,
+            'channel' => 'in_app',
+            'metadata' => $metadata,
+        ]);
     }
 
     /**

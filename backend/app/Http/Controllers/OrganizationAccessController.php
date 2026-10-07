@@ -8,8 +8,10 @@ use App\Models\Role;
 use App\Models\User;
 use App\Services\SubscriptionPlanService;
 use App\Services\TenantRoleService;
+use App\Support\OrgPermissions;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Validation\Rule;
 
 class OrganizationAccessController extends Controller
 {
@@ -89,15 +91,42 @@ class OrganizationAccessController extends Controller
             return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
         }
 
+        $organizationPermissionKeys = OrgPermissions::organizationPermissionKeys();
+
         $data = $request->validate([
             'roleId' => ['sometimes', 'integer', 'exists:roles,id'],
             'title' => ['sometimes', 'nullable', 'string', 'max:255'],
             'grantPermissions' => ['sometimes', 'array'],
-            'grantPermissions.*' => ['string', 'max:255'],
+            'grantPermissions.*' => ['string', 'max:255', Rule::in($organizationPermissionKeys)],
             'denyPermissions' => ['sometimes', 'array'],
-            'denyPermissions.*' => ['string', 'max:255'],
+            'denyPermissions.*' => ['string', 'max:255', Rule::in($organizationPermissionKeys)],
             'status' => ['sometimes', 'in:active,inactive,pending'],
         ]);
+
+        $isSelfMembership = (int) $membership->id === (int) $actorMembership->id
+            || (int) $membership->user_id === (int) $user->id;
+
+        if ($isSelfMembership && $this->requestChangesOwnPrivilegeConfiguration($data)) {
+            return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
+        }
+
+        $organization = $actorMembership->organization;
+        $isOwnerMembership = $organization->owner_user_id !== null
+            && (int) $membership->user_id === (int) $organization->owner_user_id;
+
+        if ($isOwnerMembership && $this->requestChangesOwnPrivilegeConfiguration($data)) {
+            return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
+        }
+
+        if (array_key_exists('grantPermissions', $data)) {
+            $actorMembership->loadMissing('role.permissions');
+            $actorEffective = $actorMembership->effectivePermissions();
+            $unauthorizedGrants = array_values(array_diff($data['grantPermissions'], $actorEffective));
+
+            if ($unauthorizedGrants !== []) {
+                return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
+            }
+        }
 
         if (array_key_exists('roleId', $data)) {
             $role = Role::query()
@@ -257,6 +286,17 @@ class OrganizationAccessController extends Controller
             || in_array('org.manage_members', $membership->effectivePermissions(), true)
             || in_array('manage_roles', $membership->effectivePermissions(), true)
             || in_array('manage_users', $membership->effectivePermissions(), true);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function requestChangesOwnPrivilegeConfiguration(array $data): bool
+    {
+        return array_key_exists('roleId', $data)
+            || array_key_exists('grantPermissions', $data)
+            || array_key_exists('denyPermissions', $data)
+            || array_key_exists('status', $data);
     }
 
     /**

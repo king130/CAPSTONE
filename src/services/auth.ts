@@ -43,6 +43,8 @@ export interface UserProfile {
   accessScope?: AccessScope
   isTemporary?: boolean
   isActive?: boolean
+  verificationStatus?: 'pending' | 'approved' | 'rejected' | string | null
+  verificationRejectionReason?: string | null
   profileSetupComplete?: boolean
   profile?: Record<string, unknown>
   mustChangePassword?: boolean
@@ -185,6 +187,9 @@ export function mapApiUserToProfile(raw: Record<string, unknown>): UserProfile {
     accessScope: (raw.accessScope as AccessScope | undefined) ?? 'personal',
     isTemporary: raw.isTemporary as boolean | undefined,
     isActive: raw.isActive !== false,
+    verificationStatus: (raw.verificationStatus as UserProfile['verificationStatus']) ?? null,
+    verificationRejectionReason:
+      typeof raw.verificationRejectionReason === 'string' ? raw.verificationRejectionReason : null,
     profileSetupComplete: raw.profileSetupComplete as boolean | undefined,
     profile: (raw.profile as Record<string, unknown>) || {},
     mustChangePassword: raw.mustChangePassword as boolean | undefined,

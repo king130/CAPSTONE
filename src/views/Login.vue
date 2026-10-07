@@ -3,7 +3,7 @@ import { toTypedSchema } from '@vee-validate/zod'
 import { AlertCircle, Building2, GraduationCap, LoaderCircle } from 'lucide-vue-next'
 import { useForm } from 'vee-validate'
 import { computed } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { z } from 'zod'
 
 import Alert from '@/components/ui/alert/Alert.vue'
@@ -27,8 +27,15 @@ interface LoginForm {
 }
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 const { success, error } = useToast()
+
+function safeRedirectTarget(): string | null {
+  const raw = String(route.query.redirect || '').trim()
+  if (!raw.startsWith('/') || raw.startsWith('//')) return null
+  return raw
+}
 
 const loginSchema = toTypedSchema(
   z.object({
@@ -47,8 +54,16 @@ const { handleSubmit, errors, setFieldValue } = useForm<LoginForm>({
 
 const errorMessage = computed(() => authStore.error)
 
-function getRoleDashboard(role: string | null): string {
-  switch (role) {
+function getRoleDashboard(profile: { role: string | null; verificationStatus?: string | null }): string {
+  const status = String(profile.verificationStatus || 'pending').toLowerCase()
+  if (
+    (profile.role === 'school' || profile.role === 'company') &&
+    (status === 'pending' || status === 'rejected')
+  ) {
+    return '/organization-verification'
+  }
+
+  switch (profile.role) {
     case 'admin':
       return '/admin/overview'
     case 'company':
@@ -78,7 +93,8 @@ const onSubmit = handleSubmit(async (values) => {
       return
     }
 
-    router.push(getRoleDashboard(profile.role))
+    const redirect = safeRedirectTarget()
+    router.push(redirect || getRoleDashboard(profile))
   } catch (caughtError) {
     error(caughtError, {
       fallback: 'Login failed.',
@@ -97,7 +113,7 @@ const onSubmit = handleSubmit(async (values) => {
     <template #title>Welcome Back</template>
     <template #description>Sign in to the correct portal for your account and continue where you left off.</template>
 
-    <Card class="border-slate-200/80 bg-white/95 shadow-xl shadow-slate-200/70">
+    <Card class="border-border bg-card shadow-sm">
       <CardHeader class="pb-2" />
       <CardContent class="space-y-5 p-5 sm:p-6">
         <Alert v-if="errorMessage" variant="destructive" class="flex items-start gap-3">
@@ -107,22 +123,22 @@ const onSubmit = handleSubmit(async (values) => {
 
         <form class="space-y-3" @submit="onSubmit">
           <div class="grid gap-2 sm:grid-cols-2">
-            <div class="rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm text-sky-950">
-              <div class="flex items-center gap-2 font-semibold">
-                <GraduationCap class="h-4 w-4" />
+            <div class="rounded-xl border border-border bg-accent px-4 py-3 text-sm text-accent-foreground">
+              <div class="flex items-center gap-2 font-semibold text-foreground">
+                <GraduationCap class="h-4 w-4 text-primary" />
                 <span>Student access</span>
               </div>
-              <p class="mt-2 text-xs leading-5 text-sky-900/80">
+              <p class="mt-2 text-xs leading-5 text-muted-foreground">
                 Students log in using the school-issued email and password provided by their school.
               </p>
             </div>
 
-            <div class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900">
+            <div class="rounded-xl border border-border bg-muted px-4 py-3 text-sm text-foreground">
               <div class="flex items-center gap-2 font-semibold">
-                <Building2 class="h-4 w-4" />
+                <Building2 class="h-4 w-4 text-primary" />
                 <span>School and company access</span>
               </div>
-              <p class="mt-2 text-xs leading-5 text-slate-700">
+              <p class="mt-2 text-xs leading-5 text-muted-foreground">
                 Registered school coordinators and companies can sign in here with their own account.
               </p>
             </div>
@@ -168,9 +184,12 @@ const onSubmit = handleSubmit(async (values) => {
             <span>{{ authStore.loading ? 'Logging in...' : 'Login' }}</span>
           </Button>
 
-          <p class="text-center text-sm text-slate-600">
+          <p class="text-center text-sm text-muted-foreground">
             Need an organization account?
-            <RouterLink to="/register" class="font-semibold text-slate-950 hover:text-slate-700">
+            <RouterLink
+              to="/register"
+              class="font-semibold text-foreground underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
               Register here
             </RouterLink>
           </p>

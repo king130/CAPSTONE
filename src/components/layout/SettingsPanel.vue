@@ -8,6 +8,7 @@ import 'tom-select/dist/css/tom-select.css'
 import Swal from '@/services/swal'
 import { z } from 'zod'
 
+import OrganizationPublicProfileSection from '@/components/settings/OrganizationPublicProfileSection.vue'
 import AlertDialog from '@/components/ui/alert-dialog/AlertDialog.vue'
 import Avatar from '@/components/ui/avatar/Avatar.vue'
 import Button from '@/components/ui/button/Button.vue'
@@ -28,9 +29,11 @@ import { useToast } from '@/composables/useToast'
 import { buildProfileAvatarUrl, uploadProfileAvatar } from '@/services/profileMedia'
 import {
   deactivateCurrentAccount,
+  fetchOrgOjtSettings,
   fetchSettings,
   saveAdminSystemSettings,
   saveNotificationPreferences,
+  saveOrgOjtSettings,
   savePasswordSettings,
   saveProfileSettings,
   supportsAccountDeactivation,
@@ -80,6 +83,7 @@ const savingProfile = ref(false)
 const savingPassword = ref(false)
 const savingNotifications = ref(false)
 const savingSystem = ref(false)
+const savingOrgOjt = ref(false)
 const deactivating = ref(false)
 const deactivateDialogOpen = ref(false)
 const maintenanceDialogOpen = ref(false)
@@ -88,8 +92,8 @@ const avatarPreviewUrl = ref('')
 const avatarFile = ref<File | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const notificationPreferences = ref<NotificationPreferences>({})
+const orgRequiredHours = ref('500')
 const systemSettings = ref<AdminSystemSettings>({
-  requiredHours: '',
   schoolYear: '',
   semester: '',
   allowRegistrations: true,
@@ -106,6 +110,7 @@ const organizationCourseSelectRef = ref<HTMLSelectElement | null>(null)
 let organizationCourseTomSelect: TomSelect | null = null
 
 const currentRole = computed<UserRole>(() => authStore.user?.role ?? null)
+const canManageOrgOjtHours = computed(() => currentRole.value === 'school' || currentRole.value === 'company')
 const currentProfile = computed(() => (authStore.user?.profile as Record<string, unknown> | undefined) ?? {})
 const currentEmail = computed(() => authStore.user?.email ?? '')
 const currentAvatar = computed(() => {
@@ -325,7 +330,6 @@ function buildFallbackSettings(): SettingsPayload {
     },
     notificationPreferences: Object.fromEntries(notificationOptions.value.map((option) => [option.key, true])),
     systemSettings: {
-      requiredHours: '500',
       schoolYear: '',
       semester: '',
       allowRegistrations: true,
@@ -372,7 +376,6 @@ function applySettings(payload: SettingsPayload) {
 
   if (payload.systemSettings) {
     systemSettings.value = {
-      requiredHours: payload.systemSettings.requiredHours ?? '',
       schoolYear: payload.systemSettings.schoolYear ?? '',
       semester: payload.systemSettings.semester ?? '',
       allowRegistrations: payload.systemSettings.allowRegistrations ?? true,
@@ -386,6 +389,10 @@ async function loadSettingsData() {
   try {
     const payload = await fetchSettings()
     applySettings(payload)
+    if (canManageOrgOjtHours.value) {
+      const ojtSettings = await fetchOrgOjtSettings().catch(() => ({ requiredHours: 500 }))
+      orgRequiredHours.value = String(ojtSettings.requiredHours || 500)
+    }
   } catch {
     applySettings(buildFallbackSettings())
   } finally {
@@ -674,6 +681,25 @@ async function saveSystem() {
   }
 }
 
+async function saveOrgOjtHours() {
+  savingOrgOjt.value = true
+  try {
+    const hours = Math.max(1, Math.floor(Number(orgRequiredHours.value) || 0))
+    if (!Number.isFinite(hours) || hours < 1) {
+      throw new Error('OJT required hours must be at least 1.')
+    }
+    const saved = await saveOrgOjtSettings({ requiredHours: hours })
+    orgRequiredHours.value = String(saved.requiredHours)
+    success('OJT required hours saved.')
+  } catch (caughtError) {
+    error(caughtError, {
+      fallback: 'Unable to save OJT required hours.',
+    })
+  } finally {
+    savingOrgOjt.value = false
+  }
+}
+
 async function confirmDeactivate() {
   deactivating.value = true
   try {
@@ -722,9 +748,9 @@ onBeforeUnmount(() => {
 <template>
   <section class="space-y-6">
     <div v-if="!props.embedded" class="space-y-2">
-      <p class="text-sm font-semibold uppercase tracking-[0.3em] text-sky-700">Settings</p>
-      <h2 class="text-3xl font-semibold tracking-tight text-slate-950">Manage your account and workspace preferences</h2>
-      <p class="max-w-2xl text-sm leading-6 text-slate-600">
+      <p class="text-sm font-semibold uppercase tracking-[0.3em] text-primary">Settings</p>
+      <h2 class="text-3xl font-semibold tracking-tight text-foreground">Manage your account and workspace preferences</h2>
+      <p class="max-w-2xl text-sm leading-6 text-muted-foreground">
         Update your profile, account security, notification preferences, and role-specific configuration.
       </p>
     </div>
@@ -762,15 +788,15 @@ onBeforeUnmount(() => {
 
           <div v-else-if="activeTab === 'profile'" class="space-y-6">
             <div>
-              <h3 class="text-2xl font-semibold text-slate-950">Profile Settings</h3>
-              <p class="mt-2 text-sm text-slate-600">Keep your profile accurate so the right people can contact you and review your information.</p>
+              <h3 class="text-2xl font-semibold text-foreground">Profile Settings</h3>
+              <p class="mt-2 text-sm text-muted-foreground">Keep your profile accurate so the right people can contact you and review your information.</p>
             </div>
 
-            <div class="flex flex-col gap-4 rounded-2xl border border-border bg-slate-50 p-5 sm:flex-row sm:items-center">
+            <div class="flex flex-col gap-4 rounded-2xl border border-border bg-muted p-5 sm:flex-row sm:items-center">
               <Avatar :src="currentAvatar" :fallback="userInitials" :alt="profileValues.fullName" class="h-20 w-20" />
               <div class="space-y-2">
-                <p class="text-sm font-medium text-slate-950">Profile photo</p>
-                <p class="text-sm text-slate-500">Upload a clear avatar so your account is easy to recognize.</p>
+                <p class="text-sm font-medium text-foreground">Profile photo</p>
+                <p class="text-sm text-muted-foreground">Upload a clear avatar so your account is easy to recognize.</p>
                 <div class="flex gap-3">
                   <input
                     ref="fileInputRef"
@@ -808,7 +834,7 @@ onBeforeUnmount(() => {
                 <FormControl>
                   <Input id="settingsEmail" :model-value="currentEmail" type="email" readonly />
                 </FormControl>
-                <p class="text-sm text-slate-500">Contact admin to change email.</p>
+                <p class="text-sm text-muted-foreground">Contact admin to change email.</p>
               </FormItem>
 
               <FormField v-slot="{ componentField, errorMessage: fieldError }" name="phone">
@@ -858,12 +884,12 @@ onBeforeUnmount(() => {
               </FormField>
 
               <template v-if="currentRole === 'company' || currentRole === 'school'">
-                <div class="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                <div class="space-y-4 rounded-2xl border border-border bg-muted p-5">
                   <div class="space-y-1">
-                    <h4 class="text-base font-semibold text-slate-950">
+                    <h4 class="text-base font-semibold text-foreground">
                       {{ currentRole === 'school' ? 'School Courses' : 'Accepted Courses' }}
                     </h4>
-                    <p class="text-sm text-slate-600">
+                    <p class="text-sm text-muted-foreground">
                       {{ currentRole === 'school'
                         ? 'Add the courses or programs your school offers for student account creation and matching.'
                         : 'Add the courses or programs your company accepts for internships.' }}
@@ -880,7 +906,7 @@ onBeforeUnmount(() => {
                         Add Course
                       </Button>
                     </div>
-                    <p class="text-sm text-slate-500">
+                    <p class="text-sm text-muted-foreground">
                       Program headers are grouped above the courses. Search and select multiple courses at once, or type a custom one and click `Add Course`.
                     </p>
                   </div>
@@ -888,25 +914,25 @@ onBeforeUnmount(() => {
                     <span
                       v-for="course in organizationCourses"
                       :key="course"
-                      class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700"
+                      class="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-sm text-card-foreground"
                     >
                       {{ course }}
-                      <button type="button" class="text-slate-500 hover:text-slate-900" @click="removeOrganizationCourse(course)">
+                      <button type="button" class="text-muted-foreground hover:text-foreground" @click="removeOrganizationCourse(course)">
                         x
                       </button>
                     </span>
                   </div>
-                  <p v-else class="text-sm text-slate-500">
+                  <p v-else class="text-sm text-muted-foreground">
                     {{ currentRole === 'school' ? 'No school courses added yet.' : 'No accepted courses added yet.' }}
                   </p>
                 </div>
 
-                <div class="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                <div class="space-y-4 rounded-2xl border border-border bg-muted p-5">
                   <div class="space-y-1">
-                    <h4 class="text-base font-semibold text-slate-950">
+                    <h4 class="text-base font-semibold text-foreground">
                       {{ currentRole === 'school' ? 'School Address' : 'Company Address' }}
                     </h4>
-                    <p class="text-sm text-slate-600">
+                    <p class="text-sm text-muted-foreground">
                       {{ currentRole === 'school'
                         ? 'Use the Cavite location fields so student accounts and directory data stay consistent.'
                         : 'Use the Cavite location fields so schools can filter your company correctly.' }}
@@ -922,7 +948,7 @@ onBeforeUnmount(() => {
                         @update:modelValue="setProfileFieldValue('officialSchoolEmail', $event)"
                       />
                     </FormControl>
-                    <p class="text-sm text-slate-500">
+                    <p class="text-sm text-muted-foreground">
                       Used when auto-generating student account emails. You can enter `@ncst.edu.ph` or a full school email.
                     </p>
                   </FormItem>
@@ -984,6 +1010,32 @@ onBeforeUnmount(() => {
                     </FormControl>
                   </FormItem>
                 </div>
+
+                <div class="space-y-4 rounded-2xl border border-border bg-muted p-5">
+                  <div class="space-y-1">
+                    <h4 class="text-base font-semibold text-foreground">OJT Required Hours</h4>
+                    <p class="text-sm text-muted-foreground">
+                      Set the approved hour target used for student progress, completion checks, and certificates for your organization.
+                    </p>
+                  </div>
+                  <FormItem>
+                    <FormLabel for="orgRequiredHours">Required Hours</FormLabel>
+                    <FormControl>
+                      <Input
+                        id="orgRequiredHours"
+                        v-model="orgRequiredHours"
+                        type="number"
+                        min="1"
+                        max="10000"
+                      />
+                    </FormControl>
+                  </FormItem>
+                  <Button type="button" :disabled="savingOrgOjt" @click="saveOrgOjtHours">
+                    {{ savingOrgOjt ? 'Saving...' : 'Save OJT Hours' }}
+                  </Button>
+                </div>
+
+                <OrganizationPublicProfileSection />
               </template>
 
               <Button type="submit" class="w-full md:w-auto" :disabled="savingProfile">
@@ -994,14 +1046,14 @@ onBeforeUnmount(() => {
 
           <div v-else-if="activeTab === 'security'" class="space-y-6">
             <div>
-              <h3 class="text-2xl font-semibold text-slate-950">Account & Security</h3>
-              <p class="mt-2 text-sm text-slate-600">Update your password and manage high-impact account actions.</p>
+              <h3 class="text-2xl font-semibold text-foreground">Account & Security</h3>
+              <p class="mt-2 text-sm text-muted-foreground">Update your password and manage high-impact account actions.</p>
             </div>
 
             <Card class="border-border/80 shadow-none">
               <CardHeader>
-                <h4 class="text-lg font-semibold text-slate-950">Change Password</h4>
-                <p class="text-sm text-slate-600">Use a strong password with at least 8 characters.</p>
+                <h4 class="text-lg font-semibold text-foreground">Change Password</h4>
+                <p class="text-sm text-muted-foreground">Use a strong password with at least 8 characters.</p>
               </CardHeader>
               <CardContent>
                 <form class="space-y-5" @submit="updatePassword">
@@ -1090,10 +1142,10 @@ onBeforeUnmount(() => {
               </CardContent>
             </Card>
 
-            <Card class="border-red-200 shadow-none">
+            <Card class="border-destructive/40 shadow-none">
               <CardHeader>
-                <h4 class="text-lg font-semibold text-red-700">Danger Zone</h4>
-                <p class="text-sm text-slate-600">Deactivate your account if you no longer need access to the platform.</p>
+                <h4 class="text-lg font-semibold text-destructive">Danger Zone</h4>
+                <p class="text-sm text-muted-foreground">Deactivate your account if you no longer need access to the platform.</p>
               </CardHeader>
               <CardContent>
                 <Button
@@ -1103,7 +1155,7 @@ onBeforeUnmount(() => {
                 >
                   {{ deactivating ? 'Deactivating...' : 'Deactivate Account' }}
                 </Button>
-                <p class="mt-3 text-sm text-slate-500">
+                <p class="mt-3 text-sm text-muted-foreground">
                   Account deactivation is not enabled on the current backend, so this action is unavailable for now.
                 </p>
               </CardContent>
@@ -1112,16 +1164,16 @@ onBeforeUnmount(() => {
 
           <div v-else-if="activeTab === 'notifications'" class="space-y-6">
             <div>
-              <h3 class="text-2xl font-semibold text-slate-950">Notifications Preferences</h3>
-              <p class="mt-2 text-sm text-slate-600">Choose which updates you want to receive for your role.</p>
+              <h3 class="text-2xl font-semibold text-foreground">Notifications Preferences</h3>
+              <p class="mt-2 text-sm text-muted-foreground">Choose which updates you want to receive for your role.</p>
             </div>
 
             <div class="space-y-4">
               <Card v-for="option in notificationOptions" :key="option.key" class="border-border/80 shadow-none">
                 <CardContent class="flex items-start justify-between gap-4 p-5">
                   <div class="space-y-1">
-                    <p class="font-medium text-slate-950">{{ option.label }}</p>
-                    <p class="text-sm text-slate-600">{{ option.description }}</p>
+                    <p class="font-medium text-foreground">{{ option.label }}</p>
+                    <p class="text-sm text-muted-foreground">{{ option.description }}</p>
                   </div>
                   <Switch v-model="notificationPreferences[option.key]" />
                 </CardContent>
@@ -1135,18 +1187,11 @@ onBeforeUnmount(() => {
 
           <div v-else class="space-y-6">
             <div>
-              <h3 class="text-2xl font-semibold text-slate-950">System Settings</h3>
-              <p class="mt-2 text-sm text-slate-600">Control platform-wide defaults and registration behavior.</p>
+              <h3 class="text-2xl font-semibold text-foreground">System Settings</h3>
+              <p class="mt-2 text-sm text-muted-foreground">Control platform-wide defaults and registration behavior.</p>
             </div>
 
             <div class="grid gap-5 md:grid-cols-2">
-              <FormItem>
-                <FormLabel for="requiredHours">OJT Required Hours</FormLabel>
-                <FormControl>
-                  <Input id="requiredHours" v-model="systemSettings.requiredHours" type="number" min="0" />
-                </FormControl>
-              </FormItem>
-
               <FormItem>
                 <FormLabel for="schoolYear">School Year</FormLabel>
                 <FormControl>
@@ -1172,19 +1217,19 @@ onBeforeUnmount(() => {
               </FormItem>
             </div>
 
-            <div class="space-y-4 rounded-2xl border border-border bg-slate-50 p-5">
+            <div class="space-y-4 rounded-2xl border border-border bg-muted p-5">
               <div class="flex items-center justify-between gap-4">
                 <div>
-                  <p class="font-medium text-slate-950">Allow Registrations</p>
-                  <p class="text-sm text-slate-600">Toggle whether new users can create accounts.</p>
+                  <p class="font-medium text-foreground">Allow Registrations</p>
+                  <p class="text-sm text-muted-foreground">Toggle whether new users can create accounts.</p>
                 </div>
                 <Switch v-model="systemSettings.allowRegistrations" />
               </div>
 
               <div class="flex items-center justify-between gap-4">
                 <div>
-                  <p class="font-medium text-slate-950">Maintenance Mode</p>
-                  <p class="text-sm text-slate-600">Require confirmation before turning on platform maintenance.</p>
+                  <p class="font-medium text-foreground">Maintenance Mode</p>
+                  <p class="text-sm text-muted-foreground">Require confirmation before turning on platform maintenance.</p>
                 </div>
                 <Switch :model-value="systemSettings.maintenanceMode" @update:modelValue="onMaintenanceToggle" />
               </div>
@@ -1232,32 +1277,36 @@ onBeforeUnmount(() => {
 :deep(.ts-control) {
   min-height: 46px;
   border-radius: 1rem;
-  border: 1px solid rgb(226 232 240);
-  background: rgb(255 255 255);
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
   padding: 0.5rem 0.75rem;
   box-shadow: none;
 }
 
 :deep(.ts-wrapper.focus .ts-control) {
-  border-color: rgb(125 211 252);
-  box-shadow: 0 0 0 4px rgb(14 165 233 / 0.12);
+  border-color: hsl(var(--ring));
+  box-shadow: 0 0 0 4px hsl(var(--ring) / 0.12);
 }
 
 :deep(.ts-control > input) {
   font-size: 0.95rem;
+  color: hsl(var(--foreground));
 }
 
 :deep(.ts-control .item) {
   border-radius: 9999px;
-  background: rgb(224 242 254);
-  color: rgb(3 105 161);
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
   padding: 0.3rem 0.65rem;
 }
 
 :deep(.ts-dropdown) {
   border-radius: 1rem;
-  border: 1px solid rgb(226 232 240);
-  box-shadow: 0 18px 40px -24px rgb(15 23 42 / 0.35);
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow: 0 18px 40px -24px hsl(var(--foreground) / 0.35);
   overflow: hidden;
 }
 
@@ -1272,18 +1321,18 @@ onBeforeUnmount(() => {
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: rgb(15 23 42);
-  background: rgb(248 250 252);
-  border-bottom: 1px solid rgb(226 232 240);
+  color: hsl(var(--foreground));
+  background: hsl(var(--muted));
+  border-bottom: 1px solid hsl(var(--border));
 }
 
 :deep(.ts-course-option) {
   font-size: 0.95rem;
-  color: rgb(51 65 85);
+  color: hsl(var(--muted-foreground));
 }
 
 :deep(.ts-dropdown .active) {
-  background: rgb(240 249 255);
-  color: rgb(3 105 161);
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
 }
 </style>

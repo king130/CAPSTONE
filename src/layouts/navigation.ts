@@ -37,6 +37,7 @@ export const defaultNavItems: Record<LayoutRole, LayoutNavItem[]> = {
   student: [
     { key: 'settings', label: 'My Profile', icon: 'user', to: { name: 'intern' } },
     { key: 'opportunities', label: 'Opportunities', icon: 'briefcase', to: { name: 'intern-opportunities' } },
+    { key: 'saved', label: 'Saved', icon: 'briefcase', to: { name: 'intern-saved' } },
     { key: 'documents', label: 'Documents', icon: 'file-text', to: { name: 'intern-documents' } },
     { key: 'internship', label: 'My Applications', icon: 'briefcase', to: { name: 'intern-applications' } },
     { key: 'placement', label: 'Placement', icon: 'layout-dashboard', to: { name: 'intern-placement' } },
@@ -54,7 +55,7 @@ export const defaultNavItems: Record<LayoutRole, LayoutNavItem[]> = {
     { key: 'placements', label: 'Placements', icon: 'briefcase', to: { name: 'school-placements' } },
     { key: 'reports', label: 'Reports', icon: 'file-text', to: { name: 'school-reports' } },
     { key: 'subscription', label: 'Subscription', icon: 'settings', to: { name: 'organization-subscription' } },
-    { key: 'contracts', label: 'Contracts', icon: 'file-text', to: { name: 'contracts' } },
+    { key: 'agreements', label: 'Agreements', icon: 'file-text', to: { name: 'agreements' } },
     { key: 'ojt-hours', label: 'OJT Hours', icon: 'clock', to: { name: 'ojt-hours' } },
   ],
   company: [
@@ -64,7 +65,7 @@ export const defaultNavItems: Record<LayoutRole, LayoutNavItem[]> = {
     { key: 'tenant-role-management', label: 'Role Management', icon: 'users', to: { name: 'tenant-role-management' } },
     { key: 'tenant-permission-assignment', label: 'Permissions', icon: 'settings', to: { name: 'tenant-permission-assignment' } },
     { key: 'subscription', label: 'Subscription', icon: 'settings', to: { name: 'organization-subscription' } },
-    { key: 'contracts', label: 'Contracts', icon: 'file-text', to: { name: 'contracts' } },
+    { key: 'agreements', label: 'Agreements', icon: 'file-text', to: { name: 'agreements' } },
     { key: 'ojt-hours', label: 'OJT Hours', icon: 'clock', to: { name: 'ojt-hours' } },
   ],
 }

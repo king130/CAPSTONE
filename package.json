@@ -16,7 +16,9 @@
     "format": "prettier --write --experimental-cli src/",
     "test": "vitest --run",
     "test:watch": "vitest",
-    "test:ui": "vitest --ui"
+    "test:ui": "vitest --ui",
+    "test:e2e": "playwright test",
+    "test:e2e:report": "playwright show-report"
   },
   "dependencies": {
     "@heroicons/vue": "^2.2.0",
@@ -24,6 +26,7 @@
     "@vee-validate/zod": "^4.15.1",
     "@vueuse/core": "^14.2.1",
     "axios": "^1.13.6",
+    "leaflet": "^1.9.4",
     "lucide-vue-next": "^1.0.0",
     "pinia": "^3.0.4",
     "sweetalert2": "^11.26.17",
@@ -36,8 +39,10 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4.1.18",
     "@tsconfig/node24": "^24.0.3",
+    "@types/leaflet": "^1.9.22",
     "@types/node": "^24.12.0",
     "@vitejs/plugin-vue": "^6.0.3",
     "@vitest/ui": "^4.0.18",

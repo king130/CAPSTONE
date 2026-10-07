@@ -5,9 +5,15 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Schema;
 
 class ContractType extends Model
 {
+    public function getTable()
+    {
+        return Schema::hasTable('agreement_types') ? 'agreement_types' : 'contract_types';
+    }
+
     protected $fillable = [
         'name',
         'slug',
@@ -50,6 +56,11 @@ class ContractType extends Model
         return $this->belongsTo(self::class, 'base_contract_type_id');
     }
 
+    public function baseAgreementType(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'base_contract_type_id');
+    }
+
     public function overrides(): HasMany
     {
         return $this->hasMany(self::class, 'base_contract_type_id');
@@ -57,6 +68,11 @@ class ContractType extends Model
 
     public function contracts(): HasMany
     {
-        return $this->hasMany(Contract::class);
+        return $this->hasMany(Contract::class, 'contract_type_id');
+    }
+
+    public function agreements(): HasMany
+    {
+        return $this->hasMany(Agreement::class, 'contract_type_id');
     }
 }

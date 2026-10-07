@@ -2,15 +2,17 @@
 
 use Illuminate\Support\Facades\Route;
 
-function spaEntryResponse()
-{
-    $spaEntry = public_path('index.html');
+if (! function_exists('spaEntryResponse')) {
+    function spaEntryResponse()
+    {
+        $spaEntry = public_path('index.html');
 
-    if (file_exists($spaEntry)) {
-        return response()->file($spaEntry);
+        if (file_exists($spaEntry)) {
+            return response()->file($spaEntry);
+        }
+
+        return view('welcome');
     }
-
-    return view('welcome');
 }
 
 Route::get('/', function () {

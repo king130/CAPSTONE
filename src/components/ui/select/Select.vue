@@ -8,10 +8,16 @@ const props = withDefaults(
   defineProps<{
     modelValue?: string
     class?: string
+    id?: string
+    disabled?: boolean
+    name?: string
   }>(),
   {
     modelValue: '',
     class: '',
+    id: undefined,
+    disabled: false,
+    name: undefined,
   },
 )
 
@@ -33,7 +39,14 @@ function onChange(event: Event) {
 
 <template>
   <div class="relative">
-    <select :value="modelValue" :class="selectClass" @change="onChange">
+    <select
+      :id="id"
+      :name="name"
+      :value="modelValue"
+      :class="selectClass"
+      :disabled="disabled"
+      @change="onChange"
+    >
       <slot />
     </select>
     <ChevronDown class="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />

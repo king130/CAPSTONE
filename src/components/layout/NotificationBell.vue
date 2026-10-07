@@ -77,7 +77,7 @@ watch(
         <Bell class="h-5 w-5" />
         <Badge
           v-if="unreadCount"
-          class="absolute -right-1 -top-1 min-w-5 justify-center border-red-200 bg-red-500 px-1.5 text-[10px] text-white"
+        class="absolute -right-1 -top-1 min-w-5 justify-center border-background bg-destructive px-1.5 text-[10px] text-destructive-foreground"
         >
           {{ unreadCount > 99 ? '99+' : unreadCount }}
         </Badge>
@@ -88,10 +88,10 @@ watch(
       <div class="space-y-3">
         <div class="flex items-center justify-between px-2 py-1">
           <div>
-            <p class="text-sm font-semibold text-slate-950">Notifications</p>
-            <p class="text-xs text-slate-500">Recent updates from your workspace</p>
+            <p class="text-sm font-semibold text-foreground">Notifications</p>
+            <p class="text-xs text-muted-foreground">Recent updates from your workspace</p>
           </div>
-          <Button variant="ghost" size="sm" class="text-sky-700" @click="handleViewAll(close)">View All</Button>
+          <Button variant="ghost" size="sm" class="text-primary" @click="handleViewAll(close)">View All</Button>
         </div>
 
         <div class="space-y-2">

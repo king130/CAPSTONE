@@ -250,7 +250,7 @@ function handleItemClick(item: LayoutNavItem) {
                   <Settings class="h-4 w-4" />
                   <span>Settings</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem class="text-red-600 hover:text-red-600" @click="handleLogout(); close()">
+                    <DropdownMenuItem class="text-destructive hover:text-destructive" @click="handleLogout(); close()">
                   <LogOut class="h-4 w-4" />
                   <span>Logout</span>
                 </DropdownMenuItem>

@@ -6,7 +6,6 @@ use App\Models\Document;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Validation\Rule;
 
 class DocumentController extends Controller
 {
@@ -37,7 +36,6 @@ class DocumentController extends Controller
 
         $data = $request->validate([
             'category' => ['nullable', 'string', 'max:100'],
-            'status' => ['nullable', Rule::in(['approved', 'pending', 'rejected'])],
             'files' => ['required', 'array', 'min:1'],
             'files.*' => ['file', 'max:10240'],
         ]);
@@ -54,7 +52,8 @@ class DocumentController extends Controller
                 'file_type' => $file->getClientMimeType(),
                 'file_size' => $file->getSize(),
                 'storage_provider' => 'local_public',
-                'verified_at' => ($data['status'] ?? 'pending') === 'approved' ? now() : null,
+                // Client-supplied status must never approve documents on upload.
+                'verified_at' => null,
             ]);
 
             $documents[] = $this->transform($document);

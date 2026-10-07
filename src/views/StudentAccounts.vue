@@ -544,10 +544,10 @@ onUnmounted(() => {
           <div
             v-for="invite in latestInvites"
             :key="invite.email"
-            class="rounded-xl border border-emerald-200 bg-white p-4"
+            class="rounded-xl border border-emerald-200 bg-card p-4"
           >
-            <p class="font-semibold text-slate-900">{{ invite.studentName }}</p>
-            <p class="mt-2 text-sm text-slate-600">{{ invite.email }}</p>
+            <p class="font-semibold text-foreground">{{ invite.studentName }}</p>
+            <p class="mt-2 text-sm text-muted-foreground">{{ invite.email }}</p>
             <p class="mt-2 text-sm font-medium" :class="invite.sent ? 'text-emerald-700' : 'text-amber-700'">
               {{ invite.sent ? 'Setup link sent successfully.' : 'Invite email needs to be resent.' }}
             </p>
@@ -585,7 +585,7 @@ onUnmounted(() => {
             </p>
           </div>
           <div class="relative max-w-md">
-            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input v-model="search" placeholder="Search student accounts or intern code..." class="pl-9" />
           </div>
         </CardHeader>
@@ -609,7 +609,7 @@ onUnmounted(() => {
               </TableHeader>
               <TableBody>
                 <TableRow v-for="student in filteredStudents" :key="student.id">
-                  <TableCell class="font-mono text-xs font-semibold text-slate-700">{{ student.internCode || 'Pending' }}</TableCell>
+                  <TableCell class="font-mono text-xs font-semibold text-foreground">{{ student.internCode || 'Pending' }}</TableCell>
                   <TableCell class="font-medium">{{ student.email }}</TableCell>
                   <TableCell>{{ student.studentName || 'Not set' }}</TableCell>
                   <TableCell>{{ student.studentNumber || 'Not set' }}</TableCell>
@@ -659,14 +659,14 @@ onUnmounted(() => {
           </p>
         </DialogHeader>
         <div class="mt-6 space-y-5">
-          <div class="rounded-2xl border border-sky-200 bg-gradient-to-r from-sky-50 via-white to-cyan-50 px-4 py-4">
+          <div class="rounded-2xl border border-border bg-gradient-to-r from-accent via-card to-emerald-50/60 px-4 py-4">
             <div class="flex items-start gap-3">
-              <div class="rounded-2xl bg-sky-100 p-3 text-sky-700">
+              <div class="rounded-2xl bg-accent p-3 text-primary">
                 <Sparkles class="h-5 w-5" />
               </div>
               <div>
-                <p class="text-sm font-semibold text-slate-950">Smart student setup</p>
-                <p class="mt-1 text-sm text-slate-600">
+                <p class="text-sm font-semibold text-foreground">Smart student setup</p>
+                <p class="mt-1 text-sm text-muted-foreground">
                   Fill in the student name, then choose the email format, course, and year level. The school email is generated automatically for you.
                 </p>
               </div>
@@ -674,32 +674,32 @@ onUnmounted(() => {
           </div>
 
           <div class="grid gap-4 md:grid-cols-2">
-          <FormItem class="rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm">
-            <FormLabel class="text-slate-700">First Name</FormLabel>
+          <FormItem class="rounded-2xl border border-border bg-card/80 p-4 shadow-sm">
+            <FormLabel class="text-foreground">First Name</FormLabel>
             <FormControl>
-              <Input v-model="studentForm.firstName" type="text" placeholder="Juan" class="mt-1 border-slate-200 bg-slate-50/80" />
+              <Input v-model="studentForm.firstName" type="text" placeholder="Juan" class="mt-1 border-border bg-muted/80" />
             </FormControl>
           </FormItem>
-          <FormItem class="rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm">
-            <FormLabel class="text-slate-700">Last Name</FormLabel>
+          <FormItem class="rounded-2xl border border-border bg-card/80 p-4 shadow-sm">
+            <FormLabel class="text-foreground">Last Name</FormLabel>
             <FormControl>
-              <Input v-model="studentForm.lastName" placeholder="Dela Cruz" class="mt-1 border-slate-200 bg-slate-50/80" />
+              <Input v-model="studentForm.lastName" placeholder="Dela Cruz" class="mt-1 border-border bg-muted/80" />
             </FormControl>
           </FormItem>
-          <FormItem class="rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm">
-            <FormLabel class="text-slate-700">Email Format</FormLabel>
+          <FormItem class="rounded-2xl border border-border bg-card/80 p-4 shadow-sm">
+            <FormLabel class="text-foreground">Email Format</FormLabel>
             <FormControl>
               <div class="relative mt-1" data-student-dropdown>
-                <AtSign class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-sky-600" />
+                <AtSign class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-primary" />
                 <button
                   type="button"
-                  class="dropdown-trigger w-full rounded-xl border border-slate-200 bg-slate-50/90 py-3 pl-10 pr-10 text-left text-sm font-medium text-slate-800 shadow-sm transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                  class="dropdown-trigger w-full rounded-xl border border-border bg-muted/90 py-3 pl-10 pr-10 text-left text-sm font-medium text-foreground shadow-sm transition focus:border-ring focus:ring-2 focus:ring-ring/20"
                   @click="toggleDropdown('emailFormat')"
                 >
                   <span>{{ selectedEmailFormat.label }} ({{ selectedEmailFormat.example }})</span>
                 </button>
                 <ChevronDown
-                  class="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 transition"
+                  class="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground transition"
                   :class="{ 'rotate-180': openDropdown === 'emailFormat' }"
                 />
                 <div v-if="openDropdown === 'emailFormat'" class="dropdown-menu">
@@ -718,39 +718,39 @@ onUnmounted(() => {
               </div>
             </FormControl>
           </FormItem>
-          <FormItem class="rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm">
-            <FormLabel class="text-slate-700">School Email</FormLabel>
+          <FormItem class="rounded-2xl border border-border bg-card/80 p-4 shadow-sm">
+            <FormLabel class="text-foreground">School Email</FormLabel>
             <FormControl>
               <Input
                 :model-value="generatedEmail || 'Fill first and last name to generate email'"
                 readonly
-                class="mt-1 border-sky-200 bg-sky-50/80 font-medium text-sky-900"
+                class="mt-1 border-border bg-accent/80 font-medium text-foreground"
               />
             </FormControl>
           </FormItem>
-          <FormItem class="rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm">
-            <FormLabel class="text-slate-700">Student Number</FormLabel>
+          <FormItem class="rounded-2xl border border-border bg-card/80 p-4 shadow-sm">
+            <FormLabel class="text-foreground">Student Number</FormLabel>
             <FormControl>
               <div class="relative mt-1">
-                <IdCard class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                <Input v-model="studentForm.studentNumber" placeholder="2024-0001" class="border-slate-200 bg-slate-50/80 pl-10" />
+                <IdCard class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input v-model="studentForm.studentNumber" placeholder="2024-0001" class="border-border bg-muted/80 pl-10" />
               </div>
             </FormControl>
           </FormItem>
-          <FormItem class="rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm">
-            <FormLabel class="text-slate-700">Course</FormLabel>
+          <FormItem class="rounded-2xl border border-border bg-card/80 p-4 shadow-sm">
+            <FormLabel class="text-foreground">Course</FormLabel>
             <FormControl>
               <div class="relative mt-1" data-student-dropdown>
                 <BookOpenText class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-emerald-600" />
                 <button
                   type="button"
-                  class="dropdown-trigger w-full rounded-xl border border-slate-200 bg-slate-50/90 py-3 pl-10 pr-10 text-left text-sm font-medium text-slate-800 shadow-sm transition focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100"
+                  class="dropdown-trigger w-full rounded-xl border border-border bg-muted/90 py-3 pl-10 pr-10 text-left text-sm font-medium text-foreground shadow-sm transition focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100"
                   @click="toggleDropdown('course')"
                 >
                   <span>{{ studentForm.course || 'Select a saved school course' }}</span>
                 </button>
                 <ChevronDown
-                  class="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 transition"
+                  class="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground transition"
                   :class="{ 'rotate-180': openDropdown === 'course' }"
                 />
                 <div v-if="openDropdown === 'course'" class="dropdown-menu">
@@ -776,20 +776,20 @@ onUnmounted(() => {
               </div>
             </FormControl>
           </FormItem>
-          <FormItem class="md:col-span-2 rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm">
-            <FormLabel class="text-slate-700">Year Level</FormLabel>
+          <FormItem class="md:col-span-2 rounded-2xl border border-border bg-card/80 p-4 shadow-sm">
+            <FormLabel class="text-foreground">Year Level</FormLabel>
             <FormControl>
               <div class="relative mt-1" data-student-dropdown>
                 <UserRoundPlus class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-violet-600" />
                 <button
                   type="button"
-                  class="dropdown-trigger w-full rounded-xl border border-slate-200 bg-slate-50/90 py-3 pl-10 pr-10 text-left text-sm font-medium text-slate-800 shadow-sm transition focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                  class="dropdown-trigger w-full rounded-xl border border-border bg-muted/90 py-3 pl-10 pr-10 text-left text-sm font-medium text-foreground shadow-sm transition focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
                   @click="toggleDropdown('yearLevel')"
                 >
                   <span>{{ selectedYearLevelLabel }}</span>
                 </button>
                 <ChevronDown
-                  class="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 transition"
+                  class="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground transition"
                   :class="{ 'rotate-180': openDropdown === 'yearLevel' }"
                 />
                 <div v-if="openDropdown === 'yearLevel'" class="dropdown-menu">
@@ -826,19 +826,19 @@ onUnmounted(() => {
           </FormItem>
           <FormItem
             v-if="isCustomYearLevel"
-            class="md:col-span-2 rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm"
+            class="md:col-span-2 rounded-2xl border border-border bg-card/80 p-4 shadow-sm"
           >
-            <FormLabel class="text-slate-700">Custom Year Level</FormLabel>
+            <FormLabel class="text-foreground">Custom Year Level</FormLabel>
             <FormControl>
               <Input
                 :model-value="studentForm.customYearLevel"
                 placeholder="e.g., 6th Year, Senior High, Graduate Level"
-                class="mt-1 border-slate-200 bg-slate-50/80"
+                class="mt-1 border-border bg-muted/80"
                 @update:modelValue="updateCustomYearLevel(String($event))"
               />
             </FormControl>
           </FormItem>
-          <div class="md:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <div class="md:col-span-2 rounded-xl border border-border bg-muted px-4 py-3 text-sm text-muted-foreground">
             <p><strong>School email domain:</strong> {{ schoolEmailDomain || 'Set your official school email in Settings first' }}</p>
             <p v-if="!schoolCourseOptions.length" class="mt-1">
               Add your school courses in Settings first so admins can pick them here instead of typing manually.
@@ -846,18 +846,18 @@ onUnmounted(() => {
           </div>
           <div
             v-if="generatedEmail"
-            class="md:col-span-2 rounded-2xl border border-sky-200 bg-gradient-to-r from-sky-50 via-white to-emerald-50 px-4 py-4"
+            class="md:col-span-2 rounded-2xl border border-border bg-gradient-to-r from-accent via-card to-emerald-50 px-4 py-4"
           >
             <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
-                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Preview</p>
-                <p class="mt-1 text-lg font-semibold text-slate-950">{{ generatedEmail }}</p>
-                <p class="mt-1 text-sm text-slate-600">
+                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">Preview</p>
+                <p class="mt-1 text-lg font-semibold text-foreground">{{ generatedEmail }}</p>
+                <p class="mt-1 text-sm text-muted-foreground">
                   {{ studentForm.firstName }} {{ studentForm.lastName }} • {{ studentForm.course || 'Choose a course' }} • {{ studentForm.yearLevel || 'Choose year level' }}
                 </p>
               </div>
-              <div class="rounded-xl bg-white/80 px-4 py-3 text-sm text-slate-600 shadow-sm">
-                <p class="font-semibold text-slate-900">Auto-generated</p>
+              <div class="rounded-xl bg-card/80 px-4 py-3 text-sm text-muted-foreground shadow-sm">
+                <p class="font-semibold text-foreground">Auto-generated</p>
                 <p class="mt-1">Uses your school domain and selected name format.</p>
               </div>
             </div>
@@ -928,10 +928,10 @@ onUnmounted(() => {
   max-height: 260px;
   overflow-y: auto;
   border-radius: 18px;
-  border: 1px solid #dbeafe;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
-  box-shadow: 0 24px 60px -28px rgba(15, 23, 42, 0.35);
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow: 0 24px 60px -28px hsl(var(--foreground) / 0.35);
   padding: 8px;
 }
 
@@ -947,30 +947,31 @@ onUnmounted(() => {
   gap: 4px;
   cursor: pointer;
   transition: background 0.2s ease, transform 0.2s ease;
+  color: hsl(var(--foreground));
 }
 
 .dropdown-option:hover {
-  background: #eff6ff;
+  background: hsl(var(--accent));
   transform: translateY(-1px);
 }
 
 .dropdown-option.active {
-  background: linear-gradient(135deg, #dbeafe 0%, #ecfeff 100%);
-  color: #1d4ed8;
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
 }
 
 .dropdown-option-title {
   font-size: 0.92rem;
   font-weight: 700;
-  color: #0f172a;
+  color: hsl(var(--foreground));
 }
 
 .dropdown-option.active .dropdown-option-title {
-  color: #1d4ed8;
+  color: hsl(var(--primary));
 }
 
 .dropdown-option-copy {
   font-size: 0.78rem;
-  color: #64748b;
+  color: hsl(var(--muted-foreground));
 }
 </style>

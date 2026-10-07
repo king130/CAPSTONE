@@ -9,8 +9,10 @@ use App\Models\Role;
 use App\Models\User;
 use App\Services\OrganizationAccountProvisioner;
 use App\Services\TenantRoleService;
+use App\Support\OrgPermissions;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Validation\Rule;
 
 class TenantRbacController extends Controller
 {
@@ -167,7 +169,19 @@ class TenantRbacController extends Controller
 
         $data = $request->validate([
             'roleId' => ['required', 'integer', 'exists:roles,id'],
+            'status' => ['sometimes', 'in:active,inactive,pending'],
         ]);
+
+        $isSelfMembership = (int) $membership->user_id === (int) $user->id;
+        if ($isSelfMembership) {
+            return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
+        }
+
+        $isOwnerMembership = $tenant->owner_user_id !== null
+            && (int) $membership->user_id === (int) $tenant->owner_user_id;
+        if ($isOwnerMembership) {
+            return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
+        }
 
         $role = Role::query()
             ->where('id', $data['roleId'])
@@ -180,6 +194,11 @@ class TenantRbacController extends Controller
 
         $membership->role_id = $role->id;
         $membership->title = $membership->title ?: $role->name;
+
+        if (array_key_exists('status', $data)) {
+            $membership->status = $data['status'];
+        }
+
         $membership->save();
 
         $membership->user?->forceFill([
@@ -325,16 +344,50 @@ class TenantRbacController extends Controller
             return response()->json(['message' => 'Role does not belong to the selected tenant.'], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
+        $organizationPermissionKeys = OrgPermissions::organizationPermissionKeys();
+
         $data = $request->validate([
             'permissions' => ['array'],
-            'permissions.*' => ['string', 'exists:permissions,key'],
+            'permissions.*' => ['string', 'max:255', Rule::in($organizationPermissionKeys)],
         ]);
 
-        $this->tenantRoleService->syncPermissions($role, $data['permissions'] ?? []);
+        $requestedPermissions = array_values(array_unique($data['permissions'] ?? []));
+
+        if (! $this->isSystemAdmin($user)) {
+            $actorMembership = $this->activeTenantMembership($user, $tenant);
+            if (! $actorMembership) {
+                return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
+            }
+
+            $actorMembership->loadMissing('role.permissions');
+            $actorEffective = $actorMembership->effectivePermissions();
+
+            $role->loadMissing('permissions');
+            $currentPermissions = $role->permissions->pluck('key')->all();
+            $addedPermissions = array_values(array_diff($requestedPermissions, $currentPermissions));
+            $unauthorized = array_values(array_diff($addedPermissions, $actorEffective));
+
+            if ($unauthorized !== []) {
+                return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
+            }
+        }
+
+        $this->tenantRoleService->syncPermissions($role, $requestedPermissions);
 
         return response()->json([
             'role' => $this->serializeRole($role->fresh(['permissions', 'memberships'])),
         ]);
+    }
+
+    private function activeTenantMembership(User $user, Organization $tenant): ?OrganizationMembership
+    {
+        return OrganizationMembership::query()
+            ->select(['id', 'organization_id', 'user_id', 'role_id', 'status', 'permissions_override'])
+            ->where('user_id', $user->id)
+            ->where('organization_id', $tenant->id)
+            ->where('status', 'active')
+            ->with(['role:id,name,slug', 'role.permissions:id,key'])
+            ->first();
     }
 
     private function canManageTenantRoles(User $user, Organization $tenant): bool
@@ -343,13 +396,7 @@ class TenantRbacController extends Controller
             return true;
         }
 
-        $membership = OrganizationMembership::query()
-            ->select(['id', 'organization_id', 'user_id', 'role_id', 'status'])
-            ->where('user_id', $user->id)
-            ->where('organization_id', $tenant->id)
-            ->where('status', 'active')
-            ->with(['role:id,name,slug', 'role.permissions:id,key'])
-            ->first();
+        $membership = $this->activeTenantMembership($user, $tenant);
 
         if (! $membership) {
             return false;
@@ -368,13 +415,7 @@ class TenantRbacController extends Controller
             return true;
         }
 
-        $membership = OrganizationMembership::query()
-            ->select(['id', 'organization_id', 'user_id', 'role_id', 'status'])
-            ->where('user_id', $user->id)
-            ->where('organization_id', $tenant->id)
-            ->where('status', 'active')
-            ->with(['role:id,name,slug', 'role.permissions:id,key'])
-            ->first();
+        $membership = $this->activeTenantMembership($user, $tenant);
 
         if (! $membership) {
             return false;

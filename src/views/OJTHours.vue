@@ -58,6 +58,7 @@ import {
   exportSchoolOJTLogsCsv,
   fetchAdminOJTAnalytics,
   fetchAdminOJTLogs,
+  fetchOJTProgress,
   fetchSchoolOJTSummaries,
   listCompanyOJTLogs,
   listInternOJTLogs,
@@ -70,7 +71,7 @@ import {
   type OJTLog,
   type OJTProgress,
 } from '@/services/ojtService'
-import { fetchSettings } from '@/services/settings'
+import { fetchOrgOjtSettings } from '@/services/settings'
 import { useAuthStore } from '@/stores/auth'
 
 type WorkspaceRole = 'student' | 'company' | 'school' | 'admin'
@@ -395,7 +396,7 @@ const {
 const hasTodaysLog = computed(() => internLogs.value.some((log) => log.date === today))
 
 const internProgressCards = computed<ProgressStatCard[]>(() => [
-  { label: 'Total Logged', value: formatHours(internProgress.value.totalLogged), toneClass: 'text-slate-900' },
+  { label: 'Total Logged', value: formatHours(internProgress.value.totalLogged), toneClass: 'text-foreground' },
   { label: 'Approved Hours', value: formatHours(internProgress.value.totalApproved), toneClass: 'text-emerald-600' },
   { label: 'Pending Hours', value: formatHours(internProgress.value.totalPending), toneClass: 'text-amber-600' },
   { label: 'Rejected Hours', value: formatHours(internProgress.value.totalRejected), toneClass: 'text-red-600' },
@@ -540,14 +541,13 @@ function applyAdminFiltersPayload(filters: AdminFilterForm): OJTAdminFilters {
 async function loadInternData() {
   internLoading.value = true
   try {
-    const [logs, settings] = await Promise.all([
+    const [logs, progress] = await Promise.all([
       listInternOJTLogs(),
-      fetchSettings().catch(() => null),
+      fetchOJTProgress().catch(() => null),
     ])
     const sortedLogs = [...logs].sort((left, right) => right.date.localeCompare(left.date))
-    const requiredHours = Number(settings?.systemSettings?.requiredHours ?? 0)
     internLogs.value = sortedLogs
-    internProgress.value = buildProgressFromLogs(sortedLogs, requiredHours)
+    internProgress.value = progress ?? buildProgressFromLogs(sortedLogs, 500)
   } catch (caughtError) {
     error(caughtError, { fallback: 'Unable to load your OJT hours right now.' })
   } finally {
@@ -558,14 +558,14 @@ async function loadInternData() {
 async function loadCompanyData() {
   companyLoading.value = true
   try {
-    const [pending, approved, rejected, settings] = await Promise.all([
+    const [pending, approved, rejected, ojtSettings] = await Promise.all([
       listCompanyOJTLogs('pending'),
       listCompanyOJTLogs('approved'),
       listCompanyOJTLogs('rejected'),
-      fetchSettings().catch(() => null),
+      fetchOrgOjtSettings().catch(() => ({ requiredHours: 500 })),
     ])
     companyLogsByStatus.value = { pending, approved, rejected }
-    companyRequiredHours.value = Number(settings?.systemSettings?.requiredHours ?? 0)
+    companyRequiredHours.value = Number(ojtSettings?.requiredHours ?? 500)
     selectedCompanyLogIds.value = selectedCompanyLogIds.value.filter((logId) => pending.some((log) => log.id === logId))
   } catch (caughtError) {
     error(caughtError, { fallback: 'Unable to load company OJT approvals.' })
@@ -1504,7 +1504,7 @@ onMounted(() => {
                     <span>{{ point.label }}</span>
                     <span class="font-medium">{{ formatHours(point.hours) }}</span>
                   </div>
-                  <div class="h-3 overflow-hidden rounded-full bg-slate-200">
+                  <div class="h-3 overflow-hidden rounded-full bg-muted">
                     <div
                       class="h-full rounded-full bg-primary"
                       :style="{ width: `${Math.min(100, adminAnalytics.hoursPerWeek.length ? (point.hours / maxAdminHoursPoint) * 100 : 0)}%` }"
@@ -1532,7 +1532,7 @@ onMounted(() => {
                     <span>{{ point.school }}</span>
                     <span class="font-medium">{{ formatPercent(point.completionRate) }}</span>
                   </div>
-                  <div class="h-3 overflow-hidden rounded-full bg-slate-200">
+                  <div class="h-3 overflow-hidden rounded-full bg-muted">
                     <div class="h-full rounded-full bg-emerald-500" :style="{ width: `${Math.min(100, point.completionRate)}%` }" />
                   </div>
                 </div>

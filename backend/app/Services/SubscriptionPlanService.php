@@ -6,6 +6,7 @@ use App\Models\Company;
 use App\Models\Internship;
 use App\Models\Notification;
 use App\Models\Organization;
+use App\Models\OrganizationMedia;
 use App\Models\OrganizationMembership;
 use App\Models\School;
 use App\Models\Student;
@@ -28,7 +29,9 @@ class SubscriptionPlanService
         $planSlug = strtolower((string) ($organization->subscription?->plan ?: 'free'));
         $status = strtolower((string) ($organization->subscription?->status ?: 'inactive'));
 
-        if ($status === 'inactive') {
+        // Inactive or unpaid signup (status pending without a completed PayMongo verify) stays on free limits.
+        // Active orgs keep their current plan while a checkout is outstanding (tracked in pending_plan_change).
+        if (in_array($status, ['inactive', 'pending'], true)) {
             $planSlug = 'free';
         }
 
@@ -58,10 +61,12 @@ class SubscriptionPlanService
                 'school' => [
                     'coordinators' => (int) $plan->school_coordinators_limit,
                     'students' => (int) $plan->school_students_limit,
+                    'photos' => (int) ($plan->organization_photos_limit ?? 3),
                 ],
                 'company' => [
                     'accounts' => (int) $plan->company_accounts_limit,
                     'internships' => (int) $plan->company_internships_limit,
+                    'photos' => (int) ($plan->organization_photos_limit ?? 3),
                 ],
             ],
         ];
@@ -101,14 +106,21 @@ class SubscriptionPlanService
             $internshipQuery->where('company_id', $company->id);
         }
 
+        $photoCount = OrganizationMedia::query()->where('organization_id', $organization->id)->count();
+
         return [
             'school' => [
                 'coordinators' => $organization->type === 'school' ? $activeMemberCount : 0,
                 'students' => $organization->type === 'school' ? (clone $studentQuery)->count() : 0,
+                'photos' => $organization->type === 'school' ? $photoCount : 0,
             ],
             'company' => [
                 'accounts' => $organization->type === 'company' ? $activeMemberCount : 0,
                 'internships' => $organization->type === 'company' ? $internshipQuery->count() : 0,
+                'photos' => $organization->type === 'company' ? $photoCount : 0,
+            ],
+            'organization' => [
+                'photos' => $photoCount,
             ],
         ];
     }
@@ -125,6 +137,8 @@ class SubscriptionPlanService
 
         $usage = $this->usageSummary($organization);
         $items = [];
+
+        $photoLimit = (int) ($plan->organization_photos_limit ?? 3);
 
         if ($organization->type === 'school') {
             $items = array_values(array_filter([
@@ -143,6 +157,14 @@ class SubscriptionPlanService
                     'Student accounts',
                     $usage['school']['students'],
                     (int) $plan->school_students_limit
+                ),
+                $this->makeOverageItem(
+                    'organization.photos',
+                    'organization',
+                    'photos',
+                    'Organization photos',
+                    (int) ($usage['organization']['photos'] ?? 0),
+                    $photoLimit
                 ),
             ]));
         }
@@ -164,6 +186,14 @@ class SubscriptionPlanService
                     'Active internships',
                     $usage['company']['internships'],
                     (int) $plan->company_internships_limit
+                ),
+                $this->makeOverageItem(
+                    'organization.photos',
+                    'organization',
+                    'photos',
+                    'Organization photos',
+                    (int) ($usage['organization']['photos'] ?? 0),
+                    $photoLimit
                 ),
             ]));
         }
@@ -220,6 +250,10 @@ class SubscriptionPlanService
             'school.students' => $this->isLimited((int) $plan->school_students_limit, (int) $usage['school']['students'] + $increment),
             'company.accounts' => $this->isLimited((int) $plan->company_accounts_limit, (int) $usage['company']['accounts'] + $increment),
             'company.internships' => $this->isLimited((int) $plan->company_internships_limit, (int) $usage['company']['internships'] + $increment),
+            'organization.photos' => $this->isLimited(
+                (int) ($plan->organization_photos_limit ?? 3),
+                (int) ($usage['organization']['photos'] ?? 0) + $increment
+            ),
             default => false,
         };
     }

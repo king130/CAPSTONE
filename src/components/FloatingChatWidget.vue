@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { MessageCircle } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import {
   MagnifyingGlassIcon,
@@ -10,27 +11,25 @@ import {
   ChatBubbleLeftRightIcon,
 } from '@heroicons/vue/24/outline'
 import {
-  createOrGetDirectChat,
-  ensureDefaultChat,
-  mergeChatMemberNames,
-  sendMessage as sendChatMessage,
-  subscribeToChats,
-  subscribeToMessages,
+  ChatApiError,
+  listConversations,
+  listMessages,
+  markConversationRead,
+  openConversation,
+  sendChatMessage,
+  type ChatConversation,
   type ChatMessage,
-  type ChatThread,
 } from '@/services/chat'
-import { getPublicProfile, listPublicProfiles, type PublicProfile } from '@/services/profilesPublic'
+import { listPublicProfiles, type PublicProfile } from '@/services/profilesPublic'
 
-// Props for customization
 const props = defineProps<{
   userType?: 'intern' | 'company' | 'school'
 }>()
 
-// State management
 const authStore = useAuthStore()
 const isOpen = ref(false)
-const unreadCount = ref(0)
 const newMessage = ref('')
+const searchQuery = ref('')
 
 type ConversationItem = {
   id: string
@@ -54,24 +53,35 @@ type MessageItem = {
 }
 
 const conversations = ref<ConversationItem[]>([])
-const threadsMap = ref<Record<string, ChatThread>>({})
+const conversationById = ref<Record<string, ChatConversation>>({})
 const selectedConversation = ref<string | null>(null)
 const rawMessages = ref<ChatMessage[]>([])
-const currentUserId = computed(() => authStore.user?.uid || '')
-const unsubChats = ref<null | (() => void)>(null)
-const unsubMessages = ref<null | (() => void)>(null)
+
+const conversationsLoading = ref(false)
+const conversationsError = ref<string | null>(null)
+const messagesLoading = ref(false)
+const messagesError = ref<string | null>(null)
+const messagesUnauthorized = ref(false)
+const sending = ref(false)
+const sendError = ref<string | null>(null)
+const newChatError = ref<string | null>(null)
 const showNewChatPanel = ref(false)
 const chatPartners = ref<PublicProfile[]>([])
+const partnersLoading = ref(false)
 const startingChat = ref(false)
-/** Cache of uid -> display name for chat members (used when chat doc has no memberNames) */
-const memberNamesCache = ref<Record<string, string>>({})
 
-// Functions
+const currentUserId = computed(() => authStore.user?.uid || '')
+const POLL_MS = 10000
+let pollTimer: ReturnType<typeof setInterval> | null = null
+let listPollTimer: ReturnType<typeof setInterval> | null = null
+let loadMessagesSeq = 0
+
+const unreadCount = computed(() =>
+  conversations.value.reduce((sum, c) => sum + (c.unread > 0 ? c.unread : 0), 0),
+)
+
 function toggleChat() {
   isOpen.value = !isOpen.value
-  if (isOpen.value) {
-    unreadCount.value = 0
-  }
 }
 
 function closeChat() {
@@ -80,383 +90,355 @@ function closeChat() {
 
 function openChat() {
   isOpen.value = true
-  unreadCount.value = 0
 }
 
-function selectConversation(id: string) {
-  selectedConversation.value = id
-  rawMessages.value = []
-
-  // Check if this is a mock conversation
-  if (id.startsWith('mock-')) {
-    loadMockMessages(id)
-  } else {
-    startMessageListener(id)
-  }
+function formatMessageTime(iso: string | null): string {
+  if (!iso) return ''
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-const activeConversation = computed(() => {
-  return conversations.value.find(c => c.id === selectedConversation.value)
-})
-
-const mockMessages = ref<MessageItem[]>([])
-
-const messages = computed(() => {
-  const chatId = selectedConversation.value
-  if (!chatId) return []
-  if (chatId.startsWith('mock-')) return mockMessages.value
-  return rawMessages.value.map((m) => mapMessage(m, chatId))
-})
-
-function getOtherPartyName(thread: ChatThread): string {
-  if (thread.members.length !== 2) return thread.title || 'Chat'
-  const otherId = thread.members.find((m) => m !== currentUserId.value)
-  if (!otherId) return thread.title || 'Chat'
-  const fromDoc = thread.memberNames?.[otherId]
-  const fromCache = memberNamesCache.value[otherId]
-  return fromDoc || fromCache || 'User'
+function formatListTime(iso: string | null): string {
+  if (!iso) return ''
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-function currentUserDisplayName(): string {
-  const profile = authStore.user?.profile as Record<string, unknown> | undefined
-  const institutionName = typeof profile?.institutionName === 'string' ? profile.institutionName : ''
-  const companyName = typeof profile?.companyName === 'string' ? profile.companyName : ''
-  const displayName = authStore.user?.displayName || ''
-  const emailName = authStore.user?.email?.split('@')[0] || ''
-  return institutionName || companyName || displayName || emailName || 'User'
-}
-
-function mapThread(thread: ChatThread): ConversationItem {
-  const isDirect = thread.members.length === 2
-  const displayName = isDirect ? getOtherPartyName(thread) : (thread.title || 'Support')
+function mapConversation(thread: ChatConversation): ConversationItem {
+  const peerName = thread.peer?.name || 'Chat'
+  const peerRole = thread.peer?.role || 'Direct Chat'
   return {
     id: thread.id,
-    name: displayName,
-    subtitle: isDirect ? 'Direct Chat' : 'Group Chat',
+    name: peerName,
+    subtitle: peerRole,
     avatar: '/icons/logo-main.png',
-    lastMessage: thread.lastMessage || 'No messages yet',
-    time: '',
-    unread: 0,
+    lastMessage: thread.latestMessage?.body || 'No messages yet',
+    time: formatListTime(thread.latestMessage?.createdAt || thread.updatedAt),
+    unread: thread.unreadCount || 0,
     online: false,
-    isGroup: !isDirect,
+    isGroup: false,
   }
 }
 
-function getSenderName(senderId: string, chatId: string): string {
-  if (senderId === currentUserId.value) return 'You'
-  const thread = threadsMap.value[chatId]
-  const name =
-    thread?.memberNames?.[senderId] ||
-    memberNamesCache.value[senderId] ||
-    'User'
-  return name
+function applyConversations(list: ChatConversation[]) {
+  conversationById.value = Object.fromEntries(list.map((c) => [c.id, c]))
+  conversations.value = list.map(mapConversation)
 }
 
-function mapMessage(message: ChatMessage, chatId: string): MessageItem {
+function mapMessage(message: ChatMessage): MessageItem {
   const isOwn = message.senderId === currentUserId.value
-  const createdAt =
-    message.createdAt && typeof message.createdAt === 'object' && 'toDate' in message.createdAt
-      ? (message.createdAt as { toDate: () => Date }).toDate()
-      : message.createdAt
-      ? new Date(message.createdAt)
-      : null
+  const peerName = selectedConversation.value
+    ? conversationById.value[selectedConversation.value]?.peer?.name || 'User'
+    : 'User'
   return {
     id: message.id,
-    sender: getSenderName(message.senderId, chatId),
+    sender: isOwn ? 'You' : peerName,
     avatar: '/icons/logo-main.png',
-    message: message.text,
-    time: createdAt ? createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+    message: message.body,
+    time: formatMessageTime(message.createdAt),
     isOwn,
   }
 }
 
-function startMessageListener(chatId: string) {
-  if (unsubMessages.value) {
-    unsubMessages.value()
+const filteredConversations = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q) return conversations.value
+  return conversations.value.filter(
+    (c) =>
+      c.name.toLowerCase().includes(q) ||
+      c.lastMessage.toLowerCase().includes(q) ||
+      c.subtitle.toLowerCase().includes(q),
+  )
+})
+
+const activeConversation = computed(() =>
+  conversations.value.find((c) => c.id === selectedConversation.value) || null,
+)
+
+const messages = computed(() => rawMessages.value.map(mapMessage))
+
+function stopMessagePolling() {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer)
+    pollTimer = null
   }
-  unsubMessages.value = subscribeToMessages(chatId, (snapshot) => {
-    rawMessages.value = snapshot
-  })
 }
 
-async function sendMessage() {
-  if (!activeConversation.value) return
-  const content = newMessage.value.trim()
-  if (!content) return
-  
-  // Handle mock conversations
-  if (activeConversation.value.id.startsWith('mock-')) {
-    const now = new Date()
-    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    mockMessages.value.push({
-      id: `msg-${Date.now()}`,
-      sender: 'You',
-      avatar: '/icons/profiles/alex-doe.jpg',
-      message: content,
-      time: timeStr,
-      isOwn: true,
-    })
-    newMessage.value = ''
-    return
+function stopListPolling() {
+  if (listPollTimer !== null) {
+    clearInterval(listPollTimer)
+    listPollTimer = null
   }
-  
-  // Handle real Firebase conversations
-  if (!currentUserId.value) return
-  await sendChatMessage(activeConversation.value.id, currentUserId.value, content)
-  newMessage.value = ''
 }
 
-async function startChatListeners() {
+function stopAllPolling() {
+  stopMessagePolling()
+  stopListPolling()
+}
+
+function canPoll(): boolean {
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+    return false
+  }
+  return isOpen.value
+}
+
+function startMessagePolling(conversationId: string) {
+  stopMessagePolling()
+  pollTimer = setInterval(() => {
+    if (!canPoll()) return
+    if (selectedConversation.value !== conversationId) return
+    void refreshMessages(conversationId, true)
+  }, POLL_MS)
+}
+
+function startListPolling() {
+  stopListPolling()
+  listPollTimer = setInterval(() => {
+    if (!canPoll()) return
+    void loadConversations(true)
+  }, POLL_MS)
+}
+
+async function loadConversations(silent = false) {
   if (!currentUserId.value) {
-    loadMockConversations()
+    conversations.value = []
+    conversationById.value = {}
+    if (!silent) {
+      conversationsError.value = 'Sign in to use chat.'
+    }
     return
+  }
+
+  if (!silent) {
+    conversationsLoading.value = true
+    conversationsError.value = null
   }
 
   try {
-    const defaultChatId = await ensureDefaultChat(currentUserId.value)
-    unsubChats.value = subscribeToChats(
-      currentUserId.value,
-      async (threads) => {
-        if (threads.length === 0) {
-          loadMockConversations()
-        } else {
-          threadsMap.value = Object.fromEntries(threads.map((thread) => [thread.id, thread]))
-
-          const directThreadsMissingNames = threads
-            .map((thread) => {
-              if (thread.members.length !== 2) return null
-
-              const otherId = thread.members.find((member) => member !== currentUserId.value)
-              if (!otherId || thread.memberNames?.[otherId] || memberNamesCache.value[otherId]) {
-                return null
-              }
-
-              return { threadId: thread.id, otherId }
-            })
-            .filter((item): item is { threadId: string; otherId: string } => item !== null)
-
-          const uniqueOtherIds = [...new Set(directThreadsMissingNames.map((item) => item.otherId))]
-          const fetchedProfiles = await Promise.all(
-            uniqueOtherIds.map(async (otherId) => ({
-              otherId,
-              profile: await getPublicProfile(otherId),
-            }))
-          )
-
-          const fetchedNames = Object.fromEntries(
-            fetchedProfiles
-              .filter((entry) => entry.profile)
-              .map((entry) => [entry.otherId, entry.profile?.orgName || entry.profile?.displayName || 'User'])
-          )
-
-          if (Object.keys(fetchedNames).length > 0) {
-            memberNamesCache.value = {
-              ...memberNamesCache.value,
-              ...fetchedNames,
-            }
-
-            void Promise.all(
-              directThreadsMissingNames.map(async ({ threadId, otherId }) => {
-                const name = fetchedNames[otherId]
-                if (name) {
-                  await mergeChatMemberNames(threadId, { [otherId]: name }).catch(() => {})
-                }
-              })
-            )
-          }
-
-          conversations.value = threads.map(mapThread)
-          if (!selectedConversation.value && conversations.value.length > 0) {
-            const initial = conversations.value.find((chat) => chat.id === defaultChatId) || conversations.value[0]
-            if (initial) {
-              selectedConversation.value = initial.id
-              startMessageListener(initial.id)
-            }
-          }
-        }
-      },
-      () => loadMockConversations()
-    )
-  } catch (error) {
-    console.warn('FloatingChatWidget: Chat unavailable (permission or network), using mock data:', error)
-    loadMockConversations()
+    const list = await listConversations()
+    applyConversations(list)
+    conversationsError.value = null
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : 'Failed to load conversations'
+    if (!silent) {
+      conversations.value = []
+      conversationById.value = {}
+      conversationsError.value = message
+    }
+  } finally {
+    if (!silent) {
+      conversationsLoading.value = false
+    }
   }
 }
 
-function loadMockConversations() {
-  conversations.value = [
-    {
-      id: 'mock-1',
-      name: 'OJT Support Team',
-      subtitle: 'Support',
-      avatar: '/icons/logo-main.png',
-      lastMessage: 'Welcome! How can we help you?',
-      time: '2m',
-      unread: 0,
-      online: true,
-      isGroup: false,
-    },
-    {
-      id: 'mock-2',
-      name: 'Maria Santos',
-      subtitle: 'UI/UX Designer',
-      avatar: '/icons/profiles/maria-santos.jpg',
-      lastMessage: 'Thanks for the feedback!',
-      time: '1h',
-      unread: 2,
-      online: true,
-      isGroup: false,
-    },
-    {
-      id: 'mock-3',
-      name: 'John Smith',
-      subtitle: 'Project Manager',
-      avatar: '/icons/profiles/john-smith.jpg',
-      lastMessage: 'Meeting at 3pm tomorrow',
-      time: '3h',
-      unread: 0,
-      online: false,
-      isGroup: false,
-    },
-    {
-      id: 'mock-4',
-      name: 'Emily Johnson',
-      subtitle: 'Frontend Developer',
-      avatar: '/icons/profiles/emily-johnson.jpg',
-      lastMessage: 'Check out the new design',
-      time: '5h',
-      unread: 1,
-      online: true,
-      isGroup: false,
-    },
-  ]
-  
-  // Auto-select first conversation
-  const firstConversation = conversations.value[0]
-  if (firstConversation) {
-    selectedConversation.value = firstConversation.id
-    loadMockMessages(firstConversation.id)
+async function refreshMessages(conversationId: string, silent = false) {
+  try {
+    const list = await listMessages(conversationId)
+    if (selectedConversation.value !== conversationId) return
+    rawMessages.value = list
+    messagesError.value = null
+    messagesUnauthorized.value = false
+  } catch (caught) {
+    if (selectedConversation.value !== conversationId) return
+    const err = caught instanceof ChatApiError ? caught : null
+    if (err?.isForbidden) {
+      selectedConversation.value = null
+      rawMessages.value = []
+      messagesUnauthorized.value = true
+      messagesError.value = "You don't have access to this conversation."
+      stopMessagePolling()
+      return
+    }
+    if (!silent) {
+      rawMessages.value = []
+      messagesError.value = caught instanceof Error ? caught.message : 'Failed to load messages'
+    }
   }
 }
 
-function loadMockMessages(conversationId: string) {
-  mockMessages.value = [
-    {
-      id: 'msg-1',
-      sender: 'Support',
-      avatar: '/icons/logo-main.png',
-      message: 'Hello! Welcome to OJT Intern Path. How can we assist you today?',
-      time: '10:30 AM',
-      isOwn: false,
-    },
-    {
-      id: 'msg-2',
-      sender: 'You',
-      avatar: '/icons/profiles/alex-doe.jpg',
-      message: 'Hi! I have a question about my internship application.',
-      time: '10:32 AM',
-      isOwn: true,
-    },
-    {
-      id: 'msg-3',
-      sender: 'Support',
-      avatar: '/icons/logo-main.png',
-      message: 'Of course! I\'d be happy to help. What would you like to know?',
-      time: '10:33 AM',
-      isOwn: false,
-    },
-  ]
-}
-
-onMounted(() => {
-  startChatListeners()
-  window.addEventListener('chat:open', openChat)
-})
-
-watch(currentUserId, () => {
-  if (unsubChats.value) {
-    unsubChats.value()
-    unsubChats.value = null
-  }
-  if (unsubMessages.value) {
-    unsubMessages.value()
-    unsubMessages.value = null
-  }
-  conversations.value = []
+async function loadConversationMessages(conversationId: string) {
+  const seq = ++loadMessagesSeq
+  messagesLoading.value = true
+  messagesError.value = null
+  messagesUnauthorized.value = false
+  sendError.value = null
   rawMessages.value = []
-  mockMessages.value = []
-  selectedConversation.value = null
-  startChatListeners()
-})
 
-onUnmounted(() => {
-  if (unsubChats.value) unsubChats.value()
-  if (unsubMessages.value) unsubMessages.value()
-  window.removeEventListener('chat:open', openChat)
-})
+  try {
+    const list = await listMessages(conversationId)
+    if (seq !== loadMessagesSeq || selectedConversation.value !== conversationId) return
+    rawMessages.value = list
+  } catch (caught) {
+    if (seq !== loadMessagesSeq || selectedConversation.value !== conversationId) return
+    const err = caught instanceof ChatApiError ? caught : null
+    if (err?.isForbidden) {
+      selectedConversation.value = null
+      rawMessages.value = []
+      messagesUnauthorized.value = true
+      messagesError.value = "You don't have access to this conversation."
+      stopMessagePolling()
+      return
+    }
+    rawMessages.value = []
+    messagesError.value = caught instanceof Error ? caught.message : 'Failed to load messages'
+  } finally {
+    if (seq === loadMessagesSeq) {
+      messagesLoading.value = false
+    }
+  }
+}
 
-async function openNewChatPanel() {
-  const role = props.userType || authStore.user?.role
-  if (role === 'company') {
-    chatPartners.value = await listPublicProfiles('school')
-  } else if (role === 'school') {
-    chatPartners.value = await listPublicProfiles('company')
-  } else if (role === 'student' || role === 'intern') {
-    const [schools, companies] = await Promise.all([
-      listPublicProfiles('school'),
-      listPublicProfiles('company'),
-    ])
-    chatPartners.value = [...schools, ...companies]
-  } else {
+async function markRead(conversationId: string) {
+  try {
+    const result = await markConversationRead(conversationId)
+    const existing = conversationById.value[conversationId]
+    if (existing) {
+      conversationById.value = {
+        ...conversationById.value,
+        [conversationId]: {
+          ...existing,
+          lastReadAt: result.lastReadAt,
+          unreadCount: 0,
+        },
+      }
+    }
+    conversations.value = conversations.value.map((c) =>
+      c.id === conversationId ? { ...c, unread: 0 } : c,
+    )
+  } catch {
+    // Non-blocking for MVP; unread may stay until next list refresh.
+  }
+}
+
+async function selectConversation(id: string) {
+  if (selectedConversation.value === id && rawMessages.value.length > 0 && !messagesError.value) {
     return
   }
+  selectedConversation.value = id
+  stopMessagePolling()
+  await loadConversationMessages(id)
+  if (selectedConversation.value !== id) return
+  if (!messagesError.value) {
+    await markRead(id)
+    startMessagePolling(id)
+  }
+}
+
+async function sendMessage() {
+  const conversationId = selectedConversation.value
+  if (!conversationId || sending.value) return
+  const content = newMessage.value.trim()
+  if (!content) return
+
+  sending.value = true
+  sendError.value = null
+  try {
+    const saved = await sendChatMessage(conversationId, content)
+    newMessage.value = ''
+    if (!rawMessages.value.some((m) => m.id === saved.id)) {
+      rawMessages.value = [...rawMessages.value, saved]
+    }
+    conversations.value = conversations.value.map((c) =>
+      c.id === conversationId
+        ? {
+            ...c,
+            lastMessage: saved.body,
+            time: formatListTime(saved.createdAt),
+            unread: 0,
+          }
+        : c,
+    )
+    const existing = conversationById.value[conversationId]
+    if (existing) {
+      conversationById.value = {
+        ...conversationById.value,
+        [conversationId]: {
+          ...existing,
+          latestMessage: {
+            id: saved.id,
+            body: saved.body,
+            senderId: saved.senderId,
+            createdAt: saved.createdAt,
+          },
+          unreadCount: 0,
+        },
+      }
+    }
+    await markRead(conversationId)
+  } catch (caught) {
+    sendError.value = caught instanceof Error ? caught.message : 'Failed to send message'
+  } finally {
+    sending.value = false
+  }
+}
+
+async function openNewChatPanel() {
+  newChatError.value = null
+  partnersLoading.value = true
   showNewChatPanel.value = true
+  try {
+    const role = props.userType || authStore.user?.role
+    if (role === 'company') {
+      chatPartners.value = await listPublicProfiles('school')
+    } else if (role === 'school') {
+      chatPartners.value = await listPublicProfiles('company')
+    } else if (role === 'student' || role === 'intern') {
+      const [schools, companies] = await Promise.all([
+        listPublicProfiles('school'),
+        listPublicProfiles('company'),
+      ])
+      chatPartners.value = [...schools, ...companies]
+    } else {
+      chatPartners.value = []
+    }
+  } catch (caught) {
+    chatPartners.value = []
+    newChatError.value = caught instanceof Error ? caught.message : 'Failed to load directory'
+  } finally {
+    partnersLoading.value = false
+  }
 }
 
 async function startChatWith(partner: PublicProfile) {
   const uid = currentUserId.value
-  if (!uid || uid === partner.uid) return
+  if (!uid || uid === partner.uid || startingChat.value) return
+
   startingChat.value = true
-  const myName = currentUserDisplayName()
-  const partnerName = partner.orgName || partner.displayName
+  newChatError.value = null
   try {
-    const chatId = await createOrGetDirectChat(uid, partner.uid, {
-      title: partnerName,
-      userName1: myName,
-      userName2: partnerName,
-    })
+    const conversation = await openConversation(partner.uid)
     showNewChatPanel.value = false
-    const existing = conversations.value.find((c) => c.id === chatId)
-    if (existing) {
-      selectedConversation.value = chatId
-      startMessageListener(chatId)
-    } else {
-      const newThread: ChatThread = {
-        id: chatId,
-        members: [uid, partner.uid].sort(),
-        title: partnerName,
-        memberNames: { [uid]: myName, [partner.uid]: partnerName },
-      }
-      threadsMap.value = { ...threadsMap.value, [chatId]: newThread }
-      conversations.value = [
-        ...conversations.value,
-        {
-          id: chatId,
-          name: partnerName,
-          subtitle: 'Direct Chat',
-          avatar: '/icons/logo-main.png',
-          lastMessage: '',
-          time: '',
-          unread: 0,
-          online: false,
-          isGroup: false,
-        },
-      ]
-      selectedConversation.value = chatId
-      startMessageListener(chatId)
+    const mapped = mapConversation(conversation)
+    conversationById.value = {
+      ...conversationById.value,
+      [conversation.id]: conversation,
     }
-  } catch (e) {
-    console.warn('Failed to start chat:', e)
+    const existingIdx = conversations.value.findIndex((c) => c.id === conversation.id)
+    if (existingIdx >= 0) {
+      const next = [...conversations.value]
+      next[existingIdx] = mapped
+      conversations.value = next
+    } else {
+      conversations.value = [mapped, ...conversations.value]
+    }
+    selectedConversation.value = conversation.id
+    stopMessagePolling()
+    await loadConversationMessages(conversation.id)
+    if (selectedConversation.value === conversation.id && !messagesError.value) {
+      await markRead(conversation.id)
+      startMessagePolling(conversation.id)
+    }
+  } catch (caught) {
+    const err = caught instanceof ChatApiError ? caught : null
+    if (err?.isForbidden) {
+      newChatError.value = "You can't start a conversation with this user."
+    } else {
+      newChatError.value = caught instanceof Error ? caught.message : 'Failed to start conversation'
+    }
   } finally {
     startingChat.value = false
   }
@@ -465,74 +447,143 @@ async function startChatWith(partner: PublicProfile) {
 function handleImageError(event: Event) {
   const img = event.target as HTMLImageElement
   const name = img.alt || 'User'
-  const initials = name.split(' ').map(n => n[0]).join('').toUpperCase()
-  
+  const initials = name
+    .split(' ')
+    .map((n) => n[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2)
+
   const colors = ['#2563eb', '#7c3aed', '#dc2626', '#059669', '#d97706', '#0891b2']
   const colorIndex = name.length % colors.length
   const color = colors[colorIndex]
-  
-  const svg = `
-    <svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">
-      <rect width="100" height="100" fill="${color}"/>
-      <text x="50" y="50" font-family="Arial, sans-serif" font-size="36" font-weight="bold" 
-            fill="white" text-anchor="middle" dominant-baseline="central">${initials}</text>
-    </svg>
-  `
-  
-  const dataUrl = 'data:image/svg+xml;base64,' + btoa(svg)
-  img.src = dataUrl
+
+  const svg =
+    '<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">' +
+    `<rect width="100" height="100" fill="${color}"/>` +
+    '<text x="50" y="50" font-family="Arial, sans-serif" font-size="36" font-weight="bold" ' +
+    'fill="white" text-anchor="middle" dominant-baseline="central">' +
+    initials +
+    '</text></svg>'
+
+  img.src = 'data:image/svg+xml;base64,' + btoa(svg)
 }
+
+function onVisibilityChange() {
+  if (document.visibilityState === 'visible' && isOpen.value) {
+    void loadConversations(true)
+    if (selectedConversation.value) {
+      void refreshMessages(selectedConversation.value, true)
+    }
+  }
+}
+
+watch(isOpen, async (open) => {
+  if (open) {
+    await loadConversations()
+    startListPolling()
+    if (selectedConversation.value) {
+      await loadConversationMessages(selectedConversation.value)
+      if (!messagesError.value) {
+        await markRead(selectedConversation.value)
+        startMessagePolling(selectedConversation.value)
+      }
+    }
+  } else {
+    stopAllPolling()
+  }
+})
+
+watch(currentUserId, () => {
+  stopAllPolling()
+  conversations.value = []
+  conversationById.value = {}
+  rawMessages.value = []
+  selectedConversation.value = null
+  conversationsError.value = null
+  messagesError.value = null
+  sendError.value = null
+  newChatError.value = null
+  if (isOpen.value) {
+    void loadConversations()
+    startListPolling()
+  }
+})
+
+onMounted(() => {
+  window.addEventListener('chat:open', openChat)
+  document.addEventListener('visibilitychange', onVisibilityChange)
+})
+
+onUnmounted(() => {
+  stopAllPolling()
+  window.removeEventListener('chat:open', openChat)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+})
 </script>
 
 <template>
-  <!-- Floating Chat Button -->
-  <div v-if="!isOpen" class="floating-chat-button" @click="toggleChat">
-    <ChatBubbleLeftRightIcon class="chat-button-icon" />
-    <div v-if="unreadCount > 0" class="unread-badge">{{ unreadCount }}</div>
-  </div>
+  <!-- Floating Chat Launcher -->
+  <button
+    v-if="!isOpen"
+    type="button"
+    class="floating-chat-launcher"
+    :aria-label="unreadCount > 0 ? `Open messages, ${unreadCount} unread` : 'Open messages'"
+    @click="toggleChat"
+  >
+    <MessageCircle class="floating-chat-launcher__icon" aria-hidden="true" />
+    <span v-if="unreadCount > 0" class="floating-chat-launcher__badge" aria-hidden="true">
+      {{ unreadCount > 99 ? '99+' : unreadCount }}
+    </span>
+  </button>
 
   <!-- Full Screen Chat Widget -->
   <div v-if="isOpen" class="floating-chat-widget">
-    <!-- Main Chat Header -->
     <div class="main-chat-header">
       <div class="header-left">
         <ChatBubbleLeftRightIcon class="header-icon" />
         <h1 class="header-title">Messages</h1>
       </div>
       <div class="header-right">
-        <button @click="closeChat" class="close-btn">
+        <button
+          @click="closeChat"
+          class="close-btn"
+          type="button"
+          aria-label="Close messages"
+        >
           <XMarkIcon class="close-icon" />
         </button>
       </div>
     </div>
 
-    <!-- Chat Content Container -->
     <div class="chat-container">
-      <!-- Profiles Sidebar -->
       <aside class="profiles-sidebar">
         <div class="sidebar-header">
           <h2 class="sidebar-title">Chats</h2>
-          <button class="btn-new-chat" @click="openNewChatPanel" title="New conversation">
+          <button class="btn-new-chat" @click="openNewChatPanel" title="New conversation" type="button">
             <PlusIcon class="icon-sm" />
           </button>
         </div>
 
-        <!-- New Chat Panel -->
         <div v-if="showNewChatPanel" class="new-chat-panel">
           <div class="new-chat-header">
             <span>Start conversation</span>
-            <button class="btn-close-panel" @click="showNewChatPanel = false">
+            <button class="btn-close-panel" @click="showNewChatPanel = false" type="button">
               <XMarkIcon class="icon-sm" />
             </button>
           </div>
-          <div v-if="chatPartners.length === 0" class="new-chat-empty">No users available. Ask them to complete their profile.</div>
+          <p v-if="newChatError" class="chat-error-text">{{ newChatError }}</p>
+          <p v-if="partnersLoading" class="chat-status-text">Loading directory...</p>
+          <div v-else-if="chatPartners.length === 0" class="new-chat-empty">
+            No users available. Ask them to complete their profile.
+          </div>
           <div v-else class="new-chat-list">
             <div
               v-for="p in chatPartners"
               :key="p.uid"
               class="new-chat-item"
-              :class="{ disabled: p.uid === currentUserId }"
-              @click="p.uid !== currentUserId && startChatWith(p)"
+              :class="{ disabled: p.uid === currentUserId || startingChat }"
+              @click="p.uid !== currentUserId && !startingChat && startChatWith(p)"
             >
               <span class="new-chat-name">{{ p.orgName || p.displayName }}</span>
               <span class="new-chat-role">{{ p.role }}</span>
@@ -543,51 +594,84 @@ function handleImageError(event: Event) {
         <div class="sidebar-search">
           <div class="search-box">
             <MagnifyingGlassIcon class="search-icon" />
-            <input type="text" placeholder="Search conversations..." class="search-input" />
+            <input
+              v-model="searchQuery"
+              type="text"
+              placeholder="Search conversations..."
+              class="search-input"
+            />
           </div>
         </div>
 
+        <p v-if="conversationsLoading" class="chat-status-text">Loading conversations...</p>
+        <p v-else-if="conversationsError" class="chat-error-text">{{ conversationsError }}</p>
+        <p v-else-if="filteredConversations.length === 0" class="chat-status-text">No conversations yet.</p>
+
         <div class="profiles-list">
-          <div 
-            v-for="conversation in conversations" 
+          <div
+            v-for="conversation in filteredConversations"
             :key="conversation.id"
             @click="selectConversation(conversation.id)"
             class="profile-item"
             :class="{ active: selectedConversation === conversation.id }"
           >
             <div class="profile-avatar-wrapper">
-              <img :src="conversation.avatar" :alt="conversation.name" class="profile-avatar" @error="handleImageError" />
-              <span v-if="conversation.online && conversation.isGroup" class="online-badge"></span>
+              <img
+                :src="conversation.avatar"
+                :alt="conversation.name"
+                class="profile-avatar"
+                @error="handleImageError"
+              />
             </div>
             <div class="profile-info-sidebar">
-              <h3 class="profile-name-sidebar">{{ conversation.name }}</h3>
-              <p class="profile-last-message">{{ conversation.lastMessage }}</p>
+              <div class="profile-row-top">
+                <h3 class="profile-name-sidebar">{{ conversation.name }}</h3>
+                <span v-if="conversation.time" class="profile-time">{{ conversation.time }}</span>
+              </div>
+              <div class="profile-row-bottom">
+                <p class="profile-last-message">{{ conversation.lastMessage }}</p>
+                <span v-if="conversation.unread > 0" class="sidebar-unread" :aria-label="`${conversation.unread} unread`">
+                  {{ conversation.unread > 99 ? '99+' : conversation.unread }}
+                </span>
+              </div>
             </div>
           </div>
         </div>
       </aside>
 
-      <!-- Main Chat Area -->
       <main class="main-area" v-if="activeConversation">
-        <!-- Profile Header -->
         <div class="profile-header">
           <div class="profile-info">
             <div class="profile-avatar-large-wrapper">
-              <img :src="activeConversation.avatar" :alt="activeConversation.name" class="profile-avatar-large" @error="handleImageError" />
-              <span v-if="activeConversation.online && activeConversation.isGroup" class="online-badge-large"></span>
+              <img
+                :src="activeConversation.avatar"
+                :alt="activeConversation.name"
+                class="profile-avatar-large"
+                @error="handleImageError"
+              />
             </div>
             <div class="profile-details">
-              <h2 class="profile-name">{{ activeConversation.name }}</h2>
-              <p class="profile-status">{{ activeConversation.online ? 'Active now' : (activeConversation.isGroup ? 'Offline' : 'Direct Chat') }}</p>
+              <div class="profile-name-row">
+                <h2 class="profile-name">{{ activeConversation.name }}</h2>
+                <span class="status-pill">Direct</span>
+              </div>
+              <p class="profile-status">Conversation</p>
             </div>
           </div>
         </div>
 
-        <!-- Messages Section -->
         <div class="messages-section">
-          <div class="messages-container">
-            <div 
-              v-for="message in messages" 
+          <p v-if="messagesLoading" class="chat-status-text">Loading messages...</p>
+          <p v-else-if="messagesError" class="chat-error-text">{{ messagesError }}</p>
+          <div v-else-if="messages.length === 0" class="messages-container">
+            <div class="empty-state-content" style="margin: auto; padding: 24px 0;">
+              <h3 class="empty-title">No messages yet</h3>
+              <p class="empty-text">Send a message to start the conversation</p>
+            </div>
+          </div>
+          <div v-else class="messages-container">
+            <div
+              v-for="message in messages"
               :key="message.id"
               class="message-row"
               :class="{ 'own-message': message.isOwn }"
@@ -599,22 +683,31 @@ function handleImageError(event: Event) {
             </div>
           </div>
 
-          <!-- Message Input -->
+          <p v-if="sendError" class="chat-error-text composer-error">{{ sendError }}</p>
+
           <div class="message-input-container">
-            <button class="input-action-btn" title="Attach file">
+            <button class="input-action-btn" title="Attach file" type="button" disabled>
               <PlusIcon class="input-icon" />
             </button>
-            <input 
+            <input
               v-model="newMessage"
-              type="text" 
-              placeholder="Aa"
+              type="text"
+              placeholder="Type a message..."
               class="message-input-field"
+              aria-label="Message text"
+              :disabled="sending || messagesLoading || !!messagesError"
               @keyup.enter="sendMessage"
             />
-            <button class="input-action-btn" title="Emoji">
+            <button class="input-action-btn" title="Emoji" type="button" disabled aria-label="Emoji (unavailable)">
               <FaceSmileIcon class="input-icon" />
             </button>
-            <button @click="sendMessage" class="send-message-btn" :disabled="!newMessage.trim()">
+            <button
+              @click="sendMessage"
+              class="send-message-btn"
+              type="button"
+              aria-label="Send message"
+              :disabled="!newMessage.trim() || sending || messagesLoading || !!messagesError"
+            >
               <PaperAirplaneIcon class="send-icon" />
             </button>
           </div>
@@ -624,8 +717,16 @@ function handleImageError(event: Event) {
       <div v-else class="empty-state">
         <div class="empty-state-content">
           <ChatBubbleLeftRightIcon class="empty-icon" />
-          <h3 class="empty-title">Select a conversation</h3>
-          <p class="empty-text">Choose a conversation from the list to start messaging</p>
+          <h3 class="empty-title">{{ messagesUnauthorized ? 'Conversation unavailable' : 'Select a conversation' }}</h3>
+          <p class="empty-text">
+            {{
+              messagesUnauthorized
+                ? messagesError || "You don't have access to this conversation."
+                : conversationsError
+                  ? conversationsError
+                  : 'Choose a conversation from the list to start messaging'
+            }}
+          </p>
         </div>
       </div>
     </div>
@@ -633,62 +734,99 @@ function handleImageError(event: Event) {
 </template>
 
 <style scoped>
-/* Floating Chat Button */
-.floating-chat-button {
+/* Floating Chat Launcher — presentation only; chat panel styles unchanged below */
+.floating-chat-launcher {
   position: fixed;
-  bottom: 24px;
-  right: 24px;
-  width: 60px;
-  height: 60px;
-  background: linear-gradient(135deg, #0084ff 0%, #0066cc 100%);
-  border-radius: 50%;
-  display: flex;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 1000;
+  display: inline-flex;
+  height: 2.75rem;
+  width: 2.75rem;
   align-items: center;
   justify-content: center;
+  border-radius: calc(var(--radius) + 4px);
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  box-shadow: 0 8px 20px hsl(var(--foreground) / 0.12);
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(0, 132, 255, 0.4);
-  transition: all 0.3s ease;
-  z-index: 1000;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
 }
 
-.floating-chat-button:hover {
-  transform: scale(1.1);
-  box-shadow: 0 6px 20px rgba(0, 132, 255, 0.5);
+.floating-chat-launcher:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+  border-color: hsl(var(--border));
+  box-shadow: 0 10px 24px hsl(var(--foreground) / 0.14);
 }
 
-.chat-button-icon {
-  width: 28px;
-  height: 28px;
-  color: white;
+.floating-chat-launcher:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px hsl(var(--background)),
+    0 0 0 4px hsl(var(--ring));
+}
+
+.floating-chat-launcher:active {
+  transform: translateY(1px);
+}
+
+.floating-chat-launcher__icon {
+  width: 1.25rem;
+  height: 1.25rem;
   stroke-width: 2;
 }
 
-.unread-badge {
+.floating-chat-launcher__badge {
   position: absolute;
-  top: -4px;
-  right: -4px;
-  background: #fa3e3e;
-  color: white;
-  border-radius: 50%;
-  min-width: 20px;
-  height: 20px;
-  display: flex;
+  top: -0.35rem;
+  right: -0.35rem;
+  display: inline-flex;
+  min-width: 1.15rem;
+  height: 1.15rem;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  padding: 0 0.3rem;
+  border-radius: 9999px;
+  border: 2px solid hsl(var(--background));
+  background: hsl(var(--destructive));
+  color: hsl(var(--destructive-foreground));
+  font-size: 0.65rem;
   font-weight: 700;
-  border: 2px solid white;
-  padding: 0 4px;
+  line-height: 1;
 }
 
-/* Full Screen Chat Widget */
+@media (max-width: 640px) {
+  .floating-chat-launcher {
+    right: 1rem;
+    bottom: 1rem;
+  }
+}
+
+/* Full Screen Chat Widget — OJT semantic surfaces; messenger blue removed */
 .floating-chat-widget {
+  --chat-send: hsl(var(--primary));
+  --chat-send-fg: hsl(var(--primary-foreground));
+  --chat-send-muted: hsl(var(--primary-foreground) / 0.75);
+  --chat-accent: hsl(var(--primary));
+  --chat-accent-soft: hsl(var(--accent));
+  --chat-active: hsl(var(--accent));
+  --chat-online: #31a24c;
+  --chat-disabled-icon: hsl(var(--muted-foreground));
+
   position: fixed;
   top: 0;
   left: 0;
   width: 100vw;
   height: 100vh;
-  background: #fff;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
   display: flex;
   flex-direction: column;
   z-index: 1001;
@@ -701,10 +839,10 @@ function handleImageError(event: Event) {
   justify-content: space-between;
   align-items: center;
   padding: 16px 24px;
-  background: #fff;
-  border-bottom: 1px solid #e5e7eb;
+  background: hsl(var(--card));
+  border-bottom: 1px solid hsl(var(--border));
   flex-shrink: 0;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 1px 2px hsl(var(--foreground) / 0.05);
 }
 
 .header-left {
@@ -716,14 +854,15 @@ function handleImageError(event: Event) {
 .header-icon {
   width: 28px;
   height: 28px;
-  color: #2563eb;
+  color: var(--chat-accent);
   stroke-width: 2;
 }
 
 .header-title {
-  font-size: 24px;
+  font-size: 1.375rem;
   font-weight: 700;
-  color: #111827;
+  letter-spacing: -0.02em;
+  color: hsl(var(--foreground));
   margin: 0;
 }
 
@@ -748,13 +887,20 @@ function handleImageError(event: Event) {
 }
 
 .close-btn:hover {
-  background: #f3f4f6;
+  background: hsl(var(--muted));
+}
+
+.close-btn:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px hsl(var(--background)),
+    0 0 0 4px hsl(var(--ring));
 }
 
 .close-icon {
   width: 24px;
   height: 24px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   stroke-width: 2.5;
 }
 
@@ -764,13 +910,13 @@ function handleImageError(event: Event) {
   display: grid;
   grid-template-columns: 360px 1fr;
   overflow: hidden;
-  background: #fff;
+  background: hsl(var(--background));
 }
 
 /* Profiles Sidebar */
 .profiles-sidebar {
-  background: #fff;
-  border-right: 1px solid #e5e7eb;
+  background: hsl(var(--card));
+  border-right: 1px solid hsl(var(--border));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -778,7 +924,7 @@ function handleImageError(event: Event) {
 
 .sidebar-header {
   padding: 16px 20px;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid hsl(var(--border));
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -788,17 +934,23 @@ function handleImageError(event: Event) {
 .btn-new-chat {
   padding: 6px;
   border-radius: 8px;
-  border: 1px solid #e5e7eb;
-  background: #f9fafb;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--muted));
   cursor: pointer;
-  color: #374151;
+  color: hsl(var(--foreground));
 }
-.btn-new-chat:hover { background: #f3f4f6; }
+.btn-new-chat:hover { background: hsl(var(--accent)); }
+.btn-new-chat:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px hsl(var(--background)),
+    0 0 0 4px hsl(var(--ring));
+}
 
 .new-chat-panel {
   padding: 12px;
-  border-bottom: 1px solid #e5e7eb;
-  background: #f9fafb;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--muted));
   max-height: 200px;
   overflow-y: auto;
 }
@@ -810,7 +962,7 @@ function handleImageError(event: Event) {
   margin-bottom: 8px;
   font-size: 0.875rem;
   font-weight: 600;
-  color: #374151;
+  color: hsl(var(--foreground));
 }
 
 .btn-close-panel {
@@ -818,12 +970,12 @@ function handleImageError(event: Event) {
   background: none;
   border: none;
   cursor: pointer;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
 }
 
 .new-chat-empty {
   font-size: 0.875rem;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   padding: 8px 0;
 }
 
@@ -837,27 +989,28 @@ function handleImageError(event: Event) {
   padding: 10px 12px;
   border-radius: 8px;
   cursor: pointer;
-  background: #fff;
-  border: 1px solid #e5e7eb;
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
   transition: background 0.15s;
 }
-.new-chat-item:hover:not(.disabled) { background: #eff6ff; }
+.new-chat-item:hover:not(.disabled) { background: var(--chat-accent-soft); }
 .new-chat-item.disabled { opacity: 0.5; cursor: not-allowed; }
 
-.new-chat-name { font-weight: 600; color: #111827; display: block; }
-.new-chat-role { font-size: 0.75rem; color: #6b7280; text-transform: capitalize; }
+.new-chat-name { font-weight: 600; color: hsl(var(--foreground)); display: block; }
+.new-chat-role { font-size: 0.75rem; color: hsl(var(--muted-foreground)); text-transform: capitalize; }
 
 .icon-sm { width: 18px; height: 18px; }
 
 .sidebar-title {
-  font-size: 24px;
+  font-size: 1.125rem;
   font-weight: 700;
-  color: #111827;
+  letter-spacing: -0.01em;
+  color: hsl(var(--foreground));
   margin: 0;
 }
 
 .sidebar-search {
-  padding: 12px 16px;
+  padding: 10px 16px 12px;
 }
 
 .search-box {
@@ -871,7 +1024,7 @@ function handleImageError(event: Event) {
   left: 12px;
   width: 16px;
   height: 16px;
-  color: #9ca3af;
+  color: hsl(var(--muted-foreground));
   stroke-width: 2;
   pointer-events: none;
 }
@@ -879,43 +1032,61 @@ function handleImageError(event: Event) {
 .search-input {
   width: 100%;
   padding: 10px 12px 10px 36px;
-  border: none;
-  border-radius: 24px;
-  font-size: 15px;
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) + 4px);
+  font-size: 0.875rem;
   outline: none;
   transition: all 0.2s;
-  background: #f0f2f5;
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+.search-input::placeholder {
+  color: hsl(var(--muted-foreground));
 }
 
 .search-input:focus {
-  background: #e4e6eb;
+  background: hsl(var(--accent));
+  border-color: hsl(var(--border));
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.35);
 }
 
 /* Profiles List */
 .profiles-list {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 8px;
+  padding: 4px 10px 12px;
 }
 
 .profile-item {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 12px;
+  padding: 10px 12px;
   cursor: pointer;
-  transition: background 0.2s;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
   position: relative;
-  border-radius: 8px;
-  margin-bottom: 2px;
+  border-radius: calc(var(--radius) + 4px);
+  border: 1px solid transparent;
+  margin-bottom: 4px;
 }
 
 .profile-item:hover {
-  background: #f0f2f5;
+  background: hsl(var(--muted));
 }
 
 .profile-item.active {
-  background: #e7f3ff;
+  background: var(--chat-active);
+  border-color: hsl(var(--primary) / 0.35);
+}
+
+.profile-item:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px hsl(var(--background)),
+    0 0 0 4px hsl(var(--ring));
 }
 
 .profile-avatar-wrapper {
@@ -924,11 +1095,11 @@ function handleImageError(event: Event) {
 }
 
 .profile-avatar {
-  width: 56px;
-  height: 56px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   object-fit: cover;
-  border: none;
+  border: 1px solid hsl(var(--border));
 }
 
 .online-badge {
@@ -937,49 +1108,70 @@ function handleImageError(event: Event) {
   right: 0;
   width: 14px;
   height: 14px;
-  background: #31a24c;
-  border: 3px solid #fff;
+  background: var(--chat-online);
+  border: 3px solid hsl(var(--card));
   border-radius: 50%;
 }
 
 .profile-info-sidebar {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.profile-row-top,
+.profile-row-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
 }
 
 .profile-name-sidebar {
-  font-size: 15px;
+  font-size: 0.875rem;
   font-weight: 600;
-  color: #050505;
-  margin: 0 0 4px 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.profile-last-message {
-  font-size: 13px;
-  color: #65676b;
+  color: hsl(var(--foreground));
   margin: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.profile-time {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+}
+
+.profile-last-message {
+  font-size: 0.8125rem;
+  color: hsl(var(--muted-foreground));
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
 /* Main Area */
 .main-area {
   display: flex;
   flex-direction: column;
-  background: #fff;
+  background: hsl(var(--background));
   overflow: hidden;
 }
 
 /* Profile Header */
 .profile-header {
   padding: 12px 24px;
-  border-bottom: 1px solid #e5e7eb;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+  box-shadow: 0 1px 2px hsl(var(--foreground) / 0.05);
 }
 
 .profile-info {
@@ -1005,8 +1197,8 @@ function handleImageError(event: Event) {
   right: 0;
   width: 12px;
   height: 12px;
-  background: #31a24c;
-  border: 3px solid #fff;
+  background: var(--chat-online);
+  border: 3px solid hsl(var(--card));
   border-radius: 50%;
 }
 
@@ -1014,20 +1206,45 @@ function handleImageError(event: Event) {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 2px;
+  min-width: 0;
+}
+
+.profile-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .profile-name {
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 600;
-  color: #050505;
+  color: hsl(var(--foreground));
   margin: 0;
   line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-pill {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.5rem;
+  border-radius: 9999px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 .profile-status {
-  font-size: 12px;
-  color: #65676b;
+  font-size: 0.75rem;
+  color: hsl(var(--muted-foreground));
   margin: 0;
   line-height: 1.3;
 }
@@ -1047,7 +1264,7 @@ function handleImageError(event: Event) {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  background: #fff;
+  background: hsl(var(--background));
 }
 
 .message-row {
@@ -1061,49 +1278,53 @@ function handleImageError(event: Event) {
 }
 
 .message-bubble {
-  max-width: 60%;
-  padding: 8px 12px;
-  border-radius: 18px;
-  background: #f0f2f5;
+  max-width: 65%;
+  padding: 10px 14px;
+  border-radius: 16px 16px 16px 6px;
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border) / 0.7);
   position: relative;
 }
 
 .message-row.own-message .message-bubble {
-  background: #0084ff;
-  border-radius: 18px;
+  background: var(--chat-send);
+  border-color: transparent;
+  border-radius: 16px 16px 6px 16px;
 }
 
 .message-text {
-  font-size: 15px;
-  color: #050505;
+  font-size: 0.9375rem;
+  color: hsl(var(--foreground));
   margin: 0;
-  line-height: 1.4;
+  line-height: 1.45;
   word-wrap: break-word;
 }
 
 .message-row.own-message .message-text {
-  color: #fff;
+  color: var(--chat-send-fg);
 }
 
 .message-timestamp {
-  font-size: 11px;
-  color: #65676b;
-  margin-top: 4px;
+  font-size: 0.6875rem;
+  color: hsl(var(--muted-foreground));
+  margin-top: 6px;
   display: block;
 }
 
 .message-row.own-message .message-timestamp {
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--chat-send-muted);
 }
 
 /* Message Input */
 .message-input-container {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 8px;
-  padding: 12px 24px 16px;
-  border-top: 1px solid #e5e7eb;
-  background: #fff;
+  margin: 0 16px 16px;
+  padding: 8px 10px 8px 8px;
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) + 6px);
+  background: hsl(var(--card));
 }
 
 .input-action-btn {
@@ -1122,40 +1343,55 @@ function handleImageError(event: Event) {
 }
 
 .input-action-btn:hover {
-  background: #f0f2f5;
+  background: hsl(var(--muted));
+}
+
+.input-action-btn:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px hsl(var(--background)),
+    0 0 0 4px hsl(var(--ring));
 }
 
 .input-icon {
-  width: 20px;
-  height: 20px;
-  color: #0084ff;
+  width: 18px;
+  height: 18px;
+  color: hsl(var(--muted-foreground));
   stroke-width: 2;
 }
 
 .message-input-field {
   flex: 1;
-  padding: 10px 16px;
-  border: none;
-  border-radius: 20px;
-  font-size: 15px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius) + 2px);
+  font-size: 0.9375rem;
   outline: none;
-  background: #f0f2f5;
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
   transition: all 0.2s;
   resize: none;
   max-height: 100px;
   line-height: 1.4;
 }
 
+.message-input-field::placeholder {
+  color: hsl(var(--muted-foreground));
+}
+
 .message-input-field:focus {
-  background: #e4e6eb;
+  background: hsl(var(--background));
+  border-color: hsl(var(--border));
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.25);
 }
 
 .send-message-btn {
-  width: 36px;
-  height: 36px;
+  width: 38px;
+  height: 38px;
   border: none;
-  background: none;
-  border-radius: 50%;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  border-radius: calc(var(--radius) + 2px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1166,23 +1402,30 @@ function handleImageError(event: Event) {
 }
 
 .send-message-btn:hover:not(:disabled) {
-  background: #f0f2f5;
+  opacity: 0.92;
+}
+
+.send-message-btn:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px hsl(var(--background)),
+    0 0 0 4px hsl(var(--ring));
 }
 
 .send-message-btn:disabled {
   cursor: not-allowed;
-  opacity: 0.5;
+  opacity: 0.45;
 }
 
 .send-icon {
-  width: 20px;
-  height: 20px;
-  color: #0084ff;
+  width: 18px;
+  height: 18px;
+  color: hsl(var(--primary-foreground));
   stroke-width: 2;
 }
 
 .send-message-btn:disabled .send-icon {
-  color: #bcc0c4;
+  color: hsl(var(--primary-foreground));
 }
 
 /* Empty State */
@@ -1191,7 +1434,7 @@ function handleImageError(event: Event) {
   align-items: center;
   justify-content: center;
   height: 100%;
-  background: #fff;
+  background: hsl(var(--background));
 }
 
 .empty-state-content {
@@ -1202,7 +1445,7 @@ function handleImageError(event: Event) {
 .empty-icon {
   width: 64px;
   height: 64px;
-  color: #bcc0c4;
+  color: hsl(var(--muted-foreground));
   stroke-width: 1.5;
   margin: 0 auto 16px;
 }
@@ -1210,13 +1453,13 @@ function handleImageError(event: Event) {
 .empty-title {
   font-size: 20px;
   font-weight: 600;
-  color: #050505;
+  color: hsl(var(--foreground));
   margin: 0 0 8px 0;
 }
 
 .empty-text {
   font-size: 14px;
-  color: #65676b;
+  color: hsl(var(--muted-foreground));
   margin: 0;
 }
 
@@ -1252,7 +1495,39 @@ function handleImageError(event: Event) {
   }
   
   .message-input-container {
-    padding: 12px 16px;
+    margin: 0 12px 12px;
   }
+}
+
+.chat-status-text {
+  margin: 8px 16px;
+  font-size: 13px;
+  color: hsl(var(--muted-foreground));
+}
+.chat-error-text {
+  margin: 8px 16px;
+  font-size: 13px;
+  color: hsl(var(--destructive));
+}
+.composer-error {
+  margin: 0 24px 12px;
+}
+.sidebar-unread {
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  border-radius: 999px;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  padding: 0 0.35rem;
+  flex-shrink: 0;
+}
+.input-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 </style>

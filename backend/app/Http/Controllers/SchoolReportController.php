@@ -6,12 +6,17 @@ use App\Models\School;
 use App\Models\SchoolReport;
 use App\Models\OrganizationMembership;
 use App\Models\User;
+use App\Services\PermissionGate;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Validation\Rule;
 
 class SchoolReportController extends Controller
 {
+    public function __construct(private readonly PermissionGate $permissions)
+    {
+    }
+
     public function index(Request $request)
     {
         $school = $this->resolveSchool($request->user());
@@ -67,11 +72,6 @@ class SchoolReportController extends Controller
             abort(Response::HTTP_UNAUTHORIZED);
         }
 
-        $user->loadMissing('school:id,user_id,organization_id,institution_name');
-        if ($user->role === 'school' && $user->school) {
-            return $user->school;
-        }
-
         $membership = $user->primaryOrganizationMembership();
         $organization = $membership?->organization;
 
@@ -97,12 +97,9 @@ class SchoolReportController extends Controller
 
     private function canViewReports(OrganizationMembership $membership): bool
     {
-        $permissions = $membership->effectivePermissions();
-
-        return in_array('view_reports', $permissions, true)
-            || in_array('org.view_reports', $permissions, true)
-            || in_array('manage_contracts', $permissions, true)
-            || in_array('org.manage_contracts', $permissions, true);
+        return $this->permissions->membershipCan($membership, 'org.reports_view')
+            || $this->permissions->membershipCan($membership, 'org.view_reports')
+            || $this->permissions->membershipCan($membership, 'org.manage_agreements');
     }
 
     /**

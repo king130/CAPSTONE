@@ -32,8 +32,9 @@ class ContractRequestService
         $partnerOrg = $partner->activeOrganization();
 
         $contractType = null;
-        if (! empty($payload['contract_type_id'])) {
-            $contractType = $this->resolveContractType($actor, (int) $payload['contract_type_id'], $requesterOrg, $partnerOrg);
+        $typeId = $payload['contract_type_id'] ?? $payload['agreement_type_id'] ?? null;
+        if (! empty($typeId)) {
+            $contractType = $this->resolveContractType($actor, (int) $typeId, $requesterOrg, $partnerOrg);
         }
 
         $dynamicFields = $this->normalizeDynamicFields($payload['dynamic_fields'] ?? []);
@@ -54,7 +55,7 @@ class ContractRequestService
                 'status' => 'pending',
                 'subject' => (string) $payload['subject'],
                 'contract_type_id' => $contractType?->id,
-                'contract_type' => $contractType?->name ?? ($payload['contract_type_label'] ?? $payload['contractType'] ?? null),
+                'contract_type' => $contractType?->name ?? ($payload['contract_type_label'] ?? $payload['agreement_type_label'] ?? $payload['contractType'] ?? $payload['agreementType'] ?? null),
                 'moa_reference_no' => $payload['moa_reference_no'] ?? $payload['moaReferenceNo'] ?? null,
                 'purpose' => $payload['purpose'] ?? null,
                 'start_date' => $payload['start_date'] ?? $payload['startDate'] ?? null,

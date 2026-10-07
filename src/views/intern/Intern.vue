@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
   BriefcaseBusiness,
+  Building2,
   CalendarDays,
   CheckCircle2,
   CircleDashed,
@@ -17,6 +18,8 @@ import {
   XCircle,
 } from 'lucide-vue-next'
 
+import ApplicationStatusStepper from '@/components/applications/ApplicationStatusStepper.vue'
+import ApplicationInterviewPanel from '@/components/ApplicationInterviewPanel.vue'
 import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
 import Card from '@/components/ui/card/Card.vue'
@@ -42,11 +45,20 @@ import MainLayout from '@/layouts/MainLayout.vue'
 import { submitApplication, subscribeApplications, type ApplicationRecord } from '@/services/applications'
 import { listDocuments, uploadDocuments, type DocumentRecord } from '@/services/documents'
 import { buildProfileAvatarUrl } from '@/services/profileMedia'
-import { subscribeEligibleInternships, type InternshipRecord } from '@/services/internships'
+import { getInternship, subscribeEligibleInternships, type InternshipRecord } from '@/services/internships'
+import { listInterviews, type InterviewRecord } from '@/services/interviews'
+import { listInternOJTLogs, type OJTLog } from '@/services/ojtService'
+import { listSavedInternships } from '@/services/savedInternships'
 import { updateCurrentUserProfile } from '@/services/auth'
 import { useAuthStore } from '@/stores/auth'
+import { deriveApplicationStepper } from '@/utils/applicationStepper'
+import {
+  matchCourseProgram,
+  stableSortByCourseMatchLevel,
+  type CourseMatchLevel,
+} from '@/utils/courseMatch'
 
-type InternView = 'settings' | 'opportunities' | 'documents' | 'internship' | 'placement' | 'dashboard'
+type InternView = 'settings' | 'opportunities' | 'documents' | 'internship' | 'placement' | 'dashboard' | 'saved'
 
 interface ProfileForm {
   displayName: string
@@ -72,8 +84,14 @@ const activeView = ref<InternView>('settings')
 const applications = ref<ApplicationRecord[]>([])
 const internships = ref<InternshipRecord[]>([])
 const savedDocuments = ref<DocumentRecord[]>([])
+const savedInternships = ref<InternshipRecord[]>([])
+const interviewsByApplication = ref<Record<string, InterviewRecord[]>>({})
+const ojtLogsByApplication = ref<Record<string, OJTLog[]>>({})
+const coverByInternship = ref<Record<string, string | null>>({})
 const applicationsLoading = ref(true)
 const internshipsLoading = ref(true)
+const savedInternshipsLoading = ref(false)
+const applicationExtrasLoading = ref(false)
 const documentsLoading = ref(true)
 const profileDialogOpen = ref(false)
 const savingProfile = ref(false)
@@ -130,6 +148,7 @@ function startSubscriptions(userId?: string) {
   unsubscribeApplications = subscribeApplications(userId, (items) => {
     applications.value = items
     applicationsLoading.value = false
+    void loadApplicationExtras()
   })
 
   unsubscribeInternships = subscribeEligibleInternships((items) => {
@@ -138,12 +157,94 @@ function startSubscriptions(userId?: string) {
   })
 
   void loadSavedDocuments()
+  void loadSavedInternshipsList()
 }
+
+async function loadSavedInternshipsList() {
+  if (!authStore.user?.uid) {
+    savedInternships.value = []
+    return
+  }
+  savedInternshipsLoading.value = true
+  try {
+    const result = await listSavedInternships({ page: 1, per_page: 50 })
+    savedInternships.value = result.data
+  } catch {
+    savedInternships.value = []
+  } finally {
+    savedInternshipsLoading.value = false
+  }
+}
+
+async function loadApplicationExtras() {
+  if (!applications.value.length) {
+    interviewsByApplication.value = {}
+    ojtLogsByApplication.value = {}
+    coverByInternship.value = {}
+    return
+  }
+
+  applicationExtrasLoading.value = true
+  try {
+    const [interviews, logs] = await Promise.all([
+      listInterviews().catch(() => [] as InterviewRecord[]),
+      listInternOJTLogs().catch(() => [] as OJTLog[]),
+    ])
+
+    const interviewMap: Record<string, InterviewRecord[]> = {}
+    for (const interview of interviews) {
+      const key = String(interview.applicationId)
+      if (!interviewMap[key]) interviewMap[key] = []
+      interviewMap[key].push(interview)
+    }
+    interviewsByApplication.value = interviewMap
+
+    const logMap: Record<string, OJTLog[]> = {}
+    for (const log of logs) {
+      const key = String(log.applicationId || '')
+      if (!key) continue
+      if (!logMap[key]) logMap[key] = []
+      logMap[key].push(log)
+    }
+    ojtLogsByApplication.value = logMap
+
+    const ids = Array.from(new Set(applications.value.map((app) => String(app.internshipId)).filter(Boolean)))
+    const coverEntries = await Promise.all(
+      ids.map(async (id) => {
+        const fromEligible = internships.value.find((item) => item.id === id)
+        if (fromEligible?.coverImage) return [id, fromEligible.coverImage] as const
+        const detail = await getInternship(id).catch(() => null)
+        return [id, detail?.coverImage ?? null] as const
+      }),
+    )
+    coverByInternship.value = Object.fromEntries(coverEntries)
+  } finally {
+    applicationExtrasLoading.value = false
+  }
+}
+
+const applicationCards = computed(() =>
+  [...applications.value]
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+    .map((application) => {
+      const stepper = deriveApplicationStepper({
+        status: application.status,
+        interviews: interviewsByApplication.value[String(application.id)] ?? [],
+        ojtLogs: ojtLogsByApplication.value[String(application.id)] ?? [],
+      })
+      return {
+        application,
+        coverImage: coverByInternship.value[String(application.internshipId)] ?? null,
+        stepper,
+      }
+    }),
+)
 
 const pageTitle = computed(() => {
   const titles: Record<InternView, string> = {
     settings: 'My Profile',
     opportunities: 'Opportunities',
+    saved: 'Saved',
     documents: 'My Documents',
     internship: 'My Applications',
     placement: 'Placement',
@@ -193,36 +294,55 @@ const approvedSupportingDocuments = computed(() =>
   approvedDocuments.value.filter((document) => !isResumeCategory(document)),
 )
 
-const contractedCompanyInternships = computed(() =>
-  internships.value.filter((internship) => internship.hostType === 'company'),
-)
+function courseMatchBadge(level: CourseMatchLevel): {
+  label: string
+  variant: 'success' | 'secondary' | 'outline'
+} {
+  switch (level) {
+    case 'strong':
+      return { label: 'Matches your course', variant: 'success' }
+    case 'related':
+      return { label: 'Related to your course', variant: 'secondary' }
+    case 'open':
+      return { label: 'Open to all courses', variant: 'secondary' }
+    case 'unknown':
+      return { label: 'Course fit unavailable', variant: 'outline' }
+    case 'weak':
+    default:
+      return { label: 'Check course fit', variant: 'outline' }
+  }
+}
 
 const opportunityRows = computed(() => {
   const query = searchOpportunities.value.trim().toLowerCase()
-  const course = currentCourse.value.toLowerCase()
+  const studentCourse = currentCourse.value || null
 
-  return contractedCompanyInternships.value
-    .map((internship) => {
-      const eligibleCourses = internship.eligibleCourses || []
-      const matched = !course || eligibleCourses.length === 0 || eligibleCourses.some((item) => item.toLowerCase().includes(course))
+  const rows = internships.value.map((internship) => {
+    const eligibleCourses = internship.eligibleCourses
+    const match = matchCourseProgram(studentCourse, eligibleCourses)
+    const badge = courseMatchBadge(match.level)
 
-      return {
-        id: internship.id,
-        title: internship.title || 'Untitled opportunity',
-        hostName: internship.companyName || internship.hostName || internship.schoolName || 'Host not set',
-        hostType: internship.hostType === 'school' ? 'School-hosted' : 'Company-hosted',
-        location: internship.location || 'Location not set',
-        duration: internship.duration || 'TBA',
-        programs: eligibleCourses.join(', ') || 'Open to multiple programs',
-        matched,
-      }
-    })
-    .filter((row) =>
+    return {
+      id: internship.id,
+      title: internship.title || 'Untitled opportunity',
+      hostName: internship.companyName || internship.hostName || internship.schoolName || 'Host not set',
+      hostType: internship.hostType === 'school' ? 'School-hosted' : 'Company-hosted',
+      location: internship.location || 'Location not set',
+      duration: internship.duration || 'TBA',
+      programs: (eligibleCourses || []).join(', ') || 'Open to multiple programs',
+      courseMatchLevel: match.level,
+      courseMatchLabel: badge.label,
+      courseMatchVariant: badge.variant,
+    }
+  })
+
+  return stableSortByCourseMatchLevel(rows, (row) => row.courseMatchLevel).filter(
+    (row) =>
       !query ||
       [row.title, row.hostName, row.hostType, row.location, row.programs].some((value) =>
         value.toLowerCase().includes(query),
       ),
-    )
+  )
 })
 
 const placementSummary = computed(() => {
@@ -332,11 +452,22 @@ function badgeLabel(status?: string) {
 
 function internViewFromRouteName(name: unknown): InternView {
   if (name === 'intern-opportunities') return 'opportunities'
+  if (name === 'intern-saved') return 'saved'
   if (name === 'intern-documents') return 'documents'
   if (name === 'intern-applications') return 'internship'
   if (name === 'intern-placement') return 'placement'
   if (name === 'intern-tracker') return 'dashboard'
   return 'settings'
+}
+
+function isPartneredForSaved(item: InternshipRecord): boolean {
+  if (typeof item.partneredWithMySchool === 'boolean') return item.partneredWithMySchool
+  return item.hostType === 'school'
+}
+
+function applyFromSaved(item: InternshipRecord) {
+  if (!isPartneredForSaved(item)) return
+  void router.push({ name: 'intern-opportunities', query: { focus: item.id } })
 }
 
 function hydrateProfileForm() {
@@ -363,7 +494,7 @@ function openApplicationDialog(opportunityId: string) {
   selectedOpportunity.value = {
     internshipId: String(opportunity.id),
     title: opportunity.title || 'Untitled opportunity',
-    hostName: opportunity.companyName || opportunity.hostName || 'Company',
+    hostName: opportunity.companyName || opportunity.hostName || opportunity.schoolName || 'Host',
     requiredDocuments: opportunity.requiredDocuments || [],
   }
   applicationResume.value = ''
@@ -601,12 +732,16 @@ async function requestOpportunity(opportunityId: string) {
 }
 
 function handleMenuClick(menuItem: string) {
-  const allowedViews: InternView[] = ['settings', 'opportunities', 'documents', 'internship', 'placement', 'dashboard']
+  const allowedViews: InternView[] = ['settings', 'opportunities', 'saved', 'documents', 'internship', 'placement', 'dashboard']
   const nextView = allowedViews.includes(menuItem as InternView) ? (menuItem as InternView) : 'settings'
   activeView.value = nextView
+  if (nextView === 'saved') void loadSavedInternshipsList()
+  if (nextView === 'internship') void loadApplicationExtras()
   const targetName =
     nextView === 'opportunities'
       ? 'intern-opportunities'
+      : nextView === 'saved'
+        ? 'intern-saved'
       : nextView === 'documents'
       ? 'intern-documents'
       : nextView === 'internship'
@@ -633,6 +768,8 @@ watch(
   () => route.name,
   (name) => {
     activeView.value = internViewFromRouteName(name)
+    if (activeView.value === 'saved') void loadSavedInternshipsList()
+    if (activeView.value === 'internship') void loadApplicationExtras()
   },
 )
 
@@ -651,13 +788,13 @@ watch(
       <Card v-if="activeView === 'settings'" class="border-border/80 shadow-sm">
         <CardHeader class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div class="flex items-center gap-4">
-            <div class="flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl bg-sky-100 text-lg font-semibold text-sky-700">
+            <div class="flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl bg-accent text-lg font-semibold text-primary">
               <img v-if="profileAvatarUrl" :src="profileAvatarUrl" alt="Profile avatar" class="h-full w-full object-cover" />
               <span v-else>{{ userInitials }}</span>
             </div>
             <div>
-              <h2 class="text-2xl font-semibold text-slate-950">{{ authStore.user?.displayName || 'Intern Profile' }}</h2>
-              <p class="mt-1 text-sm text-slate-600">{{ authStore.user?.email }}</p>
+              <h2 class="text-2xl font-semibold text-foreground">{{ authStore.user?.displayName || 'Intern Profile' }}</h2>
+              <p class="mt-1 text-sm text-muted-foreground">{{ authStore.user?.email }}</p>
             </div>
           </div>
           <Button class="gap-2" @click="openProfileDialog">
@@ -666,47 +803,47 @@ watch(
           </Button>
         </CardHeader>
         <CardContent class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          <div class="rounded-2xl bg-slate-50 p-4">
-            <div class="flex items-center gap-2 text-sm font-medium text-slate-500">
-              <GraduationCap class="h-4 w-4 text-sky-700" />
+          <div class="rounded-2xl bg-muted p-4">
+            <div class="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <GraduationCap class="h-4 w-4 text-primary" />
               School Name
             </div>
-            <p class="mt-3 text-sm font-medium text-slate-950">{{ currentProfile?.schoolName || 'Not set' }}</p>
+            <p class="mt-3 text-sm font-medium text-foreground">{{ currentProfile?.schoolName || 'Not set' }}</p>
           </div>
-          <div class="rounded-2xl bg-slate-50 p-4">
-            <div class="flex items-center gap-2 text-sm font-medium text-slate-500">
-              <UserCircle2 class="h-4 w-4 text-sky-700" />
+          <div class="rounded-2xl bg-muted p-4">
+            <div class="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <UserCircle2 class="h-4 w-4 text-primary" />
               Intern Code
             </div>
-            <p class="mt-3 font-mono text-sm font-semibold text-slate-950">{{ currentProfile?.internCode || 'Not assigned yet' }}</p>
+            <p class="mt-3 font-mono text-sm font-semibold text-foreground">{{ currentProfile?.internCode || 'Not assigned yet' }}</p>
           </div>
-          <div class="rounded-2xl bg-slate-50 p-4">
-            <div class="flex items-center gap-2 text-sm font-medium text-slate-500">
-              <BriefcaseBusiness class="h-4 w-4 text-sky-700" />
+          <div class="rounded-2xl bg-muted p-4">
+            <div class="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <BriefcaseBusiness class="h-4 w-4 text-primary" />
               Course
             </div>
-            <p class="mt-3 text-sm font-medium text-slate-950">{{ currentProfile?.course || 'Not set' }}</p>
+            <p class="mt-3 text-sm font-medium text-foreground">{{ currentProfile?.course || 'Not set' }}</p>
           </div>
-          <div class="rounded-2xl bg-slate-50 p-4">
-            <div class="flex items-center gap-2 text-sm font-medium text-slate-500">
-              <UserCircle2 class="h-4 w-4 text-sky-700" />
+          <div class="rounded-2xl bg-muted p-4">
+            <div class="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <UserCircle2 class="h-4 w-4 text-primary" />
               Year Level
             </div>
-            <p class="mt-3 text-sm font-medium text-slate-950">{{ currentProfile?.yearLevel || 'Not set' }}</p>
+            <p class="mt-3 text-sm font-medium text-foreground">{{ currentProfile?.yearLevel || 'Not set' }}</p>
           </div>
-          <div class="rounded-2xl bg-slate-50 p-4">
-            <div class="flex items-center gap-2 text-sm font-medium text-slate-500">
-              <Mail class="h-4 w-4 text-sky-700" />
+          <div class="rounded-2xl bg-muted p-4">
+            <div class="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <Mail class="h-4 w-4 text-primary" />
               Email
             </div>
-            <p class="mt-3 text-sm font-medium text-slate-950">{{ authStore.user?.email || 'Not set' }}</p>
+            <p class="mt-3 text-sm font-medium text-foreground">{{ authStore.user?.email || 'Not set' }}</p>
           </div>
-          <div class="rounded-2xl bg-slate-50 p-4">
-            <div class="flex items-center gap-2 text-sm font-medium text-slate-500">
-              <MapPin class="h-4 w-4 text-sky-700" />
+          <div class="rounded-2xl bg-muted p-4">
+            <div class="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <MapPin class="h-4 w-4 text-primary" />
               Contact Number
             </div>
-            <p class="mt-3 text-sm font-medium text-slate-950">{{ currentProfile?.contactNumber || 'Not set' }}</p>
+            <p class="mt-3 text-sm font-medium text-foreground">{{ currentProfile?.contactNumber || 'Not set' }}</p>
           </div>
         </CardContent>
       </Card>
@@ -714,27 +851,27 @@ watch(
       <Card v-else-if="activeView === 'opportunities'" class="border-border/80 shadow-sm">
         <CardHeader class="space-y-4">
           <div>
-            <h2 class="text-2xl font-semibold text-slate-950">Opportunities</h2>
-            <p class="text-sm text-slate-600">Browse internship posts from companies that are actively contracted with your school.</p>
+            <h2 class="text-2xl font-semibold text-foreground">Opportunities</h2>
+            <p class="text-sm text-muted-foreground">Browse internship posts that are already available to you through your school.</p>
           </div>
           <div class="relative max-w-md">
-            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input v-model="searchOpportunities" placeholder="Search opportunities..." class="pl-9" />
           </div>
         </CardHeader>
         <CardContent class="space-y-4">
-          <div class="rounded-2xl border border-sky-100 bg-sky-50 p-4 text-sm text-sky-900">
-            <p class="font-medium">Contracted company posts</p>
+          <div class="rounded-2xl border border-border bg-accent p-4 text-sm text-foreground">
+            <p class="font-medium">Eligible internship posts</p>
             <p class="mt-2">
               {{
                 currentCourse
-                  ? `Showing internship posts from partner companies connected to your school. Matches for ${currentCourse} are highlighted so you can compare them quickly.`
-                  : 'Set your course in your profile to get better matching for your school’s contracted company posts.'
+                  ? `Showing school-hosted and partner company posts available to your school. Matches for ${currentCourse} are highlighted so you can compare them quickly.`
+                  : 'Set your course in your profile to get better matching for eligible internship posts.'
               }}
             </p>
           </div>
 
-          <div class="rounded-xl border border-border bg-white">
+          <div class="rounded-xl border border-border bg-card">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -761,23 +898,23 @@ watch(
                   <TableRow v-for="opportunity in opportunityRows" :key="opportunity.id">
                     <TableCell>
                       <div class="space-y-1">
-                        <p class="font-medium text-slate-950">{{ opportunity.title }}</p>
-                        <p class="text-sm text-slate-500">{{ opportunity.location }}</p>
+                        <p class="font-medium text-foreground">{{ opportunity.title }}</p>
+                        <p class="text-sm text-muted-foreground">{{ opportunity.location }}</p>
                       </div>
                     </TableCell>
                     <TableCell>
                       <div class="space-y-1">
-                        <p class="text-slate-700">{{ opportunity.hostName }}</p>
-                        <p class="text-sm text-slate-500">Contracted company</p>
+                        <p class="text-foreground">{{ opportunity.hostName }}</p>
+                        <p class="text-sm text-muted-foreground">{{ opportunity.hostType }}</p>
                       </div>
                     </TableCell>
-                    <TableCell class="text-slate-700">{{ opportunity.programs }}</TableCell>
+                    <TableCell class="text-foreground">{{ opportunity.programs }}</TableCell>
                     <TableCell>
-                      <Badge :variant="opportunity.matched ? 'success' : 'outline'">
-                        {{ opportunity.matched ? 'Matches your course' : 'Check course fit' }}
+                      <Badge :variant="opportunity.courseMatchVariant">
+                        {{ opportunity.courseMatchLabel }}
                       </Badge>
                     </TableCell>
-                    <TableCell class="text-slate-700">{{ opportunity.duration }}</TableCell>
+                    <TableCell class="text-foreground">{{ opportunity.duration }}</TableCell>
                     <TableCell>
                       <Button
                         variant="outline"
@@ -798,7 +935,7 @@ watch(
                 </template>
                 <TableRow v-else>
                   <TableCell colspan="6" class="py-10 text-center text-muted-foreground">
-                    No internship posts from contracted companies are available yet.
+                    No eligible internship posts are available yet.
                   </TableCell>
                 </TableRow>
               </TableBody>
@@ -810,40 +947,40 @@ watch(
       <Card v-else-if="activeView === 'documents'" class="border-border/80 shadow-sm">
         <CardHeader class="space-y-4">
           <div>
-            <h2 class="text-2xl font-semibold text-slate-950">My Documents</h2>
-            <p class="text-sm text-slate-600">Upload your resume and supporting files here once, then reuse them for internship applications.</p>
+            <h2 class="text-2xl font-semibold text-foreground">My Documents</h2>
+            <p class="text-sm text-muted-foreground">Upload your resume and supporting files here once, then reuse them for internship applications.</p>
           </div>
         </CardHeader>
         <CardContent class="space-y-6">
           <div class="grid gap-4 md:grid-cols-3">
-            <div class="rounded-2xl border border-sky-100 bg-sky-50 p-4">
-              <p class="text-sm font-medium text-sky-900">Saved files</p>
-              <p class="mt-3 text-3xl font-semibold text-slate-950">{{ savedDocuments.length }}</p>
-              <p class="mt-2 text-sm text-slate-600">Documents ready to reuse in future applications.</p>
+            <div class="rounded-2xl border border-border bg-accent p-4">
+              <p class="text-sm font-medium text-foreground">Saved files</p>
+              <p class="mt-3 text-3xl font-semibold text-foreground">{{ savedDocuments.length }}</p>
+              <p class="mt-2 text-sm text-muted-foreground">Documents ready to reuse in future applications.</p>
             </div>
             <div class="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
               <p class="text-sm font-medium text-emerald-900">Resume ready</p>
-              <p class="mt-3 text-3xl font-semibold text-slate-950">
+              <p class="mt-3 text-3xl font-semibold text-foreground">
                 {{ savedDocuments.some((document) => ['application-resume', 'internship-application'].includes(String(document.category || '').toLowerCase())) ? 'Yes' : 'No' }}
               </p>
-              <p class="mt-2 text-sm text-slate-600">A saved resume can auto-fill your next application.</p>
+              <p class="mt-2 text-sm text-muted-foreground">A saved resume can auto-fill your next application.</p>
             </div>
             <div class="rounded-2xl border border-violet-100 bg-violet-50 p-4">
               <p class="text-sm font-medium text-violet-900">Pending review</p>
-              <p class="mt-3 text-3xl font-semibold text-slate-950">
+              <p class="mt-3 text-3xl font-semibold text-foreground">
                 {{ savedDocuments.filter((document) => document.status === 'pending').length }}
               </p>
-              <p class="mt-2 text-sm text-slate-600">Files that still need to be reviewed or checked.</p>
+              <p class="mt-2 text-sm text-muted-foreground">Files that still need to be reviewed or checked.</p>
             </div>
           </div>
 
-          <div class="overflow-hidden rounded-3xl border border-sky-100 bg-gradient-to-br from-sky-50 via-white to-cyan-50">
+          <div class="overflow-hidden rounded-3xl border border-border bg-gradient-to-br from-accent via-card to-muted">
             <div class="grid gap-0 lg:grid-cols-[1.2fr_0.8fr]">
               <div class="space-y-4 p-6">
                 <div>
-                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Document Hub</p>
-                  <h3 class="mt-2 text-2xl font-semibold text-slate-950">Keep your application files ready</h3>
-                  <p class="mt-2 text-sm leading-6 text-slate-600">
+                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">Document Hub</p>
+                  <h3 class="mt-2 text-2xl font-semibold text-foreground">Keep your application files ready</h3>
+                  <p class="mt-2 text-sm leading-6 text-muted-foreground">
                     Upload your resume, internship forms, and supporting requirements once so every application starts faster.
                   </p>
                 </div>
@@ -856,7 +993,7 @@ watch(
                       type="file"
                       multiple
                       accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
-                      class="block w-full rounded-2xl border border-sky-200 bg-white px-4 py-4 text-sm shadow-sm file:mr-4 file:rounded-xl file:border-0 file:bg-sky-600 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-sky-700"
+                      class="block w-full rounded-2xl border border-border bg-card px-4 py-4 text-sm shadow-sm file:mr-4 file:rounded-xl file:border-0 file:bg-primary file:px-4 file:py-2 file:text-sm file:font-medium file:text-primary-foreground hover:file:bg-primary/90"
                       @change="handleSavedDocumentFilesChange"
                     />
                   </FormControl>
@@ -881,20 +1018,20 @@ watch(
                 </div>
               </div>
 
-              <div class="border-t border-sky-100 bg-slate-950 px-6 py-6 text-white lg:border-l lg:border-t-0">
-                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-200">Quick Guide</p>
+              <div class="border-t border-border bg-foreground px-6 py-6 text-background lg:border-l lg:border-t-0">
+                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-background/70">Quick Guide</p>
                 <div class="mt-4 space-y-4">
-                  <div class="rounded-2xl bg-white/10 p-4">
+                  <div class="rounded-2xl bg-background/10 p-4">
                     <p class="font-medium">1. Upload your resume</p>
-                    <p class="mt-2 text-sm text-slate-200">Use `Application Resume` so the system can find it first when you apply.</p>
+                    <p class="mt-2 text-sm text-background/70">Use `Application Resume` so the system can find it first when you apply.</p>
                   </div>
-                  <div class="rounded-2xl bg-white/10 p-4">
+                  <div class="rounded-2xl bg-background/10 p-4">
                     <p class="font-medium">2. Add school requirements</p>
-                    <p class="mt-2 text-sm text-slate-200">Store endorsement forms, portfolio files, and supporting documents here.</p>
+                    <p class="mt-2 text-sm text-background/70">Store endorsement forms, portfolio files, and supporting documents here.</p>
                   </div>
-                  <div class="rounded-2xl bg-white/10 p-4">
+                  <div class="rounded-2xl bg-background/10 p-4">
                     <p class="font-medium">3. Apply faster</p>
-                    <p class="mt-2 text-sm text-slate-200">Saved files are reused during internship applications whenever possible.</p>
+                    <p class="mt-2 text-sm text-background/70">Saved files are reused during internship applications whenever possible.</p>
                   </div>
                 </div>
               </div>
@@ -904,13 +1041,13 @@ watch(
           <div class="space-y-4">
             <div class="flex items-center justify-between">
               <div>
-                <h3 class="text-xl font-semibold text-slate-950">Saved Files</h3>
-                <p class="text-sm text-slate-600">Open or review the files you already uploaded for internships.</p>
+                <h3 class="text-xl font-semibold text-foreground">Saved Files</h3>
+                <p class="text-sm text-muted-foreground">Open or review the files you already uploaded for internships.</p>
               </div>
             </div>
 
             <div v-if="documentsLoading" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              <div v-for="index in 6" :key="index" class="rounded-2xl border border-border bg-white p-5">
+              <div v-for="index in 6" :key="index" class="rounded-2xl border border-border bg-card p-5">
                 <Skeleton class="h-5 w-40" />
                 <Skeleton class="mt-4 h-4 w-28" />
                 <Skeleton class="mt-6 h-9 w-24" />
@@ -921,10 +1058,10 @@ watch(
               <div
                 v-for="document in savedDocuments"
                 :key="document.id"
-                class="rounded-2xl border border-border bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                class="rounded-2xl border border-border bg-card p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
               >
                 <div class="flex items-start justify-between gap-3">
-                  <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 text-sky-700">
+                  <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent text-primary">
                     <FileText class="h-5 w-5" />
                   </div>
                   <Badge :variant="document.status === 'approved' ? 'success' : document.status === 'rejected' ? 'destructive' : 'warning'">
@@ -932,16 +1069,16 @@ watch(
                   </Badge>
                 </div>
                 <div class="mt-4 space-y-2">
-                  <a :href="document.fileUrl" target="_blank" rel="noopener" class="block text-base font-semibold text-slate-950 hover:text-sky-700">
+                  <a :href="document.fileUrl" target="_blank" rel="noopener" class="block text-base font-semibold text-foreground hover:text-primary">
                     {{ document.fileName }}
                   </a>
-                  <p class="text-sm text-slate-500">{{ document.fileType || 'File' }}</p>
+                  <p class="text-sm text-muted-foreground">{{ document.fileType || 'File' }}</p>
                 </div>
                 <div class="mt-4 flex flex-wrap gap-2">
-                  <span class="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
+                  <span class="inline-flex rounded-full bg-muted px-3 py-1 text-xs font-medium text-foreground">
                     {{ document.category }}
                   </span>
-                  <span class="inline-flex rounded-full bg-sky-50 px-3 py-1 text-xs font-medium text-sky-700">
+                  <span class="inline-flex rounded-full bg-accent px-3 py-1 text-xs font-medium text-primary">
                     {{ formatDate(document.createdAt) }}
                   </span>
                 </div>
@@ -950,7 +1087,7 @@ watch(
                     :href="document.fileUrl"
                     target="_blank"
                     rel="noopener"
-                    class="inline-flex items-center text-sm font-medium text-sky-700 hover:text-sky-800"
+                    class="inline-flex items-center text-sm font-medium text-primary hover:text-primary"
                   >
                     Open file
                   </a>
@@ -958,19 +1095,19 @@ watch(
               </div>
             </div>
 
-            <div v-else class="rounded-3xl border border-dashed border-sky-200 bg-sky-50/70 px-6 py-12 text-center">
-              <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-sky-700 shadow-sm">
+            <div v-else class="rounded-3xl border border-dashed border-border bg-accent/70 px-6 py-12 text-center">
+              <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-card text-primary shadow-sm">
                 <FileText class="h-6 w-6" />
               </div>
-              <h3 class="mt-4 text-lg font-semibold text-slate-950">No saved documents yet</h3>
-              <p class="mt-2 text-sm text-slate-600">
+              <h3 class="mt-4 text-lg font-semibold text-foreground">No saved documents yet</h3>
+              <p class="mt-2 text-sm text-muted-foreground">
                 Upload your resume and internship requirements here so future applications are much easier.
               </p>
             </div>
           </div>
 
-          <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-            <div class="flex items-center gap-2 font-medium text-slate-900">
+          <div class="rounded-2xl border border-border bg-muted p-4 text-sm text-foreground">
+            <div class="flex items-center gap-2 font-medium text-foreground">
               <FileText class="h-4 w-4" />
               Application reuse
             </div>
@@ -981,78 +1118,149 @@ watch(
         </CardContent>
       </Card>
 
-      <Card v-else-if="activeView === 'internship'" class="border-border/80 shadow-sm">
+      <Card v-else-if="activeView === 'saved'" class="border-border/80 shadow-sm">
         <CardHeader>
-          <h2 class="text-2xl font-semibold text-slate-950">My Applications</h2>
-          <p class="text-sm text-slate-600">Review the companies you applied to and track where each application stands.</p>
+          <h2 class="text-2xl font-semibold text-foreground">Saved internships</h2>
+          <p class="text-sm text-muted-foreground">Your wishlist of openings to revisit later.</p>
         </CardHeader>
         <CardContent>
-          <div class="rounded-xl border border-border bg-white">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Company</TableHead>
-                  <TableHead>Position</TableHead>
-                  <TableHead>Date Applied</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <template v-if="applicationsLoading">
-                  <TableRow v-for="index in 4" :key="index">
-                    <TableCell><Skeleton class="h-5 w-28" /></TableCell>
-                    <TableCell><Skeleton class="h-5 w-40" /></TableCell>
-                    <TableCell><Skeleton class="h-5 w-24" /></TableCell>
-                    <TableCell><Skeleton class="h-5 w-20" /></TableCell>
-                  </TableRow>
-                </template>
-                <template v-else-if="applications.length">
-                  <TableRow v-for="application in applications" :key="application.id">
-                    <TableCell class="font-medium text-slate-950">{{ application.companyName || 'Pending assignment' }}</TableCell>
-                    <TableCell class="text-slate-700">{{ application.internshipTitle || 'Untitled position' }}</TableCell>
-                    <TableCell class="text-slate-600">{{ formatDate(application.createdAt) }}</TableCell>
-                    <TableCell>
-                      <Badge :variant="badgeVariant(application.status)">{{ badgeLabel(application.status) }}</Badge>
-                    </TableCell>
-                  </TableRow>
-                </template>
-                <TableRow v-else>
-                  <TableCell colspan="4" class="py-10 text-center text-muted-foreground">
-                    No applications yet. Start exploring internship opportunities to populate this table.
-                  </TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
+          <div v-if="savedInternshipsLoading" class="grid gap-4 sm:grid-cols-2">
+            <Skeleton v-for="index in 4" :key="`saved-skel-${index}`" class="h-40 w-full rounded-xl" />
+          </div>
+          <div v-else-if="savedInternships.length" class="grid gap-4 sm:grid-cols-2">
+            <article
+              v-for="item in savedInternships"
+              :key="item.id"
+              class="overflow-hidden rounded-xl border border-border bg-card"
+            >
+              <div class="aspect-[16/10] bg-muted">
+                <img
+                  v-if="item.coverImage"
+                  :src="item.coverImage"
+                  :alt="`${item.title} cover`"
+                  class="h-full w-full object-cover"
+                  loading="lazy"
+                />
+                <div v-else class="flex h-full items-center justify-center text-muted-foreground">
+                  <Building2 class="h-7 w-7 opacity-70" />
+                </div>
+              </div>
+              <div class="space-y-3 p-4">
+                <div>
+                  <p class="text-sm text-muted-foreground">{{ item.companyName || item.hostName || 'Host organization' }}</p>
+                  <h3 class="font-semibold text-foreground">{{ item.title }}</h3>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <Button size="sm" :disabled="!isPartneredForSaved(item)" @click="applyFromSaved(item)">
+                    {{ isPartneredForSaved(item) ? 'Apply' : 'Not yet available' }}
+                  </Button>
+                  <RouterLink
+                    :to="{ name: 'internship-detail', params: { id: item.id } }"
+                    class="inline-flex h-9 items-center justify-center rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground hover:bg-accent"
+                  >
+                    Details
+                  </RouterLink>
+                </div>
+              </div>
+            </article>
+          </div>
+          <div v-else class="rounded-xl border border-dashed border-border px-6 py-14 text-center">
+            <p class="text-sm text-muted-foreground">No saved internships yet. Tap the heart on a listing to save it here.</p>
+            <RouterLink
+              to="/find-internships"
+              class="mt-4 inline-flex h-10 items-center justify-center rounded-md border border-border bg-background px-4 text-sm font-medium text-foreground hover:bg-accent"
+            >
+              Browse internships
+            </RouterLink>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card v-else-if="activeView === 'internship'" class="border-border/80 shadow-sm">
+        <CardHeader>
+          <h2 class="text-2xl font-semibold text-foreground">My Applications</h2>
+          <p class="text-sm text-muted-foreground">Track each booking-style application from submission through OJT.</p>
+        </CardHeader>
+        <CardContent class="space-y-4">
+          <div v-if="applicationsLoading || applicationExtrasLoading" class="space-y-4">
+            <Skeleton v-for="index in 3" :key="`app-skel-${index}`" class="h-48 w-full rounded-xl" />
+          </div>
+          <template v-else-if="applicationCards.length">
+            <article
+              v-for="card in applicationCards"
+              :key="card.application.id"
+              class="overflow-hidden rounded-xl border border-border bg-card"
+            >
+              <div class="grid gap-0 md:grid-cols-[180px_minmax(0,1fr)]">
+                <div class="aspect-[16/10] bg-muted md:aspect-auto md:min-h-full">
+                  <img
+                    v-if="card.coverImage"
+                    :src="card.coverImage"
+                    :alt="`${card.application.internshipTitle || 'Internship'} cover`"
+                    class="h-full w-full object-cover"
+                    loading="lazy"
+                  />
+                  <div v-else class="flex h-full min-h-36 items-center justify-center text-muted-foreground">
+                    <Building2 class="h-7 w-7 opacity-70" />
+                  </div>
+                </div>
+                <div class="space-y-4 p-4 sm:p-5">
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p class="text-sm text-muted-foreground">{{ card.application.companyName || 'Host organization' }}</p>
+                      <h3 class="text-lg font-semibold text-foreground">
+                        {{ card.application.internshipTitle || 'Untitled position' }}
+                      </h3>
+                      <p class="mt-1 text-xs text-muted-foreground">Applied {{ formatDate(card.application.createdAt) }}</p>
+                    </div>
+                    <Badge :variant="badgeVariant(card.application.status)">{{ badgeLabel(card.application.status) }}</Badge>
+                  </div>
+                  <ApplicationStatusStepper :result="card.stepper" />
+                  <div class="flex flex-wrap gap-2">
+                    <RouterLink
+                      v-if="card.application.internshipId"
+                      :to="{ name: 'internship-detail', params: { id: card.application.internshipId } }"
+                      class="inline-flex h-9 items-center justify-center rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground hover:bg-accent"
+                    >
+                      View details
+                    </RouterLink>
+                  </div>
+                </div>
+              </div>
+            </article>
+          </template>
+          <div v-else class="rounded-xl border border-dashed border-border px-6 py-14 text-center text-sm text-muted-foreground">
+            No applications yet. Start exploring internship opportunities to populate this list.
           </div>
         </CardContent>
       </Card>
 
       <Card v-else-if="activeView === 'placement'" class="border-border/80 shadow-sm">
         <CardHeader>
-          <h2 class="text-2xl font-semibold text-slate-950">Placement</h2>
-          <p class="text-sm text-slate-600">See your accepted placement and the latest assignment details shared by your school or host.</p>
+          <h2 class="text-2xl font-semibold text-foreground">Placement</h2>
+          <p class="text-sm text-muted-foreground">See your accepted placement and the latest assignment details shared by your school or host.</p>
         </CardHeader>
         <CardContent class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <div class="rounded-2xl bg-slate-50 p-4">
-            <p class="text-sm font-medium text-slate-500">Host</p>
-            <p class="mt-3 text-sm font-medium text-slate-950">{{ placementSummary.host }}</p>
+          <div class="rounded-2xl bg-muted p-4">
+            <p class="text-sm font-medium text-muted-foreground">Host</p>
+            <p class="mt-3 text-sm font-medium text-foreground">{{ placementSummary.host }}</p>
           </div>
-          <div class="rounded-2xl bg-slate-50 p-4">
-            <p class="text-sm font-medium text-slate-500">Role</p>
-            <p class="mt-3 text-sm font-medium text-slate-950">{{ placementSummary.role }}</p>
+          <div class="rounded-2xl bg-muted p-4">
+            <p class="text-sm font-medium text-muted-foreground">Role</p>
+            <p class="mt-3 text-sm font-medium text-foreground">{{ placementSummary.role }}</p>
           </div>
-          <div class="rounded-2xl bg-slate-50 p-4">
-            <p class="text-sm font-medium text-slate-500">Status</p>
-            <p class="mt-3 text-sm font-medium text-slate-950">{{ placementSummary.status }}</p>
+          <div class="rounded-2xl bg-muted p-4">
+            <p class="text-sm font-medium text-muted-foreground">Status</p>
+            <p class="mt-3 text-sm font-medium text-foreground">{{ placementSummary.status }}</p>
           </div>
-          <div class="rounded-2xl bg-slate-50 p-4">
-            <p class="text-sm font-medium text-slate-500">Latest Update</p>
-            <p class="mt-3 text-sm font-medium text-slate-950">{{ placementSummary.updatedAt }}</p>
+          <div class="rounded-2xl bg-muted p-4">
+            <p class="text-sm font-medium text-muted-foreground">Latest Update</p>
+            <p class="mt-3 text-sm font-medium text-foreground">{{ placementSummary.updatedAt }}</p>
           </div>
 
-          <div class="rounded-2xl border border-sky-100 bg-sky-50 p-4 sm:col-span-2 xl:col-span-4">
-            <p class="text-sm font-medium text-sky-900">Placement notes</p>
-            <p class="mt-2 text-sm leading-6 text-slate-700">
+          <div class="rounded-2xl border border-border bg-accent p-4 sm:col-span-2 xl:col-span-4">
+            <p class="text-sm font-medium text-foreground">Placement notes</p>
+            <p class="mt-2 text-sm leading-6 text-foreground">
               This area is ready for supervisor details, required internship hours, school endorsement status, and school-based placement records such as BSED practice teaching assignments.
             </p>
           </div>
@@ -1061,17 +1269,17 @@ watch(
 
       <Card v-else class="border-border/80 shadow-sm">
         <CardHeader>
-          <h2 class="text-2xl font-semibold text-slate-950">Status Tracker</h2>
-          <p class="text-sm text-slate-600">Follow each milestone from initial application through the final decision.</p>
+          <h2 class="text-2xl font-semibold text-foreground">Status Tracker</h2>
+          <p class="text-sm text-muted-foreground">Follow each milestone from initial application through the final decision.</p>
         </CardHeader>
         <CardContent class="space-y-4">
           <div class="space-y-4">
             <div
               v-for="(step, index) in statusSteps"
               :key="step.label"
-              class="relative rounded-2xl border border-border bg-slate-50 p-5"
+              class="relative rounded-2xl border border-border bg-muted p-5"
             >
-              <div v-if="index < statusSteps.length - 1" class="absolute left-[1.7rem] top-[4.4rem] h-10 w-px bg-slate-200" />
+              <div v-if="index < statusSteps.length - 1" class="absolute left-[1.7rem] top-[4.4rem] h-10 w-px bg-border" />
               <div class="flex gap-4">
                 <div
                   class="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
@@ -1082,7 +1290,7 @@ watch(
                         ? 'bg-red-100 text-red-700'
                         : step.tone === 'warning'
                           ? 'bg-amber-100 text-amber-700'
-                          : 'bg-slate-200 text-slate-600'
+                          : 'bg-border text-muted-foreground'
                   "
                 >
                   <CheckCircle2 v-if="step.complete && step.tone !== 'destructive'" class="h-5 w-5" />
@@ -1091,7 +1299,7 @@ watch(
                 </div>
                 <div class="min-w-0 flex-1">
                   <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <h3 class="text-lg font-semibold text-slate-950">{{ step.label }}</h3>
+                    <h3 class="text-lg font-semibold text-foreground">{{ step.label }}</h3>
                     <Badge
                       :variant="
                         step.tone === 'success'
@@ -1106,13 +1314,13 @@ watch(
                       {{ step.complete ? 'Completed' : step.active ? 'In Progress' : 'Waiting' }}
                     </Badge>
                   </div>
-                  <p class="mt-2 text-sm leading-6 text-slate-600">{{ step.description }}</p>
+                  <p class="mt-2 text-sm leading-6 text-muted-foreground">{{ step.description }}</p>
                 </div>
               </div>
             </div>
           </div>
 
-          <div class="rounded-2xl border border-sky-100 bg-sky-50 p-4 text-sm text-sky-900">
+          <div class="rounded-2xl border border-border bg-accent p-4 text-sm text-foreground">
             <div class="flex items-center gap-2 font-medium">
               <CalendarDays class="h-4 w-4" />
               Latest update
@@ -1121,6 +1329,12 @@ watch(
               {{ latestApplication ? `Last activity recorded on ${formatDate(latestApplication.updatedAt || latestApplication.createdAt)}.` : 'No application timeline yet. Once you apply, your stepper will update automatically.' }}
             </p>
           </div>
+
+          <ApplicationInterviewPanel
+            v-if="latestApplication?.id"
+            :application-id="latestApplication.id"
+            mode="student"
+          />
         </CardContent>
       </Card>
     </div>
@@ -1129,7 +1343,7 @@ watch(
       <template #default="{ close }">
         <DialogHeader>
           <DialogTitle>Edit Profile</DialogTitle>
-          <p class="text-sm text-slate-600">Update the details that schools and companies will see in your intern workspace.</p>
+          <p class="text-sm text-muted-foreground">Update the details that schools and companies will see in your intern workspace.</p>
         </DialogHeader>
 
         <div class="mt-6 grid gap-4 sm:grid-cols-2">
@@ -1196,18 +1410,18 @@ watch(
 
         <div v-if="selectedOpportunity" class="mt-6 space-y-6">
           <div class="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-            <div class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div class="rounded-3xl border border-border bg-card p-5 shadow-sm">
               <div class="flex items-center justify-between gap-3">
                 <div>
-                  <h4 class="text-lg font-semibold text-slate-950">Use Approved Documents</h4>
-                  <p class="mt-1 text-sm text-slate-600">Choose from the documents already approved in your document hub.</p>
+                  <h4 class="text-lg font-semibold text-foreground">Use Approved Documents</h4>
+                  <p class="mt-1 text-sm text-muted-foreground">Choose from the documents already approved in your document hub.</p>
                 </div>
                 <Badge variant="outline">{{ approvedDocuments.length }} ready</Badge>
               </div>
 
               <div class="mt-5 space-y-4">
                 <div>
-                  <p class="text-sm font-medium text-slate-700">Approved resume</p>
+                  <p class="text-sm font-medium text-foreground">Approved resume</p>
                   <div v-if="approvedResumeDocuments.length" class="mt-3 grid gap-3">
                     <button
                       v-for="document in approvedResumeDocuments"
@@ -1216,27 +1430,27 @@ watch(
                       class="w-full rounded-2xl border p-4 text-left transition"
                       :class="
                         selectedSavedResumeId === document.id
-                          ? 'border-sky-400 bg-sky-50 shadow-sm'
-                          : 'border-slate-200 bg-slate-50 hover:border-sky-200 hover:bg-white'
+                          ? 'border-primary bg-accent shadow-sm'
+                          : 'border-border bg-muted hover:border-border hover:bg-card'
                       "
                       @click="selectSavedResume(document.id)"
                     >
                       <div class="flex items-start justify-between gap-3">
                         <div>
-                          <p class="font-medium text-slate-950">{{ document.fileName }}</p>
-                          <p class="mt-1 text-sm text-slate-500">{{ document.category }}</p>
+                          <p class="font-medium text-foreground">{{ document.fileName }}</p>
+                          <p class="mt-1 text-sm text-muted-foreground">{{ document.category }}</p>
                         </div>
                         <Badge variant="success">Approved</Badge>
                       </div>
                     </button>
                   </div>
-                  <p v-else class="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                  <p v-else class="mt-3 rounded-2xl border border-dashed border-border bg-muted px-4 py-4 text-sm text-muted-foreground">
                     No approved resume yet. You can import one below for this application.
                   </p>
                 </div>
 
                 <div>
-                  <p class="text-sm font-medium text-slate-700">Approved supporting files</p>
+                  <p class="text-sm font-medium text-foreground">Approved supporting files</p>
                   <div v-if="approvedSupportingDocuments.length" class="mt-3 grid gap-3 md:grid-cols-2">
                     <button
                       v-for="document in approvedSupportingDocuments"
@@ -1246,20 +1460,20 @@ watch(
                       :class="
                         selectedSavedDocumentIds.includes(document.id)
                           ? 'border-emerald-300 bg-emerald-50 shadow-sm'
-                          : 'border-slate-200 bg-slate-50 hover:border-emerald-200 hover:bg-white'
+                          : 'border-border bg-muted hover:border-emerald-500/40 hover:bg-card'
                       "
                       @click="toggleSavedDocument(document.id)"
                     >
                       <div class="flex items-start justify-between gap-3">
                         <div class="min-w-0">
-                          <p class="truncate font-medium text-slate-950">{{ document.fileName }}</p>
-                          <p class="mt-1 text-sm text-slate-500">{{ document.category }}</p>
+                          <p class="truncate font-medium text-foreground">{{ document.fileName }}</p>
+                          <p class="mt-1 text-sm text-muted-foreground">{{ document.category }}</p>
                         </div>
                         <Badge variant="success">{{ selectedSavedDocumentIds.includes(document.id) ? 'Selected' : 'Approved' }}</Badge>
                       </div>
                     </button>
                   </div>
-                  <p v-else class="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                  <p v-else class="mt-3 rounded-2xl border border-dashed border-border bg-muted px-4 py-4 text-sm text-muted-foreground">
                     No approved supporting files yet. You can still import new documents below.
                   </p>
                 </div>
@@ -1267,10 +1481,10 @@ watch(
             </div>
 
             <div class="space-y-6">
-              <div class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div class="rounded-3xl border border-border bg-card p-5 shadow-sm">
                 <div class="flex items-center justify-between gap-3">
                   <div>
-                    <h4 class="text-lg font-semibold text-slate-950">Requirement Checklist</h4>
+                    <h4 class="text-lg font-semibold text-foreground">Requirement Checklist</h4>
                   </div>
                   <Badge variant="outline">
                     {{ selectedRequirementDocuments.length }}/{{ selectedOpportunity.requiredDocuments.length || 0 }}
@@ -1284,46 +1498,46 @@ watch(
                   <label
                     v-for="document in selectedOpportunity.requiredDocuments"
                     :key="document"
-                    class="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-700 transition hover:border-sky-200 hover:bg-white"
+                    class="flex items-center gap-3 rounded-2xl border border-border bg-muted px-4 py-4 text-sm text-foreground transition hover:border-border hover:bg-card"
                   >
                     <input
                       type="checkbox"
                       :checked="selectedRequirementDocuments.includes(document)"
                       @change="toggleRequirementDocument(document)"
                     />
-                    <span class="font-medium text-slate-900">{{ document }}</span>
+                    <span class="font-medium text-foreground">{{ document }}</span>
                   </label>
                 </div>
-                <p v-else class="mt-5 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                <p v-else class="mt-5 rounded-2xl border border-dashed border-border bg-muted px-4 py-4 text-sm text-muted-foreground">
                   This opportunity has no additional required documents listed.
                 </p>
               </div>
 
               <div class="rounded-3xl border border-emerald-100 bg-emerald-50/70 p-5">
-                <h4 class="text-lg font-semibold text-slate-950">Application Summary</h4>
-                <div class="mt-4 space-y-3 text-sm text-slate-700">
+                <h4 class="text-lg font-semibold text-foreground">Application Summary</h4>
+                <div class="mt-4 space-y-3 text-sm text-foreground">
                   <div class="flex items-center justify-between gap-4">
                     <span>Resume source</span>
-                    <span class="font-medium text-slate-950">
+                    <span class="font-medium text-foreground">
                       {{ resumeFile ? 'Imported now' : selectedSavedResumeId ? 'Approved document' : applicationResume ? 'Resume link added' : 'Missing' }}
                     </span>
                   </div>
                   <div class="flex items-center justify-between gap-4">
                     <span>Approved files selected</span>
-                    <span class="font-medium text-slate-950">{{ selectedSavedDocumentIds.length }}</span>
+                    <span class="font-medium text-foreground">{{ selectedSavedDocumentIds.length }}</span>
                   </div>
                   <div class="flex items-center justify-between gap-4">
                     <span>New files imported</span>
-                    <span class="font-medium text-slate-950">{{ supportingFiles.length }}</span>
+                    <span class="font-medium text-foreground">{{ supportingFiles.length }}</span>
                   </div>
                 </div>
               </div>
             </div>
           </div>
 
-          <div class="rounded-3xl border border-sky-100 bg-gradient-to-br from-white via-sky-50/70 to-cyan-50 p-5 shadow-sm">
+          <div class="rounded-3xl border border-border bg-gradient-to-br from-card via-accent/70 to-muted p-5 shadow-sm">
             <div>
-              <h4 class="text-lg font-semibold text-slate-950">Import New Files</h4>
+              <h4 class="text-lg font-semibold text-foreground">Import New Files</h4>
             </div>
 
             <div class="mt-5 grid gap-4 lg:grid-cols-2">
@@ -1334,11 +1548,11 @@ watch(
                     id="applicationResumeFile"
                     type="file"
                     accept=".pdf,.doc,.docx"
-                    class="block w-full rounded-2xl border border-sky-200 bg-white px-4 py-4 text-sm shadow-sm transition file:mr-4 file:rounded-xl file:border-0 file:bg-slate-950 file:px-4 file:py-2.5 file:text-sm file:font-semibold file:text-white hover:border-sky-300 hover:file:bg-sky-700"
+                    class="block w-full rounded-2xl border border-border bg-card px-4 py-4 text-sm shadow-sm transition file:mr-4 file:rounded-xl file:border-0 file:bg-primary file:px-4 file:py-2.5 file:text-sm file:font-semibold file:text-primary-foreground hover:border-primary/40 hover:file:bg-primary/90"
                     @change="handleResumeFileChange"
                   />
                 </FormControl>
-                <p v-if="resumeFile" class="mt-2 text-sm text-slate-600">Selected: {{ resumeFile.name }}</p>
+                <p v-if="resumeFile" class="mt-2 text-sm text-muted-foreground">Selected: {{ resumeFile.name }}</p>
               </FormItem>
 
               <FormItem class="lg:col-span-2">
@@ -1349,11 +1563,11 @@ watch(
                     type="file"
                     multiple
                     accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
-                    class="block w-full rounded-2xl border border-sky-200 bg-white px-4 py-4 text-sm shadow-sm transition file:mr-4 file:rounded-xl file:border-0 file:bg-slate-950 file:px-4 file:py-2.5 file:text-sm file:font-semibold file:text-white hover:border-sky-300 hover:file:bg-sky-700"
+                    class="block w-full rounded-2xl border border-border bg-card px-4 py-4 text-sm shadow-sm transition file:mr-4 file:rounded-xl file:border-0 file:bg-primary file:px-4 file:py-2.5 file:text-sm file:font-semibold file:text-primary-foreground hover:border-primary/40 hover:file:bg-primary/90"
                     @change="handleSupportingFilesChange"
                   />
                 </FormControl>
-                <p v-if="supportingFiles.length" class="mt-2 text-sm text-slate-600">
+                <p v-if="supportingFiles.length" class="mt-2 text-sm text-muted-foreground">
                   {{ supportingFiles.length }} file{{ supportingFiles.length === 1 ? '' : 's' }} selected
                 </p>
               </FormItem>

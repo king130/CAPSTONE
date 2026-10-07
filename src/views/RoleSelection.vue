@@ -2,9 +2,6 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { apiFetch } from '@/services/http'
-import { mapApiUserToProfile } from '@/services/auth'
-import { ensurePublicProfile } from '@/services/profilesPublic'
 import Swal from '@/services/swal'
 
 const router = useRouter()
@@ -15,54 +12,31 @@ const loading = ref(false)
 async function selectRole() {
   if (!selectedRole.value || !authStore.user) return
 
+  // School/company must use registration (POST /auth/register), not profile role promotion.
+  if (selectedRole.value === 'school' || selectedRole.value === 'company') {
+    const registerPath = selectedRole.value === 'school' ? '/register/school' : '/register/company'
+    loading.value = true
+    try {
+      // RegisterSimple redirects logged-in guests away; clear session so registration can proceed.
+      await authStore.logout()
+      await router.push(registerPath)
+    } finally {
+      loading.value = false
+    }
+    return
+  }
+
+  // Students cannot self-promote. Accounts are school-provisioned only.
   loading.value = true
-
   try {
-    const raw = await apiFetch<Record<string, unknown>>('/profile', {
-      method: 'PATCH',
-      body: JSON.stringify({
-        role: selectedRole.value,
-        profileSetupComplete: selectedRole.value === 'student',
-      }),
-    })
-    authStore.user = mapApiUserToProfile(raw)
-
-    if (selectedRole.value === 'school' || selectedRole.value === 'company') {
-      const profile = (authStore.user?.profile as Record<string, unknown>) || {}
-      const orgName = selectedRole.value === 'school'
-        ? (profile.institutionName as string | undefined)
-        : (profile.companyName as string | undefined)
-
-      await ensurePublicProfile(authStore.user.uid, {
-        displayName: authStore.user.displayName || authStore.user.email || 'User',
-        role: selectedRole.value,
-        orgName: orgName || authStore.user.displayName || undefined,
-        email: authStore.user.email || undefined,
-      })
-    }
-
     await Swal.fire({
-      icon: 'success',
-      title: 'Role Selected!',
-      text: selectedRole.value === 'student'
-        ? "You're now registered as a student. Use this email and your password to log in."
-        : `You're now registered as a ${selectedRole.value}. Let's complete your profile.`,
-      confirmButtonColor: '#2563eb'
+      icon: 'info',
+      title: 'School-issued student accounts',
+      text: 'Student accounts are created by your school. Use the setup link from your school email, or log in with your school-issued credentials.',
+      confirmButtonColor: '#2563eb',
     })
-
-    if (selectedRole.value === 'student') {
-      router.push('/intern')
-    } else {
-      router.push('/profile')
-    }
-  } catch (error) {
-    console.error('Error selecting role:', error)
-    await Swal.fire({
-      icon: 'error',
-      title: 'Error',
-      text: 'Failed to update your role. Please try again.',
-      confirmButtonColor: '#2563eb'
-    })
+    await authStore.logout()
+    await router.push({ name: 'login' })
   } finally {
     loading.value = false
   }
@@ -87,12 +61,12 @@ async function selectRole() {
         >
           <div class="role-icon">👨‍🎓</div>
           <h3>Student</h3>
-          <p>I'm looking for internship or OJT opportunities</p>
+          <p>I already received school-issued login credentials</p>
           <ul class="features-list">
-            <li>Browse internship listings</li>
-            <li>Apply to opportunities</li>
-            <li>Track your progress</li>
-            <li>Connect with companies</li>
+            <li>Use your school setup email/link</li>
+            <li>Log in with school-issued credentials</li>
+            <li>Browse eligible internship listings</li>
+            <li>Track applications and OJT progress</li>
           </ul>
         </button>
 
@@ -131,16 +105,22 @@ async function selectRole() {
         </button>
       </div>
 
-      <button 
-        @click="selectRole" 
+      <button
+        @click="selectRole"
         class="continue-btn"
         :disabled="!selectedRole || loading"
       >
-        {{ loading ? 'Processing...' : 'Continue' }}
+        {{
+          loading
+            ? 'Processing...'
+            : selectedRole === 'student'
+              ? 'Go to Student Login'
+              : 'Continue'
+        }}
       </button>
 
       <p class="help-text">
-        You can change this later in your account settings
+        Students use school-issued accounts. Schools and companies register their organization here.
       </p>
     </div>
   </div>
@@ -209,31 +189,30 @@ async function selectRole() {
 }
 
 .role-card:hover {
-  border-color: #2563eb;
+  border-color: #667eea;
   transform: translateY(-4px);
-  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.2);
+  box-shadow: 0 10px 30px rgba(102, 126, 234, 0.2);
 }
 
 .role-card.active {
-  border-color: #2563eb;
-  background: #eff6ff;
-  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.25);
+  border-color: #667eea;
+  background: #f0f4ff;
 }
 
 .role-icon {
-  font-size: 4rem;
+  font-size: 3rem;
   margin-bottom: 1rem;
 }
 
 .role-card h3 {
   font-size: 1.5rem;
-  font-weight: 600;
+  font-weight: 700;
   color: #111827;
   margin: 0 0 0.5rem 0;
 }
 
 .role-card p {
-  font-size: 1rem;
+  font-size: 0.95rem;
   color: #6b7280;
   margin: 0 0 1.5rem 0;
 }
@@ -246,66 +225,63 @@ async function selectRole() {
 }
 
 .features-list li {
-  font-size: 0.875rem;
-  color: #374151;
   padding: 0.5rem 0;
-  padding-left: 1.5rem;
+  color: #374151;
+  font-size: 0.9rem;
   position: relative;
+  padding-left: 1.5rem;
 }
 
 .features-list li::before {
   content: '✓';
   position: absolute;
   left: 0;
-  color: #16a34a;
-  font-weight: 700;
+  color: #667eea;
+  font-weight: bold;
 }
 
 .continue-btn {
   width: 100%;
-  max-width: 400px;
-  display: block;
-  margin: 0 auto 1rem;
   padding: 1rem 2rem;
-  background: #2563eb;
+  background: #667eea;
   color: white;
   border: none;
   border-radius: 8px;
   font-size: 1.125rem;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.3s;
 }
 
 .continue-btn:hover:not(:disabled) {
-  background: #1d4ed8;
+  background: #5568d3;
+  transform: translateY(-2px);
+  box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
 }
 
 .continue-btn:disabled {
-  background: #cbd5e1;
+  background: #d1d5db;
   cursor: not-allowed;
-  opacity: 0.6;
 }
 
 .help-text {
   text-align: center;
-  font-size: 0.875rem;
+  margin-top: 1.5rem;
   color: #6b7280;
-  margin: 0;
+  font-size: 0.9rem;
 }
 
 @media (max-width: 768px) {
   .role-selection-container {
     padding: 2rem 1.5rem;
   }
-  
+
   .header h1 {
-    font-size: 2rem;
+    font-size: 1.75rem;
   }
-  
+
   .role-grid {
     grid-template-columns: 1fr;
-    gap: 1.5rem;
   }
 }
 </style>

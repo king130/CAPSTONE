@@ -8,7 +8,7 @@ export interface ContractRecord {
   schoolId: string
   schoolName: string
   requestedByRole?: 'school' | 'company'
-  status: 'pending' | 'active' | 'rejected' | 'cancelled'
+  status: 'pending' | 'pending_amendment' | 'active' | 'rejected' | 'cancelled'
   subject?: string
   contractType?: string
   contractTypeId?: string | null
@@ -87,7 +87,7 @@ export interface CreateContractPayload {
 }
 
 async function loadAllContracts(): Promise<ContractRecord[]> {
-  const res = await apiFetch<{ data: ContractRecord[] }>('/contracts')
+  const res = await apiFetch<{ data: ContractRecord[] }>('/agreements')
   return res.data ?? []
 }
 
@@ -146,7 +146,7 @@ export async function createContractRequest(payload: CreateContractPayload): Pro
     form.append('files[]', file)
   }
 
-  const res = await apiFetch<{ data: ContractRecord }>('/contracts', {
+  const res = await apiFetch<{ data: ContractRecord }>('/agreements', {
     method: 'POST',
     body: form,
   })
@@ -173,14 +173,14 @@ export function subscribeSchoolContracts(
 }
 
 export async function acceptContract(contractId: string): Promise<void> {
-  await apiFetch(`/contracts/${contractId}/accept`, {
+  await apiFetch(`/agreements/${contractId}/accept`, {
     method: 'PATCH',
   })
   await contractsResource.refresh()
 }
 
 export async function rejectContract(contractId: string, reason?: string): Promise<void> {
-  await apiFetch(`/contracts/${contractId}/reject`, {
+  await apiFetch(`/agreements/${contractId}/reject`, {
     method: 'PATCH',
     body: JSON.stringify({ reason }),
   })
@@ -192,9 +192,27 @@ export async function cancelContract(
   cancelledByRole: 'school' | 'company',
   reason?: string
 ): Promise<void> {
-  await apiFetch(`/contracts/${contractId}/cancel`, {
+  await apiFetch(`/agreements/${contractId}/cancel`, {
     method: 'PATCH',
     body: JSON.stringify({ cancelledByRole, reason }),
   })
   await contractsResource.refresh()
+}
+
+export interface AmendContractPayload {
+  notes?: string
+  purpose?: string
+  startDate?: string
+  endDate?: string
+  terms?: string
+  subject?: string
+}
+
+export async function amendContract(contractId: string, payload: AmendContractPayload): Promise<ContractRecord> {
+  const res = await apiFetch<{ data: ContractRecord }>(`/agreements/${contractId}/amend`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+  await contractsResource.refresh()
+  return res.data
 }

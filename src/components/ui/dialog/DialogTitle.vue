@@ -4,7 +4,7 @@ import { computed } from 'vue'
 import { cn } from '@/lib/utils'
 
 const props = withDefaults(defineProps<{ class?: string }>(), { class: '' })
-const titleClass = computed(() => cn('text-xl font-semibold tracking-tight text-slate-950', props.class))
+const titleClass = computed(() => cn('text-xl font-semibold tracking-tight text-foreground', props.class))
 </script>
 
 <template>

@@ -5,4 +5,4 @@
  * - Logout still works (clears local state)
  * Set to false to re-enable full auth.
  */
-export const AUTH_DISABLED = true
+export const AUTH_DISABLED = false

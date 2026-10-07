@@ -31,7 +31,7 @@ const emit = defineEmits<{
     <template #default="{ close }">
       <DialogHeader>
         <DialogTitle>{{ title }}</DialogTitle>
-        <p class="text-sm leading-6 text-slate-600">{{ description }}</p>
+        <p class="text-sm leading-6 text-muted-foreground">{{ description }}</p>
       </DialogHeader>
 
       <div class="mt-6 flex justify-end gap-3">

@@ -25,12 +25,14 @@ import { useToast } from '@/composables/useToast'
 import MainLayout from '@/layouts/MainLayout.vue'
 import {
   acceptContract,
+  amendContract,
   cancelContract,
   rejectContract,
   subscribeCompanyContracts,
   subscribeSchoolContracts,
   type ContractRecord,
 } from '@/services/contracts'
+import { hasPermission } from '@/services/permissions'
 import { useAuthStore } from '@/stores/auth'
 
 type ContractRole = 'school' | 'company'
@@ -44,6 +46,7 @@ interface PendingActionState {
 function normalizeStatus(status?: string) {
   const normalized = String(status || 'pending').trim().toLowerCase()
   if (normalized === 'active') return 'active'
+  if (normalized === 'pending_amendment') return 'pending_amendment'
   if (normalized === 'rejected') return 'rejected'
   if (normalized === 'cancelled') return 'cancelled'
   return 'pending'
@@ -52,8 +55,14 @@ function normalizeStatus(status?: string) {
 function statusBadgeVariant(status?: string) {
   const normalized = normalizeStatus(status)
   if (normalized === 'active') return 'success'
-  if (normalized === 'pending') return 'warning'
+  if (normalized === 'pending' || normalized === 'pending_amendment') return 'warning'
   return 'destructive'
+}
+
+function statusLabel(status?: string) {
+  const normalized = normalizeStatus(status)
+  if (normalized === 'pending_amendment') return 'pending amendment'
+  return normalized
 }
 
 function formatDate(value: unknown) {
@@ -75,6 +84,16 @@ const actionDialogOpen = ref(false)
 const pendingAction = ref<PendingActionState | null>(null)
 const actionReason = ref('')
 const actionSubmitting = ref(false)
+const amendDialogOpen = ref(false)
+const amendTarget = ref<ContractRecord | null>(null)
+const amendSubmitting = ref(false)
+const amendForm = ref({
+  notes: '',
+  purpose: '',
+  startDate: '',
+  endDate: '',
+  terms: '',
+})
 
 let unsubscribeContracts: (() => void) | null = null
 
@@ -94,7 +113,11 @@ const filteredContracts = computed(() => {
 })
 
 function canAccept(contract: ContractRecord) {
-  return normalizeStatus(contract.status) === 'pending' && contract.requestedByRole !== currentRole.value
+  const status = normalizeStatus(contract.status)
+  return (
+    (status === 'pending' || status === 'pending_amendment')
+    && contract.requestedByRole !== currentRole.value
+  )
 }
 
 function canReject(contract: ContractRecord) {
@@ -102,17 +125,57 @@ function canReject(contract: ContractRecord) {
 }
 
 function canCancel(contract: ContractRecord) {
-  return ['pending', 'active'].includes(normalizeStatus(contract.status))
+  return ['pending', 'active', 'pending_amendment'].includes(normalizeStatus(contract.status))
+}
+
+function canAmend(contract: ContractRecord) {
+  return (
+    hasPermission('org.manage_agreements')
+    && ['pending', 'active'].includes(normalizeStatus(contract.status))
+  )
 }
 
 function openCreatePage() {
-  void router.push({ name: 'contracts-new' })
+  void router.push({ name: 'agreements-new' })
 }
 
 function openActionDialog(contract: ContractRecord, action: ContractAction) {
   pendingAction.value = { contract, action }
   actionReason.value = ''
   actionDialogOpen.value = true
+}
+
+function openAmendDialog(contract: ContractRecord) {
+  amendTarget.value = contract
+  amendForm.value = {
+    notes: contract.notes || '',
+    purpose: contract.purpose || '',
+    startDate: contract.startDate || '',
+    endDate: contract.endDate || '',
+    terms: contract.terms || '',
+  }
+  amendDialogOpen.value = true
+}
+
+async function confirmAmend() {
+  if (!amendTarget.value) return
+  amendSubmitting.value = true
+  try {
+    await amendContract(amendTarget.value.id, {
+      notes: amendForm.value.notes || undefined,
+      purpose: amendForm.value.purpose || undefined,
+      startDate: amendForm.value.startDate || undefined,
+      endDate: amendForm.value.endDate || undefined,
+      terms: amendForm.value.terms || undefined,
+    })
+    success('Amendment submitted.')
+    amendDialogOpen.value = false
+    amendTarget.value = null
+  } catch (caughtError) {
+    error(caughtError, { fallback: 'Could not amend the agreement.' })
+  } finally {
+    amendSubmitting.value = false
+  }
 }
 
 async function confirmAction() {
@@ -122,13 +185,13 @@ async function confirmAction() {
   try {
     if (activeAction === 'accept') {
       await acceptContract(pendingAction.value.contract.id)
-      success('Contract accepted.')
+      success('Agreement accepted.')
     } else if (activeAction === 'reject') {
       await rejectContract(pendingAction.value.contract.id, actionReason.value || undefined)
-      success('Contract rejected.')
+      success('Agreement rejected.')
     } else {
       await cancelContract(pendingAction.value.contract.id, currentRole.value, actionReason.value || undefined)
-      success('Contract cancelled.')
+      success('Agreement cancelled.')
     }
     actionDialogOpen.value = false
     pendingAction.value = null
@@ -175,23 +238,23 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <MainLayout :role="currentRole" title="Contracts" active-item="contracts">
+  <MainLayout :role="currentRole" title="Agreements" active-item="agreements">
     <div class="space-y-6">
       <Card class="border-border/80 shadow-sm">
         <CardHeader class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h2 class="text-2xl font-semibold text-foreground">Contracts Workspace</h2>
+            <h2 class="text-2xl font-semibold text-foreground">Agreements Workspace</h2>
             <p class="text-sm text-muted-foreground">
-              Restore contract requests, approvals, rejections, and cancellations between schools and companies.
+              Restore agreement requests, approvals, rejections, and cancellations between schools and companies.
             </p>
           </div>
           <div class="flex flex-wrap gap-3">
-            <Button variant="outline" @click="router.push({ name: 'contract-types-manage' })">
-              <span>Manage Contract Types</span>
+            <Button variant="outline" @click="router.push({ name: 'agreement-types-manage' })">
+              <span>Manage Agreement Types</span>
             </Button>
             <Button @click="openCreatePage">
               <Plus class="h-4 w-4" />
-              <span>New Contract Request</span>
+              <span>New Agreement Request</span>
             </Button>
           </div>
         </CardHeader>
@@ -200,14 +263,14 @@ onUnmounted(() => {
       <Card class="border-border/80 shadow-sm">
         <CardHeader class="space-y-4">
           <div>
-            <h2 class="text-2xl font-semibold text-foreground">My Contracts</h2>
+            <h2 class="text-2xl font-semibold text-foreground">My Agreements</h2>
             <p class="text-sm text-muted-foreground">
               Review active agreements and respond to incoming requests.
             </p>
           </div>
           <div class="relative max-w-md">
-            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <Input v-model="search" placeholder="Search contracts..." class="pl-9" />
+            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input v-model="search" placeholder="Search agreements..." class="pl-9" />
           </div>
         </CardHeader>
         <CardContent>
@@ -224,18 +287,24 @@ onUnmounted(() => {
                 <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div class="space-y-2">
                     <div class="flex items-center gap-2">
-                      <h3 class="text-lg font-semibold text-slate-950">{{ contract.subject || 'Untitled contract' }}</h3>
-                      <Badge :variant="statusBadgeVariant(contract.status)">{{ contract.status }}</Badge>
+                      <h3 class="text-lg font-semibold text-foreground">{{ contract.subject || 'Untitled contract' }}</h3>
+                      <Badge :variant="statusBadgeVariant(contract.status)">{{ statusLabel(contract.status) }}</Badge>
                     </div>
-                    <p class="text-sm text-slate-600">
+                    <p class="text-sm text-muted-foreground">
                       {{ currentRole === 'school' ? contract.companyName : contract.schoolName }}
                       <span v-if="contract.contractType"> · {{ contract.contractType }}</span>
                     </p>
-                    <p class="text-sm text-slate-500">
+                    <p class="text-sm text-muted-foreground">
                       Requested by {{ contract.requestedByRole }} on {{ formatDate(contract.createdAt) }}
                     </p>
-                    <p v-if="contract.moaReferenceNo" class="text-sm font-medium text-sky-700">
+                    <p v-if="contract.moaReferenceNo" class="text-sm font-medium text-primary">
                       Reference No. {{ contract.moaReferenceNo }}
+                    </p>
+                    <p
+                      v-if="normalizeStatus(contract.status) === 'pending_amendment'"
+                      class="text-sm text-amber-700"
+                    >
+                      Amendment awaiting counterparty acceptance.
                     </p>
                   </div>
                   <div class="flex flex-wrap gap-2">
@@ -247,6 +316,9 @@ onUnmounted(() => {
                       <XCircle class="h-4 w-4" />
                       Reject
                     </Button>
+                    <Button v-if="canAmend(contract)" size="sm" variant="outline" @click="openAmendDialog(contract)">
+                      Amend
+                    </Button>
                     <Button v-if="canCancel(contract)" size="sm" variant="ghost" @click="openActionDialog(contract, 'cancel')">
                       Cancel
                     </Button>
@@ -254,35 +326,35 @@ onUnmounted(() => {
                 </div>
 
                 <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-                  <div class="rounded-xl bg-slate-50 p-4">
-                    <p class="text-sm text-slate-500">Partner</p>
-                    <p class="mt-2 font-medium text-slate-900">{{ currentRole === 'school' ? contract.companyName : contract.schoolName }}</p>
+                  <div class="rounded-xl bg-muted p-4">
+                    <p class="text-sm text-muted-foreground">Partner</p>
+                    <p class="mt-2 font-medium text-foreground">{{ currentRole === 'school' ? contract.companyName : contract.schoolName }}</p>
                   </div>
-                  <div class="rounded-xl bg-slate-50 p-4">
-                    <p class="text-sm text-slate-500">Type</p>
-                    <p class="mt-2 font-medium text-slate-900">{{ contract.contractType || 'Custom' }}</p>
+                  <div class="rounded-xl bg-muted p-4">
+                    <p class="text-sm text-muted-foreground">Type</p>
+                    <p class="mt-2 font-medium text-foreground">{{ contract.contractType || 'Custom' }}</p>
                   </div>
-                  <div class="rounded-xl bg-slate-50 p-4">
-                    <p class="text-sm text-slate-500">Reference No.</p>
-                    <p class="mt-2 font-medium text-slate-900">{{ contract.moaReferenceNo || 'Generating...' }}</p>
+                  <div class="rounded-xl bg-muted p-4">
+                    <p class="text-sm text-muted-foreground">Reference No.</p>
+                    <p class="mt-2 font-medium text-foreground">{{ contract.moaReferenceNo || 'Generating...' }}</p>
                   </div>
-                  <div class="rounded-xl bg-slate-50 p-4">
-                    <p class="text-sm text-slate-500">Period</p>
-                    <p class="mt-2 font-medium text-slate-900">
+                  <div class="rounded-xl bg-muted p-4">
+                    <p class="text-sm text-muted-foreground">Period</p>
+                    <p class="mt-2 font-medium text-foreground">
                       {{ contract.startDate ? formatDate(contract.startDate) : 'Not set' }}
                       -
                       {{ contract.endDate ? formatDate(contract.endDate) : 'Not set' }}
                     </p>
                   </div>
-                  <div class="rounded-xl bg-slate-50 p-4">
-                    <p class="text-sm text-slate-500">Slots</p>
-                    <p class="mt-2 font-medium text-slate-900">{{ contract.internshipSlots || 0 }}</p>
+                  <div class="rounded-xl bg-muted p-4">
+                    <p class="text-sm text-muted-foreground">Slots</p>
+                    <p class="mt-2 font-medium text-foreground">{{ contract.internshipSlots || 0 }}</p>
                   </div>
                 </div>
 
                 <div v-if="contract.purpose || contract.notes || contract.rejectedReason || contract.cancelledReason" class="space-y-2">
-                  <p v-if="contract.purpose" class="text-sm text-slate-700"><span class="font-medium">Purpose:</span> {{ contract.purpose }}</p>
-                  <p v-if="contract.notes" class="text-sm text-slate-700"><span class="font-medium">Notes:</span> {{ contract.notes }}</p>
+                  <p v-if="contract.purpose" class="text-sm text-foreground"><span class="font-medium">Purpose:</span> {{ contract.purpose }}</p>
+                  <p v-if="contract.notes" class="text-sm text-foreground"><span class="font-medium">Notes:</span> {{ contract.notes }}</p>
                   <p v-if="contract.rejectedReason" class="text-sm text-red-600"><span class="font-medium">Rejected reason:</span> {{ contract.rejectedReason }}</p>
                   <p v-if="contract.cancelledReason" class="text-sm text-red-600"><span class="font-medium">Cancelled reason:</span> {{ contract.cancelledReason }}</p>
                 </div>
@@ -305,16 +377,18 @@ onUnmounted(() => {
           <DialogTitle>
             {{
               pendingAction?.action === 'accept'
-                ? 'Accept Contract'
+                ? 'Accept Agreement'
                 : pendingAction?.action === 'reject'
-                  ? 'Reject Contract'
-                  : 'Cancel Contract'
+                  ? 'Reject Agreement'
+                  : 'Cancel Agreement'
             }}
           </DialogTitle>
           <p class="text-sm text-muted-foreground">
             {{
               pendingAction?.action === 'accept'
-                ? 'Please confirm that you want to accept this contract request.'
+                ? normalizeStatus(pendingAction?.contract.status) === 'pending_amendment'
+                  ? 'Accept the proposed amendment to make this agreement active again.'
+                  : 'Please confirm that you want to accept this agreement request.'
                 : 'Add an optional reason to help the other party understand the update.'
             }}
           </p>
@@ -344,6 +418,49 @@ onUnmounted(() => {
                       : 'Confirm Cancel'
                 }}
               </span>
+            </Button>
+          </div>
+        </div>
+      </template>
+    </Dialog>
+
+    <Dialog v-model:open="amendDialogOpen">
+      <template #default="{ close }">
+        <DialogHeader>
+          <DialogTitle>Amend Agreement</DialogTitle>
+          <p class="text-sm text-muted-foreground">
+            Update agreement details. Active agreements move to pending amendment until the other party accepts.
+          </p>
+        </DialogHeader>
+        <div class="mt-6 space-y-4">
+          <div class="grid gap-3 md:grid-cols-2">
+            <div>
+              <label class="mb-1 block text-sm text-muted-foreground">Start date</label>
+              <Input v-model="amendForm.startDate" type="date" />
+            </div>
+            <div>
+              <label class="mb-1 block text-sm text-muted-foreground">End date</label>
+              <Input v-model="amendForm.endDate" type="date" />
+            </div>
+          </div>
+          <div>
+            <label class="mb-1 block text-sm text-muted-foreground">Purpose</label>
+            <Textarea v-model="amendForm.purpose" :rows="3" />
+          </div>
+          <div>
+            <label class="mb-1 block text-sm text-muted-foreground">Terms</label>
+            <Textarea v-model="amendForm.terms" :rows="3" />
+          </div>
+          <div>
+            <label class="mb-1 block text-sm text-muted-foreground">Notes</label>
+            <Textarea v-model="amendForm.notes" :rows="3" />
+          </div>
+          <div class="flex justify-end gap-3">
+            <Button variant="outline" @click="close">Close</Button>
+            <Button :disabled="amendSubmitting" @click="confirmAmend">
+              <LoaderCircle v-if="amendSubmitting" class="h-4 w-4 animate-spin" />
+              <Send v-else class="h-4 w-4" />
+              <span>Submit Amendment</span>
             </Button>
           </div>
         </div>

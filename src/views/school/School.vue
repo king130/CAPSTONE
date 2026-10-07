@@ -33,11 +33,16 @@ import TableCell from '@/components/ui/table/TableCell.vue'
 import TableHead from '@/components/ui/table/TableHead.vue'
 import TableHeader from '@/components/ui/table/TableHeader.vue'
 import TableRow from '@/components/ui/table/TableRow.vue'
+import ApplicationAssessmentPanel from '@/components/ApplicationAssessmentPanel.vue'
+import ApplicationInterviewPanel from '@/components/ApplicationInterviewPanel.vue'
 import { useToast } from '@/composables/useToast'
 import MainLayout from '@/layouts/MainLayout.vue'
 import { subscribeAllApplications, updateApplicationStatus, type ApplicationRecord } from '@/services/applications'
 import { subscribeSchoolContracts, type ContractRecord } from '@/services/contracts'
 import { subscribeInternships, type InternshipRecord } from '@/services/internships'
+import { generateCertificate } from '@/services/certificates'
+import { exportReport, fetchKpiReport, fetchStudentProgress, type KpiReport, type StudentProgressRow } from '@/services/kpi'
+import { hasPermission } from '@/services/permissions'
 import { subscribeSchoolStudents, type SchoolStudentRow } from '@/services/schoolStudents'
 import { useAuthStore } from '@/stores/auth'
 
@@ -72,6 +77,10 @@ const searchQuery = ref('')
 const pendingDecision = ref<PendingDecision>(null)
 const submittingDecision = ref(false)
 const selectedEndorsement = ref<EndorsementDetail | null>(null)
+const studentProgress = ref<StudentProgressRow[]>([])
+const loadingProgress = ref(false)
+const kpi = ref<KpiReport | null>(null)
+const exportingReport = ref(false)
 
 let unsubscribeStudents: (() => void) | null = null
 let unsubscribeInternships: (() => void) | null = null
@@ -136,67 +145,6 @@ const pageTitle = computed(() => {
 })
 
 const activeItem = computed(() => currentView.value)
-
-const quickActions = computed(() => [
-  {
-    label: 'Student Accounts',
-    copy: 'Create temporary student logins, bulk import roster records, and export the current list.',
-    icon: UserRoundPlus,
-    action: () => router.push({ name: 'school-students' }),
-    buttonLabel: 'Manage Accounts',
-  },
-  {
-    label: 'Contracts',
-    copy: 'Send new contract requests and respond to company agreements from the shared contracts workspace.',
-    icon: FileText,
-    action: () => router.push({ name: 'contracts' }),
-    buttonLabel: 'Open Contracts',
-  },
-  {
-    label: 'Messages',
-    copy: 'Open the restored messaging widget to contact companies and continue school-side conversations.',
-    icon: MessageSquare,
-    action: () => window.dispatchEvent(new CustomEvent('chat:open')),
-    buttonLabel: 'Open Messages',
-  },
-  {
-    label: 'Opportunities',
-    copy: 'Review company-hosted and school-hosted placements that match the programs you coordinate.',
-    icon: BriefcaseBusiness,
-    action: () => router.push({ name: 'school-opportunities' }),
-    buttonLabel: 'Browse Opportunities',
-  },
-])
-
-const dashboardStats = computed(() => {
-  const totalInterns = students.value.length
-  const pendingEndorsements = applications.value.filter((application) => normalizeStatus(application.status) === 'submitted').length
-  const activePlacements = applications.value.filter((application) => normalizeStatus(application.status) === 'accepted').length
-
-  return [
-    {
-      label: 'Total Interns Enrolled',
-      value: totalInterns,
-      icon: Users,
-      iconClass: 'bg-sky-100 text-sky-700',
-      caption: 'Students currently in your roster',
-    },
-    {
-      label: 'Pending Endorsements',
-      value: pendingEndorsements,
-      icon: Clock3,
-      iconClass: 'bg-amber-100 text-amber-700',
-      caption: 'Applications waiting for school action',
-    },
-    {
-      label: 'Active Placements',
-      value: activePlacements,
-      icon: BriefcaseBusiness,
-      iconClass: 'bg-emerald-100 text-emerald-700',
-      caption: 'Students accepted by company partners',
-    },
-  ]
-})
 
 const searchableInternRows = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
@@ -286,6 +234,81 @@ const pendingEndorsements = computed(() => {
       ),
     )
 })
+
+const schoolDisplayName = computed(() => {
+  const user = authStore.user as Record<string, unknown> | null
+  const school = (user?.school ?? null) as Record<string, unknown> | null
+  const profile = (user?.profile ?? null) as Record<string, unknown> | null
+  return (
+    String(school?.schoolName || school?.name || profile?.schoolName || user?.name || 'School workspace')
+  )
+})
+
+const openOpportunitiesCount = computed(
+  () => visibleOpportunities.value.filter((internship) => normalizeOpportunityStatus(internship.status) === 'active').length,
+)
+
+const dashboardStats = computed(() => {
+  const totalInterns = students.value.length
+  const pendingCount = applications.value.filter((application) => normalizeStatus(application.status) === 'submitted').length
+  const activePlacements = applications.value.filter((application) => normalizeStatus(application.status) === 'accepted').length
+
+  return [
+    {
+      label: 'Total Interns',
+      value: totalInterns,
+      icon: Users,
+      iconClass: 'bg-accent text-primary',
+      caption: 'On your roster',
+    },
+    {
+      label: 'Pending Endorsements',
+      value: pendingCount,
+      icon: Clock3,
+      iconClass: 'bg-amber-100 text-amber-700',
+      caption: 'Awaiting school action',
+    },
+    {
+      label: 'Active Placements',
+      value: activePlacements,
+      icon: BriefcaseBusiness,
+      iconClass: 'bg-emerald-100 text-emerald-700',
+      caption: 'Accepted by partners',
+    },
+    {
+      label: 'Open Opportunities',
+      value: openOpportunitiesCount.value,
+      icon: BriefcaseBusiness,
+      iconClass: 'bg-violet-100 text-violet-700',
+      caption: 'Visible to students',
+    },
+  ]
+})
+
+const attentionEndorsements = computed(() => pendingEndorsements.value.slice(0, 5))
+
+const compactQuickActions = computed(() => [
+  {
+    label: 'Student Accounts',
+    icon: UserRoundPlus,
+    action: () => router.push({ name: 'school-students' }),
+  },
+  {
+    label: 'Agreements',
+    icon: FileText,
+    action: () => router.push({ name: 'agreements' }),
+  },
+  {
+    label: 'Opportunities',
+    icon: BriefcaseBusiness,
+    action: () => router.push({ name: 'school-opportunities' }),
+  },
+  {
+    label: 'Messages',
+    icon: MessageSquare,
+    action: () => window.dispatchEvent(new CustomEvent('chat:open')),
+  },
+])
 
 const placementRows = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
@@ -436,9 +459,66 @@ function handleMenuClick(item: string) {
   void router.push({ name: targetName })
 }
 
+async function loadStudentProgress() {
+  loadingProgress.value = true
+  try {
+    studentProgress.value = await fetchStudentProgress()
+  } catch (caughtError) {
+    error(caughtError, { fallback: 'Unable to load student OJT progress.' })
+    studentProgress.value = []
+  } finally {
+    loadingProgress.value = false
+  }
+}
+
+async function loadKpi() {
+  try {
+    kpi.value = await fetchKpiReport()
+  } catch {
+    kpi.value = null
+  }
+}
+
+async function downloadReport(type: 'placements' | 'ojt' | 'assessments') {
+  exportingReport.value = true
+  try {
+    const blob = await exportReport(type)
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${type}-report.csv`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    success('Report downloaded.')
+  } catch (caughtError) {
+    error(caughtError, { fallback: 'Unable to export report.' })
+  } finally {
+    exportingReport.value = false
+  }
+}
+
+async function issueCertificate(applicationId: string) {
+  if (!hasPermission('org.approve_certificates')) {
+    error('Missing permission to issue certificates.')
+    return
+  }
+  try {
+    await generateCertificate(applicationId)
+    success('Certificate of completion issued.')
+  } catch (caughtError) {
+    error(caughtError, { fallback: 'Unable to generate certificate. Ensure placement is accepted and OJT hours meet the requirement.' })
+  }
+}
+
 onMounted(() => {
   currentView.value = schoolViewFromRouteName(route.name)
   startSchoolSubscriptions(authStore.user?.uid)
+  if (currentView.value === 'dashboard' || currentView.value === 'reports' || currentView.value === 'placements') {
+    void loadKpi()
+  }
+  if (currentView.value === 'reports' || currentView.value === 'placements') {
+    void loadStudentProgress()
+  }
 })
 
 onUnmounted(() => {
@@ -452,6 +532,15 @@ watch(
   },
 )
 
+watch(currentView, (view) => {
+  if (view === 'dashboard' || view === 'reports' || view === 'placements') {
+    void loadKpi()
+  }
+  if (view === 'reports' || view === 'placements') {
+    void loadStudentProgress()
+  }
+})
+
 watch(
   () => authStore.user?.uid,
   (userId) => {
@@ -463,84 +552,149 @@ watch(
 <template>
   <MainLayout role="school" :title="pageTitle" :active-item="activeItem" @navigate="handleMenuClick($event.key)">
     <div class="space-y-6">
-      <Card v-if="currentView === 'dashboard'" class="border-border/80 shadow-sm">
-        <CardHeader>
-          <div class="flex items-center gap-3">
-            <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 text-sky-700">
-              <SchoolIcon class="h-5 w-5" />
-            </div>
-            <div>
-              <h2 class="text-2xl font-semibold text-slate-950">School Dashboard</h2>
-              <p class="text-sm text-slate-600">Monitor intern enrollment, endorsement workload, and active placements at a glance.</p>
+      <template v-if="currentView === 'dashboard'">
+        <section class="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+          <div class="border-b border-border bg-gradient-to-r from-accent via-card to-emerald-50/60 px-6 py-6 sm:px-8">
+            <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div class="flex items-start gap-4">
+                <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-accent text-primary">
+                  <SchoolIcon class="h-5 w-5" />
+                </div>
+                <div>
+                  <p class="text-xs font-semibold uppercase tracking-[0.2em] text-primary">Overview</p>
+                  <h2 class="mt-1 text-2xl font-semibold tracking-tight text-foreground">{{ schoolDisplayName }}</h2>
+                  <p class="mt-1 text-sm text-muted-foreground">
+                    {{ dashboardStats[1]?.value || 0 }} endorsement{{ (dashboardStats[1]?.value || 0) === 1 ? '' : 's' }} waiting ·
+                    {{ dashboardStats[2]?.value || 0 }} active placement{{ (dashboardStats[2]?.value || 0) === 1 ? '' : 's' }}
+                  </p>
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" @click="handleMenuClick('applications')">Review endorsements</Button>
+                <Button size="sm" @click="handleMenuClick('reports')">Open reports</Button>
+              </div>
             </div>
           </div>
-        </CardHeader>
-        <CardContent class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <Card v-for="stat in dashboardStats" :key="stat.label" class="border-border/70 shadow-none">
-            <CardContent class="p-5">
-              <template v-if="loadingStudents || loadingApplications">
-                <Skeleton class="h-11 w-11 rounded-2xl" />
-                <Skeleton class="mt-5 h-4 w-28" />
-                <Skeleton class="mt-3 h-8 w-16" />
-                <Skeleton class="mt-3 h-4 w-36" />
+
+          <div class="grid gap-px bg-muted sm:grid-cols-2 xl:grid-cols-4">
+            <div v-for="stat in dashboardStats" :key="stat.label" class="bg-card px-5 py-5">
+              <template v-if="loadingStudents || loadingApplications || loadingInternships">
+                <Skeleton class="h-9 w-9 rounded-xl" />
+                <Skeleton class="mt-4 h-3 w-24" />
+                <Skeleton class="mt-2 h-8 w-14" />
               </template>
               <template v-else>
-                <div :class="['flex h-11 w-11 items-center justify-center rounded-2xl', stat.iconClass]">
-                  <component :is="stat.icon" class="h-5 w-5" />
+                <div class="flex items-center justify-between gap-3">
+                  <div :class="['flex h-9 w-9 items-center justify-center rounded-xl', stat.iconClass]">
+                    <component :is="stat.icon" class="h-4 w-4" />
+                  </div>
+                  <p class="text-xs font-medium text-muted-foreground">{{ stat.caption }}</p>
                 </div>
-                <p class="mt-5 text-sm font-medium text-slate-500">{{ stat.label }}</p>
-                <p class="mt-2 text-3xl font-semibold text-slate-950">{{ stat.value }}</p>
-                <p class="mt-3 text-sm text-slate-600">{{ stat.caption }}</p>
+                <p class="mt-4 text-sm font-medium text-muted-foreground">{{ stat.label }}</p>
+                <p class="mt-1 text-3xl font-semibold tracking-tight text-foreground">{{ stat.value }}</p>
               </template>
-            </CardContent>
-          </Card>
-        </CardContent>
-      </Card>
+            </div>
+          </div>
+        </section>
 
-      <Card v-if="currentView === 'dashboard'" class="border-border/80 shadow-sm">
-        <CardHeader>
-          <h2 class="text-2xl font-semibold text-slate-950">School Tools</h2>
-          <p class="text-sm text-slate-600">
-            Jump back into the older operational flows that schools use most often.
-          </p>
-        </CardHeader>
-        <CardContent class="grid gap-4 md:grid-cols-3">
-          <Card v-for="action in quickActions" :key="action.label" class="border-border/70 shadow-none">
-            <CardContent class="space-y-4 p-5">
-              <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
-                <component :is="action.icon" class="h-5 w-5" />
-              </div>
+        <section v-if="kpi" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Placement rate</p>
+            <p class="mt-2 text-2xl font-semibold text-foreground">{{ kpi.placementRate }}%</p>
+          </div>
+          <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Agreements</p>
+            <p class="mt-2 text-2xl font-semibold text-foreground">{{ kpi.totalAgreements }}</p>
+          </div>
+          <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Avg approved OJT hrs</p>
+            <p class="mt-2 text-2xl font-semibold text-foreground">{{ kpi.avgApprovedOjtHours }}</p>
+          </div>
+          <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Avg assessment score</p>
+            <p class="mt-2 text-2xl font-semibold text-foreground">{{ kpi.avgAssessmentScore }}</p>
+          </div>
+        </section>
+
+        <div class="grid gap-6 xl:grid-cols-[1.4fr_0.9fr]">
+          <section class="rounded-2xl border border-border bg-card shadow-sm">
+            <div class="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
               <div>
-                <p class="text-lg font-semibold text-slate-950">{{ action.label }}</p>
-                <p class="mt-2 text-sm leading-6 text-slate-600">{{ action.copy }}</p>
+                <h3 class="text-lg font-semibold text-foreground">Needs attention</h3>
+                <p class="text-sm text-muted-foreground">Pending endorsements that need a school decision.</p>
               </div>
-              <Button class="w-full justify-center" variant="outline" @click="action.action()">
-                {{ action.buttonLabel }}
-              </Button>
-            </CardContent>
-          </Card>
-        </CardContent>
-      </Card>
+              <Button size="sm" variant="outline" @click="handleMenuClick('applications')">View all</Button>
+            </div>
+            <div class="divide-y divide-border">
+              <template v-if="loadingApplications">
+                <div v-for="index in 3" :key="index" class="space-y-2 px-5 py-4">
+                  <Skeleton class="h-4 w-40" />
+                  <Skeleton class="h-3 w-56" />
+                </div>
+              </template>
+              <template v-else-if="attentionEndorsements.length">
+                <div
+                  v-for="item in attentionEndorsements"
+                  :key="item.id"
+                  class="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div class="min-w-0">
+                    <p class="font-medium text-foreground">{{ item.internName }}</p>
+                    <p class="truncate text-sm text-muted-foreground">
+                      {{ item.internshipTitle }} · {{ item.company }}
+                    </p>
+                  </div>
+                  <Button size="sm" variant="outline" class="shrink-0" @click="handleMenuClick('applications')">
+                    Review
+                  </Button>
+                </div>
+              </template>
+              <div v-else class="px-5 py-10 text-center text-sm text-muted-foreground">
+                No pending endorsements right now.
+              </div>
+            </div>
+          </section>
+
+          <section class="rounded-2xl border border-border bg-card p-5 shadow-sm">
+            <h3 class="text-lg font-semibold text-foreground">Quick actions</h3>
+            <p class="mt-1 text-sm text-muted-foreground">Jump to common school workflows.</p>
+            <div class="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+              <button
+                v-for="action in compactQuickActions"
+                :key="action.label"
+                type="button"
+                class="flex items-center gap-3 rounded-xl border border-border px-4 py-3 text-left transition hover:border-border hover:bg-accent/60"
+                @click="action.action()"
+              >
+                <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-foreground">
+                  <component :is="action.icon" class="h-4 w-4" />
+                </span>
+                <span class="text-sm font-medium text-foreground">{{ action.label }}</span>
+              </button>
+            </div>
+          </section>
+        </div>
+      </template>
 
       <Card v-else-if="currentView === 'opportunities'" class="border-border/80 shadow-sm">
         <CardHeader class="space-y-4">
           <div>
-            <h2 class="text-2xl font-semibold text-slate-950">Internship Opportunities</h2>
-            <p class="text-sm text-slate-600">Review school-hosted placements and company posts from partners with active contracts.</p>
+            <h2 class="text-2xl font-semibold text-foreground">Internship Opportunities</h2>
+            <p class="text-sm text-muted-foreground">Review school-hosted placements and company posts from partners with active contracts.</p>
           </div>
           <div class="relative max-w-md">
-            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input v-model="searchQuery" placeholder="Search opportunities..." class="pl-9" />
           </div>
         </CardHeader>
         <CardContent>
-          <div class="mb-4 rounded-2xl border border-sky-100 bg-sky-50 p-4 text-sm text-sky-900">
+          <div class="mb-4 rounded-2xl border border-border bg-accent p-4 text-sm text-foreground">
             <p class="font-medium">Student-visible opportunities</p>
             <p class="mt-2">
               This list now mirrors what students can access: your school-hosted posts and company opportunities from active partner contracts.
             </p>
           </div>
-          <div class="rounded-xl border border-border bg-white">
+          <div class="rounded-xl border border-border bg-card">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -567,18 +721,18 @@ watch(
                   <TableRow v-for="opportunity in opportunityRows" :key="opportunity.id">
                     <TableCell>
                       <div class="space-y-1">
-                        <p class="font-medium text-slate-950">{{ opportunity.title }}</p>
-                        <p class="text-sm text-slate-500">{{ opportunity.location }}</p>
+                        <p class="font-medium text-foreground">{{ opportunity.title }}</p>
+                        <p class="text-sm text-muted-foreground">{{ opportunity.location }}</p>
                       </div>
                     </TableCell>
                     <TableCell>
                       <div class="space-y-1">
-                        <p class="text-slate-700">{{ opportunity.hostName }}</p>
-                        <p class="text-sm text-slate-500">{{ opportunity.hostType }}</p>
+                        <p class="text-foreground">{{ opportunity.hostName }}</p>
+                        <p class="text-sm text-muted-foreground">{{ opportunity.hostType }}</p>
                       </div>
                     </TableCell>
-                    <TableCell class="text-slate-700">{{ opportunity.programs }}</TableCell>
-                    <TableCell class="text-slate-700">{{ opportunity.slots }}</TableCell>
+                    <TableCell class="text-foreground">{{ opportunity.programs }}</TableCell>
+                    <TableCell class="text-foreground">{{ opportunity.slots }}</TableCell>
                     <TableCell>
                       <Badge :variant="opportunityBadgeVariant(opportunity.status)">{{ opportunityBadgeLabel(opportunity.status) }}</Badge>
                     </TableCell>
@@ -603,16 +757,16 @@ watch(
       <Card v-else-if="currentView === 'student-interns'" class="border-border/80 shadow-sm">
         <CardHeader class="space-y-4">
           <div>
-            <h2 class="text-2xl font-semibold text-slate-950">Interns List</h2>
-            <p class="text-sm text-slate-600">Search enrolled interns, review their course, and see the company tied to the latest application.</p>
+            <h2 class="text-2xl font-semibold text-foreground">Interns List</h2>
+            <p class="text-sm text-muted-foreground">Search enrolled interns, review their course, and see the company tied to the latest application.</p>
           </div>
           <div class="relative max-w-md">
-            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input v-model="searchQuery" placeholder="Search interns..." class="pl-9" />
           </div>
         </CardHeader>
         <CardContent>
-          <div class="rounded-xl border border-border bg-white">
+          <div class="rounded-xl border border-border bg-card">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -635,12 +789,12 @@ watch(
                   <TableRow v-for="intern in searchableInternRows" :key="intern.id">
                     <TableCell>
                       <div class="space-y-1">
-                        <p class="font-medium text-slate-950">{{ intern.name }}</p>
-                        <p class="text-sm text-slate-500">{{ intern.email }}</p>
+                        <p class="font-medium text-foreground">{{ intern.name }}</p>
+                        <p class="text-sm text-muted-foreground">{{ intern.email }}</p>
                       </div>
                     </TableCell>
-                    <TableCell class="text-slate-700">{{ intern.course }}</TableCell>
-                    <TableCell class="text-slate-700">{{ intern.company }}</TableCell>
+                    <TableCell class="text-foreground">{{ intern.course }}</TableCell>
+                    <TableCell class="text-foreground">{{ intern.company }}</TableCell>
                     <TableCell>
                       <Badge :variant="badgeVariant(intern.status)">{{ badgeLabel(intern.status) }}</Badge>
                     </TableCell>
@@ -660,16 +814,16 @@ watch(
       <Card v-else-if="currentView === 'placements'" class="border-border/80 shadow-sm">
         <CardHeader class="space-y-4">
           <div>
-            <h2 class="text-2xl font-semibold text-slate-950">Placements</h2>
-            <p class="text-sm text-slate-600">Track students who already have company-accepted placements and review where each intern has been assigned.</p>
+            <h2 class="text-2xl font-semibold text-foreground">Placements</h2>
+            <p class="text-sm text-muted-foreground">Track students who already have company-accepted placements and review where each intern has been assigned.</p>
           </div>
           <div class="relative max-w-md">
-            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input v-model="searchQuery" placeholder="Search placements..." class="pl-9" />
           </div>
         </CardHeader>
         <CardContent>
-          <div class="rounded-xl border border-border bg-white">
+          <div class="rounded-xl border border-border bg-card">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -679,6 +833,7 @@ watch(
                   <TableHead>Placement Type</TableHead>
                   <TableHead>Updated</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead class="text-right">Certificate</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -690,22 +845,28 @@ watch(
                     <TableCell><Skeleton class="h-5 w-28" /></TableCell>
                     <TableCell><Skeleton class="h-5 w-24" /></TableCell>
                     <TableCell><Skeleton class="h-5 w-20" /></TableCell>
+                    <TableCell><Skeleton class="ml-auto h-5 w-20" /></TableCell>
                   </TableRow>
                 </template>
                 <template v-else-if="placementRows.length">
                   <TableRow v-for="placement in placementRows" :key="placement.id">
-                    <TableCell class="font-medium text-slate-950">{{ placement.internName }}</TableCell>
-                    <TableCell class="text-slate-700">{{ placement.program }}</TableCell>
-                    <TableCell class="text-slate-700">{{ placement.host }}</TableCell>
-                    <TableCell class="text-slate-700">{{ placement.placementType }}</TableCell>
-                    <TableCell class="text-slate-600">{{ placement.updatedAt }}</TableCell>
+                    <TableCell class="font-medium text-foreground">{{ placement.internName }}</TableCell>
+                    <TableCell class="text-foreground">{{ placement.program }}</TableCell>
+                    <TableCell class="text-foreground">{{ placement.host }}</TableCell>
+                    <TableCell class="text-foreground">{{ placement.placementType }}</TableCell>
+                    <TableCell class="text-muted-foreground">{{ placement.updatedAt }}</TableCell>
                     <TableCell>
                       <Badge :variant="badgeVariant(placement.status)">{{ badgeLabel(placement.status) }}</Badge>
+                    </TableCell>
+                    <TableCell class="text-right">
+                      <Button size="sm" variant="outline" @click="issueCertificate(placement.id)">
+                        Issue
+                      </Button>
                     </TableCell>
                   </TableRow>
                 </template>
                 <TableRow v-else>
-                  <TableCell colspan="6" class="py-10 text-center text-muted-foreground">
+                  <TableCell colspan="7" class="py-10 text-center text-muted-foreground">
                     No accepted placements matched your search.
                   </TableCell>
                 </TableRow>
@@ -717,25 +878,122 @@ watch(
 
       <Card v-else-if="currentView === 'reports'" class="border-border/80 shadow-sm">
         <CardHeader>
-          <h2 class="text-2xl font-semibold text-slate-950">Reports</h2>
-          <p class="text-sm text-slate-600">Use these summaries to monitor endorsement flow, school-based opportunities, and placement coverage.</p>
+          <h2 class="text-2xl font-semibold text-foreground">Reports</h2>
+          <p class="text-sm text-muted-foreground">Use these summaries to monitor endorsement flow, school-based opportunities, and placement coverage.</p>
         </CardHeader>
         <CardContent class="space-y-6">
           <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <Card v-for="report in reportCards" :key="report.label" class="border-border/70 shadow-none">
               <CardContent class="p-5">
-                <p class="text-sm font-medium text-slate-500">{{ report.label }}</p>
-                <p class="mt-2 text-3xl font-semibold text-slate-950">{{ report.value }}</p>
-                <p class="mt-3 text-sm text-slate-600">{{ report.copy }}</p>
+                <p class="text-sm font-medium text-muted-foreground">{{ report.label }}</p>
+                <p class="mt-2 text-3xl font-semibold text-foreground">{{ report.value }}</p>
+                <p class="mt-3 text-sm text-muted-foreground">{{ report.copy }}</p>
               </CardContent>
             </Card>
           </div>
 
-          <div class="rounded-2xl border border-sky-100 bg-sky-50 p-5">
-            <h3 class="text-lg font-semibold text-slate-950">Recommended next build</h3>
-            <p class="mt-2 text-sm leading-6 text-slate-700">
-              This section is ready for export reports, course-level placement breakdowns, and partner-school analytics once your backend fields for host type, placement category, and required OJT hours are in place.
-            </p>
+          <div v-if="kpi" class="grid gap-4 md:grid-cols-4">
+            <Card class="border-border/70 shadow-none">
+              <CardContent class="p-4">
+                <p class="text-xs font-medium text-muted-foreground">KPI placement rate</p>
+                <p class="mt-1 text-2xl font-semibold text-foreground">{{ kpi.placementRate }}%</p>
+              </CardContent>
+            </Card>
+            <Card class="border-border/70 shadow-none">
+              <CardContent class="p-4">
+                <p class="text-xs font-medium text-muted-foreground">Agreements</p>
+                <p class="mt-1 text-2xl font-semibold text-foreground">{{ kpi.totalAgreements }}</p>
+              </CardContent>
+            </Card>
+            <Card class="border-border/70 shadow-none">
+              <CardContent class="p-4">
+                <p class="text-xs font-medium text-muted-foreground">Avg approved OJT hrs</p>
+                <p class="mt-1 text-2xl font-semibold text-foreground">{{ kpi.avgApprovedOjtHours }}</p>
+              </CardContent>
+            </Card>
+            <Card class="border-border/70 shadow-none">
+              <CardContent class="p-4">
+                <p class="text-xs font-medium text-muted-foreground">Avg assessment score</p>
+                <p class="mt-1 text-2xl font-semibold text-foreground">{{ kpi.avgAssessmentScore }}</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div class="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" :disabled="exportingReport" @click="downloadReport('placements')">
+              Export placements
+            </Button>
+            <Button size="sm" variant="outline" :disabled="exportingReport" @click="downloadReport('ojt')">
+              Export OJT hours
+            </Button>
+            <Button size="sm" variant="outline" :disabled="exportingReport" @click="downloadReport('assessments')">
+              Export assessments
+            </Button>
+          </div>
+
+          <div class="space-y-3">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <h3 class="text-lg font-semibold text-foreground">Student OJT Progress</h3>
+                <p class="text-sm text-muted-foreground">Approved hours, application status, and latest assessment for department monitoring.</p>
+              </div>
+              <Button variant="outline" size="sm" :disabled="loadingProgress" @click="loadStudentProgress">
+                <LoaderCircle v-if="loadingProgress" class="h-4 w-4 animate-spin" />
+                <span>Refresh</span>
+              </Button>
+            </div>
+            <div class="overflow-x-auto rounded-xl border border-border/70">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Student</TableHead>
+                    <TableHead>Application</TableHead>
+                    <TableHead>Approved Hours</TableHead>
+                    <TableHead>Progress</TableHead>
+                    <TableHead>Latest Assessment</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <template v-if="loadingProgress">
+                    <TableRow v-for="index in 3" :key="index">
+                      <TableCell colspan="5"><Skeleton class="h-6 w-full" /></TableCell>
+                    </TableRow>
+                  </template>
+                  <template v-else-if="studentProgress.length">
+                    <TableRow v-for="row in studentProgress" :key="row.studentId">
+                      <TableCell>
+                        <div class="font-medium text-foreground">{{ row.name }}</div>
+                        <div class="text-xs text-muted-foreground">{{ row.course || '—' }}</div>
+                      </TableCell>
+                      <TableCell>
+                        <div class="text-sm text-foreground">{{ row.internshipTitle || '—' }}</div>
+                        <Badge class="mt-1" :variant="badgeVariant(row.applicationStatus || '')">
+                          {{ badgeLabel(row.applicationStatus || 'none') }}
+                        </Badge>
+                      </TableCell>
+                      <TableCell class="text-foreground">
+                        {{ row.approvedOjtHours }} / {{ row.requiredOjtHours }}
+                      </TableCell>
+                      <TableCell class="text-foreground">{{ row.ojtPercentComplete }}%</TableCell>
+                      <TableCell class="text-muted-foreground">
+                        <template v-if="row.latestAssessment">
+                          {{ row.latestAssessment.stage }}
+                          <span v-if="row.latestAssessment.overallScore != null">
+                            · {{ row.latestAssessment.overallScore }}
+                          </span>
+                        </template>
+                        <span v-else>—</span>
+                      </TableCell>
+                    </TableRow>
+                  </template>
+                  <TableRow v-else>
+                    <TableCell colspan="5" class="py-8 text-center text-muted-foreground">
+                      No student progress records yet.
+                    </TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -743,11 +1001,11 @@ watch(
       <Card v-else class="border-border/80 shadow-sm">
         <CardHeader class="space-y-4">
           <div>
-            <h2 class="text-2xl font-semibold text-slate-950">Endorsements</h2>
-            <p class="text-sm text-slate-600">Review newly submitted applications and either endorse them to the company or reject them at the school level.</p>
+            <h2 class="text-2xl font-semibold text-foreground">Endorsements</h2>
+            <p class="text-sm text-muted-foreground">Review newly submitted applications and either endorse them to the company or reject them at the school level.</p>
           </div>
           <div class="relative max-w-md">
-            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input v-model="searchQuery" placeholder="Search pending endorsements..." class="pl-9" />
           </div>
         </CardHeader>
@@ -770,11 +1028,11 @@ watch(
               <CardContent class="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
                 <div class="space-y-2">
                   <div class="flex items-center gap-2">
-                    <h3 class="text-lg font-semibold text-slate-950">{{ endorsement.internName }}</h3>
+                    <h3 class="text-lg font-semibold text-foreground">{{ endorsement.internName }}</h3>
                     <Badge variant="warning">Submitted</Badge>
                   </div>
-                  <p class="text-sm text-slate-600">{{ endorsement.course }} · {{ endorsement.company }}</p>
-                  <p class="text-sm text-slate-500">Applied {{ endorsement.appliedAt }}</p>
+                  <p class="text-sm text-muted-foreground">{{ endorsement.course }} · {{ endorsement.company }}</p>
+                  <p class="text-sm text-muted-foreground">Applied {{ endorsement.appliedAt }}</p>
                 </div>
                 <div class="flex gap-3">
                   <Button
@@ -834,45 +1092,48 @@ watch(
       <template #default="{ close }">
         <DialogHeader>
           <DialogTitle>{{ selectedEndorsement?.internName || 'Intern Application' }}</DialogTitle>
-          <p class="text-sm text-slate-600">Review this intern's submitted endorsement details before taking action.</p>
+          <p class="text-sm text-muted-foreground">Review this intern's submitted endorsement details before taking action.</p>
         </DialogHeader>
 
         <div v-if="selectedEndorsement" class="mt-6 space-y-4">
           <div class="grid gap-4 sm:grid-cols-2">
-            <div class="rounded-xl bg-slate-50 p-4">
-              <p class="text-sm text-slate-500">Email</p>
-              <p class="mt-2 font-medium text-slate-950">{{ selectedEndorsement.email }}</p>
+            <div class="rounded-xl bg-muted p-4">
+              <p class="text-sm text-muted-foreground">Email</p>
+              <p class="mt-2 font-medium text-foreground">{{ selectedEndorsement.email }}</p>
             </div>
-            <div class="rounded-xl bg-slate-50 p-4">
-              <p class="text-sm text-slate-500">Course</p>
-              <p class="mt-2 font-medium text-slate-950">{{ selectedEndorsement.course }}</p>
+            <div class="rounded-xl bg-muted p-4">
+              <p class="text-sm text-muted-foreground">Course</p>
+              <p class="mt-2 font-medium text-foreground">{{ selectedEndorsement.course }}</p>
             </div>
-            <div class="rounded-xl bg-slate-50 p-4">
-              <p class="text-sm text-slate-500">Internship</p>
-              <p class="mt-2 font-medium text-slate-950">{{ selectedEndorsement.internshipTitle }}</p>
+            <div class="rounded-xl bg-muted p-4">
+              <p class="text-sm text-muted-foreground">Internship</p>
+              <p class="mt-2 font-medium text-foreground">{{ selectedEndorsement.internshipTitle }}</p>
             </div>
-            <div class="rounded-xl bg-slate-50 p-4">
-              <p class="text-sm text-slate-500">Company</p>
-              <p class="mt-2 font-medium text-slate-950">{{ selectedEndorsement.company }}</p>
+            <div class="rounded-xl bg-muted p-4">
+              <p class="text-sm text-muted-foreground">Company</p>
+              <p class="mt-2 font-medium text-foreground">{{ selectedEndorsement.company }}</p>
             </div>
-            <div class="rounded-xl bg-slate-50 p-4">
-              <p class="text-sm text-slate-500">School</p>
-              <p class="mt-2 font-medium text-slate-950">{{ selectedEndorsement.school }}</p>
+            <div class="rounded-xl bg-muted p-4">
+              <p class="text-sm text-muted-foreground">School</p>
+              <p class="mt-2 font-medium text-foreground">{{ selectedEndorsement.school }}</p>
             </div>
-            <div class="rounded-xl bg-slate-50 p-4">
-              <p class="text-sm text-slate-500">Applied</p>
-              <p class="mt-2 font-medium text-slate-950">{{ selectedEndorsement.appliedAt }}</p>
+            <div class="rounded-xl bg-muted p-4">
+              <p class="text-sm text-muted-foreground">Applied</p>
+              <p class="mt-2 font-medium text-foreground">{{ selectedEndorsement.appliedAt }}</p>
             </div>
           </div>
 
-          <div class="flex items-center justify-between rounded-xl border border-border/70 bg-white p-4">
+          <div class="flex items-center justify-between rounded-xl border border-border/70 bg-card p-4">
             <div>
-              <p class="text-sm text-slate-500">Current Status</p>
+              <p class="text-sm text-muted-foreground">Current Status</p>
               <p class="mt-2">
                 <Badge :variant="badgeVariant(selectedEndorsement.status)">{{ badgeLabel(selectedEndorsement.status) }}</Badge>
               </p>
             </div>
           </div>
+
+          <ApplicationInterviewPanel :application-id="selectedEndorsement.id" mode="manage" />
+          <ApplicationAssessmentPanel :application-id="selectedEndorsement.id" />
         </div>
 
         <div class="mt-6 flex justify-end">
@@ -883,7 +1144,7 @@ watch(
 
     <div
       v-if="submittingDecision"
-      class="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full bg-slate-950 px-4 py-2 text-sm text-white shadow-lg"
+      class="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm text-background shadow-lg"
     >
       <LoaderCircle class="h-4 w-4 animate-spin" />
       Saving decision...

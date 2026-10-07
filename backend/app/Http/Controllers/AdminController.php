@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Company;
+use App\Models\Notification;
 use App\Models\School;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -63,6 +64,7 @@ class AdminController extends Controller
                         'address' => $school->school_address,
                         'contactPerson' => $school->position,
                         'verificationStatus' => $school->verification_status,
+                        'verificationRejectionReason' => $primaryMembership?->organization?->settings['verification_rejection_reason'] ?? null,
                     ] : null,
                     'company' => $company ? [
                         'id' => (string) $company->id,
@@ -70,6 +72,7 @@ class AdminController extends Controller
                         'industry' => $company->industry_type,
                         'address' => $company->company_address,
                         'verificationStatus' => $company->verification_status,
+                        'verificationRejectionReason' => $primaryMembership?->organization?->settings['verification_rejection_reason'] ?? null,
                     ] : null,
                     'isTemporary' => $u->is_temporary,
                     'isActive' => $u->is_active,
@@ -92,6 +95,7 @@ class AdminController extends Controller
             'isActive' => ['sometimes', 'boolean'],
             'profileSetupComplete' => ['sometimes', 'boolean'],
             'verificationStatus' => ['sometimes', 'string', 'in:pending,approved,rejected'],
+            'verificationRejectionReason' => ['nullable', 'string', 'max:1000'],
         ]);
 
         if (array_key_exists('role', $data)) {
@@ -107,23 +111,87 @@ class AdminController extends Controller
         $user->save();
 
         if (array_key_exists('verificationStatus', $data)) {
+            $nextStatus = strtolower(trim((string) $data['verificationStatus']));
+            $previousStatus = null;
+            $ownerUserId = null;
+            $orgLabel = 'organization';
+            $organization = null;
+            $rejectionReason = trim((string) ($data['verificationRejectionReason'] ?? ''));
+
+            if ($nextStatus === 'rejected' && $rejectionReason === '') {
+                return response()->json([
+                    'message' => 'A rejection reason is required.',
+                    'errors' => [
+                        'verificationRejectionReason' => ['A rejection reason is required.'],
+                    ],
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+
             if ($user->school) {
-                $user->school()->update(['verification_status' => $data['verificationStatus']]);
+                $user->loadMissing('school.organization');
+                $previousStatus = strtolower(trim((string) ($user->school->verification_status ?? 'pending')));
+                $organization = $user->school->organization;
+                $ownerUserId = $organization?->owner_user_id ?? $user->school->user_id;
+                $orgLabel = $user->school->institution_name ?: 'your school';
+                $user->school()->update(['verification_status' => $nextStatus]);
             }
 
             if ($user->company) {
-                $user->company()->update(['verification_status' => $data['verificationStatus']]);
+                $user->loadMissing('company.organization');
+                $previousStatus = strtolower(trim((string) ($user->company->verification_status ?? 'pending')));
+                $organization = $user->company->organization;
+                $ownerUserId = $organization?->owner_user_id ?? $user->company->user_id;
+                $orgLabel = $user->company->company_name ?: 'your company';
+                $user->company()->update(['verification_status' => $nextStatus]);
             }
 
-            if ($data['verificationStatus'] === 'approved') {
+            if ($organization) {
+                $settings = is_array($organization->settings) ? $organization->settings : [];
+                if ($nextStatus === 'rejected') {
+                    $settings['verification_rejection_reason'] = $rejectionReason;
+                } elseif ($nextStatus === 'approved') {
+                    unset($settings['verification_rejection_reason']);
+                }
+                $organization->settings = $settings;
+                $organization->save();
+            }
+
+            // Keep rejected organization owners able to authenticate and see the rejection state.
+            // Genuinely disabled accounts remain controlled only via explicit isActive updates.
+            if ($nextStatus === 'approved') {
                 $user->is_active = true;
             }
 
-            if ($data['verificationStatus'] === 'rejected') {
-                $user->is_active = false;
-            }
-
             $user->save();
+
+            if ($ownerUserId && $previousStatus !== null && $previousStatus !== $nextStatus) {
+                if ($nextStatus === 'approved') {
+                    Notification::query()->create([
+                        'user_id' => (int) $ownerUserId,
+                        'title' => 'Organization approved',
+                        'body' => $orgLabel.' has been approved and can use organization features.',
+                        'channel' => 'in_app',
+                        'metadata' => [
+                            'type' => 'registration',
+                            'verificationStatus' => 'approved',
+                            'redirectTo' => '/organization-verification',
+                        ],
+                    ]);
+                } elseif ($nextStatus === 'rejected') {
+                    Notification::query()->create([
+                        'user_id' => (int) $ownerUserId,
+                        'title' => 'Organization rejected',
+                        'body' => $orgLabel.' verification was rejected. Reason: '.$rejectionReason,
+                        'channel' => 'in_app',
+                        'metadata' => [
+                            'type' => 'registration',
+                            'verificationStatus' => 'rejected',
+                            'rejectionReason' => $rejectionReason,
+                            'redirectTo' => '/organization-verification',
+                        ],
+                    ]);
+                }
+            }
         }
 
         $auth = app(AuthController::class);

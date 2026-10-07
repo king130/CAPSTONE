@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Organization;
 use App\Models\Permission;
 use App\Models\Role;
+use App\Support\OrgPermissions;
 use Illuminate\Support\Str;
 
 class TenantRoleService
@@ -88,22 +89,24 @@ class TenantRoleService
                     'name' => 'School Admin',
                     'slug' => 'school_admin',
                     'description' => 'Full administrative access inside this school tenant.',
-                    'permissions' => [
-                        'manage_users',
-                        'manage_roles',
-                        'manage_permissions',
-                        'view_reports',
-                        'upload_files',
-                        'manage_profile',
-                        'manage_subscription',
-                        'manage_contracts',
-                    ],
+                    'permissions' => OrgPermissions::schoolAdmin(),
+                ],
+                [
+                    'name' => 'Department Head',
+                    'slug' => 'department_head',
+                    'description' => 'Monitors student progress, reports, and application approvals.',
+                    'permissions' => OrgPermissions::schoolDepartmentHead(),
                 ],
                 [
                     'name' => 'Teacher',
                     'slug' => 'teacher',
                     'description' => 'Coordinates students and academic workflows.',
                     'permissions' => [
+                        'org.view_students',
+                        'org.view_ojt_progress',
+                        'org.view_applications',
+                        'org.view_reports',
+                        'org.reports_view',
                         'view_reports',
                         'upload_files',
                         'manage_profile',
@@ -114,6 +117,10 @@ class TenantRoleService
                     'slug' => 'registrar',
                     'description' => 'Handles school records and operational files.',
                     'permissions' => [
+                        'org.view_students',
+                        'org.manage_students',
+                        'org.view_reports',
+                        'org.reports_view',
                         'manage_users',
                         'upload_files',
                         'view_reports',
@@ -135,24 +142,19 @@ class TenantRoleService
                 'name' => 'Company Admin',
                 'slug' => 'company_admin',
                 'description' => 'Full administrative access inside this company tenant.',
-                'permissions' => [
-                    'manage_users',
-                    'manage_roles',
-                    'manage_permissions',
-                    'view_reports',
-                    'upload_files',
-                    'manage_profile',
-                    'manage_subscription',
-                    'manage_internships',
-                    'manage_contracts',
-                    'review_applications',
-                ],
+                'permissions' => OrgPermissions::companyAdmin(),
             ],
             [
                 'name' => 'Manager',
                 'slug' => 'manager',
                 'description' => 'Manages team operations and reporting.',
                 'permissions' => [
+                    'org.view_internships',
+                    'org.manage_internships',
+                    'org.view_applications',
+                    'org.approve_applications',
+                    'org.view_reports',
+                    'org.reports_view',
                     'view_reports',
                     'manage_internships',
                     'review_applications',
@@ -162,20 +164,21 @@ class TenantRoleService
                 'name' => 'HR',
                 'slug' => 'hr',
                 'description' => 'Handles users, applicants, and onboarding documents.',
-                'permissions' => [
-                    'manage_users',
-                    'upload_files',
-                    'review_applications',
-                ],
+                'permissions' => OrgPermissions::companyHr(),
             ],
             [
                 'name' => 'Finance',
                 'slug' => 'finance',
-                'description' => 'Reviews subscription and contract-related work.',
+                'description' => 'Reviews subscription and agreement-related work.',
                 'permissions' => [
+                    'org.view_agreements',
+                    'org.manage_agreements',
+                    'org.view_reports',
+                    'org.reports_view',
                     'view_reports',
                     'manage_subscription',
                     'manage_contracts',
+                    'org.manage_subscription',
                 ],
             ],
         ];

@@ -1,12 +1,48 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { AUTH_DISABLED } from '@/config/auth'
 import { useAuthStore } from '@/stores/auth'
-import type { UserRole } from '@/services/auth'
+import type { UserProfile, UserRole } from '@/services/auth'
+
+function needsOrganizationVerification(user: UserProfile | null | undefined): boolean {
+  if (!user) return false
+  if (user.role !== 'school' && user.role !== 'company') return false
+  const status = String(user.verificationStatus || 'pending').toLowerCase()
+  return status === 'pending' || status === 'rejected'
+}
+
+function isOrganizationVerificationAllowedRoute(name: string | symbol | null | undefined, path: string): boolean {
+  const allowedNames = new Set([
+    'organization-verification',
+    'settings',
+    'notifications',
+    'profile',
+    'change-password',
+    'account-disabled',
+    'login',
+  ])
+  if (typeof name === 'string' && allowedNames.has(name)) {
+    return true
+  }
+
+  return [
+    '/organization-verification',
+    '/settings',
+    '/notifications',
+    '/profile',
+    '/change-password',
+    '/account-disabled',
+    '/login',
+  ].some((allowed) => path === allowed || path.startsWith(`${allowed}/`))
+}
 
 /**
  * Get dashboard route based on user role
  */
-function getRoleDashboard(role: UserRole): string {
+function getRoleDashboard(role: UserRole, user?: UserProfile | null): string {
+  if (needsOrganizationVerification(user ?? null)) {
+    return '/organization-verification'
+  }
+
   switch (role) {
     case 'admin':
       return '/admin/overview'
@@ -49,14 +85,49 @@ const router = createRouter({
     { path: '/change-password', name: 'change-password', component: () => import('@/views/ChangePassword.vue'), meta: { requiresAuth: true, allowGuest: true } },
     { path: '/find-internships', name: 'find-internships', component: () => import('@/views/FindInternships.vue'), meta: { excludeRoles: ['school'] } },
     { path: '/opportunities', name: 'opportunities', component: () => import('@/views/FindInternships.vue'), meta: { excludeRoles: ['school'] } },
+    {
+      path: '/internships/:id',
+      name: 'internship-detail',
+      component: () => import('@/views/InternshipDetail.vue'),
+      meta: { excludeRoles: ['school'] },
+    },
+    {
+      path: '/org/:id',
+      name: 'organization-public',
+      component: () => import('@/views/OrganizationPublicProfile.vue'),
+    },
     { path: '/account-disabled', name: 'account-disabled', component: () => import('@/views/AccountDisabled.vue') },
+    {
+      path: '/organization-verification',
+      name: 'organization-verification',
+      component: () => import('@/views/OrganizationVerification.vue'),
+      meta: { requiresAuth: true, excludeRoles: ['guest', 'student', 'admin'] },
+    },
     { path: '/notifications', name: 'notifications', component: () => import('@/views/Notifications.vue'), meta: { requiresAuth: true, excludeRoles: ['guest'] } },
     { path: '/settings', name: 'settings', component: () => import('@/views/Settings.vue'), meta: { requiresAuth: true, excludeRoles: ['guest'] } },
     { path: '/billing', name: 'organization-subscription', component: () => import('@/views/OrganizationSubscription.vue'), meta: { requiresAuth: true, excludeRoles: ['guest', 'student', 'admin'] } },
     { path: '/ojt-hours', name: 'ojt-hours', component: () => import('@/views/OJTHours.vue'), meta: { requiresAuth: true, excludeRoles: ['guest'] } },
-    { path: '/contracts', name: 'contracts', component: () => import('@/views/Contracts.vue'), meta: { requiresAuth: true, excludeRoles: ['guest', 'student', 'admin'] } },
-    { path: '/contracts/types', name: 'contract-types-manage', component: () => import('@/views/ManageContractTypes.vue'), meta: { requiresAuth: true, excludeRoles: ['guest', 'student', 'admin'] } },
-    { path: '/contracts/new', name: 'contracts-new', component: () => import('@/views/NewContractRequest.vue'), meta: { requiresAuth: true, excludeRoles: ['guest', 'student', 'admin'] } },
+    {
+      path: '/agreements',
+      name: 'agreements',
+      alias: ['/contracts'],
+      component: () => import('@/views/Contracts.vue'),
+      meta: { requiresAuth: true, excludeRoles: ['guest', 'student', 'admin'] },
+    },
+    {
+      path: '/agreements/types',
+      name: 'agreement-types-manage',
+      alias: ['/contracts/types'],
+      component: () => import('@/views/ManageContractTypes.vue'),
+      meta: { requiresAuth: true, excludeRoles: ['guest', 'student', 'admin'] },
+    },
+    {
+      path: '/agreements/new',
+      name: 'agreements-new',
+      alias: ['/contracts/new'],
+      component: () => import('@/views/NewContractRequest.vue'),
+      meta: { requiresAuth: true, excludeRoles: ['guest', 'student', 'admin'] },
+    },
     { path: '/school/students', name: 'school-students', component: () => import('@/views/StudentAccounts.vue'), meta: { requiresAuth: true, requiresRole: 'school' } },
     { path: '/access/roles', name: 'tenant-role-management', component: () => import('@/views/TenantRbac.vue'), props: { mode: 'roles' }, meta: { requiresAuth: true, excludeRoles: ['guest', 'student'] } },
     { path: '/access/permissions', name: 'tenant-permission-assignment', component: () => import('@/views/TenantRbac.vue'), props: { mode: 'permissions' }, meta: { requiresAuth: true, excludeRoles: ['guest', 'student'] } },
@@ -81,6 +152,7 @@ const router = createRouter({
     { path: '/school/reports', name: 'school-reports', component: () => import('@/views/school/School.vue'), meta: { requiresAuth: true, requiresRole: 'school' } },
     { path: '/intern', name: 'intern', component: () => import('@/views/intern/Intern.vue'), meta: { requiresAuth: true, requiresRole: 'student' } },
     { path: '/intern/opportunities', name: 'intern-opportunities', component: () => import('@/views/intern/Intern.vue'), meta: { requiresAuth: true, requiresRole: 'student' } },
+    { path: '/intern/saved', name: 'intern-saved', component: () => import('@/views/intern/Intern.vue'), meta: { requiresAuth: true, requiresRole: 'student' } },
     { path: '/intern/documents', name: 'intern-documents', component: () => import('@/views/intern/Intern.vue'), meta: { requiresAuth: true, requiresRole: 'student' } },
     { path: '/intern/applications', name: 'intern-applications', component: () => import('@/views/intern/Intern.vue'), meta: { requiresAuth: true, requiresRole: 'student' } },
     { path: '/intern/placement', name: 'intern-placement', component: () => import('@/views/intern/Intern.vue'), meta: { requiresAuth: true, requiresRole: 'student' } },
@@ -178,7 +250,19 @@ router.beforeEach((to) => {
       if (!userRole || userRole === 'guest' || userRole === null) {
         return { path: '/find-internships' }
       }
-      return { path: getRoleDashboard(userRole) }
+      return { path: getRoleDashboard(userRole, authStore.user) }
+    }
+
+    if (needsOrganizationVerification(authStore.user) && !isOrganizationVerificationAllowedRoute(to.name, to.path)) {
+      return { name: 'organization-verification' }
+    }
+
+    if (
+      !needsOrganizationVerification(authStore.user) &&
+      to.name === 'organization-verification' &&
+      (userRole === 'school' || userRole === 'company')
+    ) {
+      return { path: getRoleDashboard(userRole, authStore.user) }
     }
 
     // Redirect authenticated users away from login/register
@@ -186,7 +270,7 @@ router.beforeEach((to) => {
       if (!userRole || userRole === 'guest' || userRole === null) {
         return { path: '/guest' }
       }
-      return { path: getRoleDashboard(userRole) }
+      return { path: getRoleDashboard(userRole, authStore.user) }
     }
 
     // Redirect from landing page
@@ -194,7 +278,7 @@ router.beforeEach((to) => {
       if (!userRole || userRole === 'guest' || userRole === null) {
         return { path: '/guest' }
       }
-      return { path: getRoleDashboard(userRole) }
+      return { path: getRoleDashboard(userRole, authStore.user) }
     }
 
     // Check if route excludes certain roles
@@ -202,7 +286,7 @@ router.beforeEach((to) => {
       const excludedRoles = to.meta.excludeRoles as string[]
       if (excludedRoles.includes(userRole)) {
         console.log(`🚫 Access denied: ${userRole} is excluded from this route`)
-        return { path: getRoleDashboard(userRole) }
+        return { path: getRoleDashboard(userRole, authStore.user) }
       }
     }
 
@@ -218,7 +302,7 @@ router.beforeEach((to) => {
       // If user has wrong role, redirect to their dashboard
       if (userRole !== requiredRole) {
         console.log(`🚫 Access denied: ${requiredRole} required, user is ${userRole}`)
-        return { path: getRoleDashboard(userRole) }
+        return { path: getRoleDashboard(userRole, authStore.user) }
       }
     }
 

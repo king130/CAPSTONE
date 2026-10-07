@@ -4,6 +4,7 @@ import {
   updateCurrentUserProfile,
   type UserProfile,
 } from '@/services/auth'
+import { apiFetch } from '@/services/http'
 
 export interface ProfileSettings {
   fullName: string
@@ -24,11 +25,40 @@ export interface NotificationPreferences {
 }
 
 export interface AdminSystemSettings {
-  requiredHours: string
   schoolYear: string
   semester: string
   allowRegistrations: boolean
   maintenanceMode: boolean
+}
+
+export interface OrgOjtSettings {
+  requiredHours: number
+}
+
+export interface OrganizationPublicProfile {
+  id: string
+  name: string
+  type: string
+  tagline: string
+  description: string
+  address: string
+  city: string
+  website: string
+  industry: string
+  perks: string[]
+  photoCount: number
+  photoLimit: number
+  photosUsedLabel: string
+}
+
+export interface OrganizationPublicProfilePayload {
+  tagline?: string | null
+  description?: string | null
+  address?: string | null
+  city?: string | null
+  website?: string | null
+  industry?: string | null
+  perks?: string[]
 }
 
 export interface SettingsPayload {
@@ -88,7 +118,6 @@ function mapUserToProfileSettings(user: UserProfile): ProfileSettings {
 
 function defaultSystemSettings(): AdminSystemSettings {
   return {
-    requiredHours: '500',
     schoolYear: '',
     semester: '',
     allowRegistrations: true,
@@ -156,16 +185,23 @@ export async function fetchSettings(): Promise<SettingsPayload> {
     throw new Error('Unable to load user settings.')
   }
 
+  const storedSystem = readStorageValue<Partial<AdminSystemSettings> & { requiredHours?: string }>(
+    ADMIN_SYSTEM_SETTINGS_KEY,
+    defaultSystemSettings(),
+  )
+
   return {
     profile: mapUserToProfileSettings(user),
     notificationPreferences: {
       ...notificationPreferenceDefaults(),
       ...readStorageValue<NotificationPreferences>(NOTIFICATION_PREFERENCES_KEY, {}),
     },
-    systemSettings: readStorageValue<AdminSystemSettings>(
-      ADMIN_SYSTEM_SETTINGS_KEY,
-      defaultSystemSettings(),
-    ),
+    systemSettings: {
+      schoolYear: storedSystem.schoolYear ?? '',
+      semester: storedSystem.semester ?? '',
+      allowRegistrations: storedSystem.allowRegistrations ?? true,
+      maintenanceMode: storedSystem.maintenanceMode ?? false,
+    },
   }
 }
 
@@ -183,6 +219,63 @@ export async function saveNotificationPreferences(preferences: NotificationPrefe
 
 export async function saveAdminSystemSettings(settings: AdminSystemSettings): Promise<void> {
   writeStorageValue(ADMIN_SYSTEM_SETTINGS_KEY, settings)
+}
+
+export async function fetchOrgOjtSettings(): Promise<OrgOjtSettings> {
+  const res = await apiFetch<{ data: OrgOjtSettings }>('/ojt-logs/required-hours')
+  return {
+    requiredHours: Number(res.data?.requiredHours ?? 500),
+  }
+}
+
+export async function saveOrgOjtSettings(settings: OrgOjtSettings): Promise<OrgOjtSettings> {
+  const res = await apiFetch<{ data: OrgOjtSettings }>('/ojt-logs/required-hours', {
+    method: 'PATCH',
+    body: JSON.stringify({
+      requiredHours: Math.max(1, Math.floor(Number(settings.requiredHours) || 500)),
+    }),
+  })
+  return {
+    requiredHours: Number(res.data?.requiredHours ?? settings.requiredHours),
+  }
+}
+
+function mapOrganizationPublicProfile(raw: unknown): OrganizationPublicProfile {
+  const row = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const perks = Array.isArray(row.perks)
+    ? row.perks.filter((item): item is string => typeof item === 'string')
+    : []
+
+  return {
+    id: String(row.id ?? ''),
+    name: String(row.name ?? ''),
+    type: String(row.type ?? ''),
+    tagline: String(row.tagline ?? ''),
+    description: String(row.description ?? ''),
+    address: String(row.address ?? ''),
+    city: String(row.city ?? ''),
+    website: String(row.website ?? ''),
+    industry: String(row.industry ?? ''),
+    perks,
+    photoCount: Number(row.photoCount ?? row.photo_count ?? 0) || 0,
+    photoLimit: Number(row.photoLimit ?? row.photo_limit ?? 3) || 3,
+    photosUsedLabel: String(row.photosUsedLabel ?? ''),
+  }
+}
+
+export async function fetchOrganizationPublicProfile(): Promise<OrganizationPublicProfile> {
+  const res = await apiFetch<{ data: unknown }>('/organization-profile')
+  return mapOrganizationPublicProfile(res.data)
+}
+
+export async function updateOrganizationPublicProfile(
+  payload: OrganizationPublicProfilePayload,
+): Promise<OrganizationPublicProfile> {
+  const res = await apiFetch<{ data: unknown }>('/organization-profile', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+  return mapOrganizationPublicProfile(res.data)
 }
 
 export async function deactivateCurrentAccount(): Promise<void> {

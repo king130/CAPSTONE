@@ -4,9 +4,15 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Schema;
 
 class Contract extends Model
 {
+    public function getTable()
+    {
+        return Schema::hasTable('agreements') ? 'agreements' : 'contracts';
+    }
+
     protected static function booted(): void
     {
         static::created(function (Contract $contract): void {
@@ -86,7 +92,12 @@ class Contract extends Model
 
     public function contractType(): BelongsTo
     {
-        return $this->belongsTo(ContractType::class);
+        return $this->belongsTo(ContractType::class, 'contract_type_id');
+    }
+
+    public function agreementType(): BelongsTo
+    {
+        return $this->belongsTo(AgreementType::class, 'contract_type_id');
     }
 
     public function requesterOrganization(): BelongsTo
@@ -113,6 +124,6 @@ class Contract extends Model
     {
         $referenceYear = $year ?: (int) now()->year;
 
-        return sprintf('CTR-%d-%06d', $referenceYear, $contractId);
+        return sprintf('AGR-%d-%06d', $referenceYear, $contractId);
     }
 }

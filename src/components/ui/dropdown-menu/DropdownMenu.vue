@@ -8,8 +8,7 @@ const root = ref<HTMLElement | null>(null)
 
 const menuClass = computed(() =>
   cn(
-    'absolute right-0 top-full z-50 mt-3 min-w-56 overflow-hidden rounded-2xl border border-border/80 bg-background/95 p-2 text-popover-foreground shadow-[0_24px_60px_rgba(15,23,42,0.18)] backdrop-blur-xl',
-    'before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-white/70',
+    'absolute right-0 top-full z-50 mt-3 min-w-56 overflow-hidden rounded-2xl border border-border bg-popover p-2 text-popover-foreground shadow-lg backdrop-blur-xl',
   ),
 )
 

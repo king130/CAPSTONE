@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Application extends Model
 {
@@ -41,5 +42,25 @@ class Application extends Model
     public function company(): BelongsTo
     {
         return $this->belongsTo(Company::class);
+    }
+
+    public function interviews(): HasMany
+    {
+        return $this->hasMany(ApplicationInterview::class);
+    }
+
+    public function assessments(): HasMany
+    {
+        return $this->hasMany(ApplicationAssessment::class);
+    }
+
+    public function ojtLogs(): HasMany
+    {
+        return $this->hasMany(OjtLog::class);
+    }
+
+    public function certificates(): HasMany
+    {
+        return $this->hasMany(Certificate::class);
     }
 }

@@ -99,12 +99,12 @@ onMounted(() => {
         <CardHeader class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div class="space-y-2">
             <div class="flex items-center gap-3">
-              <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 text-sky-700">
+              <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent text-primary">
                 <BellRing class="h-5 w-5" />
               </div>
               <div>
-                <h2 class="text-2xl font-semibold text-slate-950">Notifications</h2>
-                <p class="text-sm text-slate-600">Stay on top of application updates, endorsements, approvals, and system activity.</p>
+                <h2 class="text-2xl font-semibold text-foreground">Notifications</h2>
+                <p class="text-sm text-muted-foreground">Stay on top of application updates, endorsements, approvals, and system activity.</p>
               </div>
             </div>
           </div>
@@ -153,11 +153,11 @@ onMounted(() => {
                 </template>
                 <Card v-else class="border-dashed border-border/80 shadow-none">
                   <CardContent class="flex flex-col items-center justify-center py-16 text-center">
-                    <div class="flex h-16 w-16 items-center justify-center rounded-full bg-sky-100 text-sky-700">
+                    <div class="flex h-16 w-16 items-center justify-center rounded-full bg-accent text-primary">
                       <Sparkles class="h-7 w-7" />
                     </div>
-                    <h3 class="mt-5 text-xl font-semibold text-slate-950">You're all caught up!</h3>
-                    <p class="mt-2 max-w-md text-sm text-slate-600">
+                    <h3 class="mt-5 text-xl font-semibold text-foreground">You're all caught up!</h3>
+                    <p class="mt-2 max-w-md text-sm text-muted-foreground">
                       New updates will appear here as soon as there is activity related to your workspace.
                     </p>
                   </CardContent>
@@ -193,8 +193,8 @@ onMounted(() => {
                     <div class="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
                       <Sparkles class="h-7 w-7" />
                     </div>
-                    <h3 class="mt-5 text-xl font-semibold text-slate-950">You're all caught up!</h3>
-                    <p class="mt-2 max-w-md text-sm text-slate-600">
+                    <h3 class="mt-5 text-xl font-semibold text-foreground">You're all caught up!</h3>
+                    <p class="mt-2 max-w-md text-sm text-muted-foreground">
                       There are no unread notifications right now.
                     </p>
                   </CardContent>

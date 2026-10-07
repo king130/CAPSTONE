@@ -292,11 +292,6 @@ class SchoolStudentController extends Controller
             abort(Response::HTTP_UNAUTHORIZED);
         }
 
-        $user->loadMissing('school:id,user_id,organization_id,institution_name,subscription_code,official_school_email');
-        if ($user->role === 'school' && $user->school) {
-            return $user->school;
-        }
-
         $membership = $user->primaryOrganizationMembership();
         $organization = $membership?->organization;
 

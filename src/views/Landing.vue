@@ -6,17 +6,14 @@ import {
   ClipboardList,
   GraduationCap,
   LayoutDashboard,
-  Menu,
   Sparkles,
 } from 'lucide-vue-next'
-import { ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
+import PublicSiteHeader from '@/components/PublicSiteHeader.vue'
 import Button from '@/components/ui/button/Button.vue'
 import Card from '@/components/ui/card/Card.vue'
 import CardContent from '@/components/ui/card/CardContent.vue'
-
-const mobileMenuOpen = ref(false)
 
 const features = [
   {
@@ -43,7 +40,7 @@ const steps = [
   {
     number: '01',
     title: 'Create Your Workspace',
-    description: 'Sign up as a student, school, or company and set up the information needed for your role.',
+    description: 'Schools and companies create their workspace; students use school-issued login credentials.',
   },
   {
     number: '02',
@@ -72,59 +69,16 @@ const rolePaths = [
   },
   {
     title: 'For Students',
-    description: 'Browse OJT opportunities, including school-hosted placements and partner-school options.',
-    to: '/opportunities',
-    cta: 'Browse Opportunities',
+    description: 'Use school-issued credentials to browse eligible OJT opportunities and track your internship journey.',
+    to: '/login',
+    cta: 'Student Login',
   },
 ]
 </script>
 
 <template>
   <div class="min-h-screen bg-[linear-gradient(180deg,#f8fafc_0%,#eff6ff_28%,#ffffff_100%)] text-slate-950">
-    <header class="sticky top-0 z-30 border-b border-white/60 bg-white/80 backdrop-blur-xl">
-      <div class="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
-        <RouterLink to="/" class="flex items-center gap-3">
-          <img src="/icons/logo-main.png" alt="OJT Intern Path" class="h-11 w-11 rounded-2xl object-contain ring-1 ring-slate-200" />
-          <div>
-            <p class="text-sm font-semibold tracking-wide text-slate-950">OJT Intern Path</p>
-            <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Internship Platform</p>
-          </div>
-        </RouterLink>
-
-        <nav class="hidden items-center gap-8 text-sm font-medium text-slate-600 md:flex">
-          <a href="#features" class="transition hover:text-slate-950">Features</a>
-          <a href="#how-it-works" class="transition hover:text-slate-950">How It Works</a>
-          <a href="#footer" class="transition hover:text-slate-950">Contact</a>
-        </nav>
-
-        <div class="hidden items-center gap-3 md:flex">
-          <RouterLink to="/login">
-            <Button variant="outline">Log In</Button>
-          </RouterLink>
-          <RouterLink to="/register">
-            <Button>Get Started</Button>
-          </RouterLink>
-        </div>
-
-        <Button variant="ghost" size="icon" class="md:hidden" @click="mobileMenuOpen = !mobileMenuOpen">
-          <Menu class="h-5 w-5" />
-        </Button>
-      </div>
-
-      <div v-if="mobileMenuOpen" class="border-t border-slate-200 bg-white px-4 py-4 md:hidden">
-        <div class="flex flex-col gap-3 text-sm font-medium text-slate-600">
-          <a href="#features" class="transition hover:text-slate-950" @click="mobileMenuOpen = false">Features</a>
-          <a href="#how-it-works" class="transition hover:text-slate-950" @click="mobileMenuOpen = false">How It Works</a>
-          <a href="#footer" class="transition hover:text-slate-950" @click="mobileMenuOpen = false">Contact</a>
-          <RouterLink to="/login" class="pt-2" @click="mobileMenuOpen = false">
-            <Button variant="outline" class="w-full">Log In</Button>
-          </RouterLink>
-          <RouterLink to="/register" @click="mobileMenuOpen = false">
-            <Button class="w-full">Get Started</Button>
-          </RouterLink>
-        </div>
-      </div>
-    </header>
+    <PublicSiteHeader active="home" />
 
     <main>
       <section class="relative overflow-hidden">

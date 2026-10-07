@@ -14,7 +14,7 @@ const props = withDefaults(
   },
 )
 
-const labelClass = computed(() => cn('text-sm font-medium text-slate-700', props.class))
+const labelClass = computed(() => cn('text-sm font-medium text-foreground', props.class))
 </script>
 
 <template>

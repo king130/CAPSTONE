@@ -19,81 +19,20 @@ function syncAuthUser(raw: UserProfile | Record<string, unknown>): UserProfile {
   return profile
 }
 
-export async function updateUserSubscription(
-  _uid: string,
-  updates: {
-    plan?: string
-    status?: SubscriptionStatus
-    billingCycle?: string
-  }
-): Promise<UserProfile> {
-  const raw = await apiFetch<Record<string, unknown>>('/profile', {
-    method: 'PATCH',
-    body: JSON.stringify({
-      subscription: {
-        plan: updates.plan,
-        status: updates.status,
-        billingCycle: updates.billingCycle,
-      },
-    }),
+/** Switch the caller's organization to the free plan via the dedicated billing endpoint. */
+export async function switchToFreePlan(_uid: string): Promise<UserProfile> {
+  const raw = await apiFetch<Record<string, unknown>>('/subscriptions/free', {
+    method: 'POST',
+    body: JSON.stringify({}),
   })
   return syncAuthUser(raw)
 }
 
-export type PaymentMethod = 'gcash' | 'maya' | 'bank' | 'cash' | 'other'
-
-export async function createPendingPlanChange(
-  _uid: string,
-  request: {
-    requestId: string
-    targetPlan: string
-    amount: number
-    currency: 'PHP'
-  }
-): Promise<UserProfile> {
-  const raw = await apiFetch<Record<string, unknown>>('/profile', {
-    method: 'PATCH',
-    body: JSON.stringify({
-      subscription: {
-        status: 'pending',
-        pendingChange: {
-          ...request,
-          createdAt: new Date().toISOString(),
-        },
-      },
-    }),
-  })
-  return syncAuthUser(raw)
-}
-
-export async function submitPendingPlanPayment(
-  _uid: string,
-  payload: {
-    requestId: string
-    method: PaymentMethod
-    receiptReference: string
-    paidAtIso: string
-  }
-): Promise<UserProfile> {
-  const raw = await apiFetch<Record<string, unknown>>('/profile', {
-    method: 'PATCH',
-    body: JSON.stringify({
-      subscription: {
-        pendingPayment: payload,
-      },
-    }),
-  })
-  return syncAuthUser(raw)
-}
-
-export async function clearPendingPlanChange(_uid: string): Promise<UserProfile> {
-  const raw = await apiFetch<Record<string, unknown>>('/profile', {
-    method: 'PATCH',
-    body: JSON.stringify({
-      subscription: {
-        pendingChange: null,
-      },
-    }),
+/** Cancel an unpaid pending upgrade via the dedicated billing endpoint. */
+export async function cancelPendingUpgrade(_uid: string): Promise<UserProfile> {
+  const raw = await apiFetch<Record<string, unknown>>('/subscriptions/cancel-pending', {
+    method: 'POST',
+    body: JSON.stringify({}),
   })
   return syncAuthUser(raw)
 }

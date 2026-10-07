@@ -12,7 +12,7 @@ const props = withDefaults(
   },
 )
 
-const skeletonClass = computed(() => cn('animate-pulse rounded-md bg-slate-200/80', props.class))
+const skeletonClass = computed(() => cn('animate-pulse rounded-md bg-muted', props.class))
 </script>
 
 <template>

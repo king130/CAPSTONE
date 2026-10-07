@@ -4,7 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use App\Models\School;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Internship extends Model
 {
@@ -18,6 +18,8 @@ class Internship extends Model
         'title',
         'description',
         'location',
+        'city',
+        'work_setup',
         'type',
         'duration',
         'slots_available',
@@ -25,9 +27,18 @@ class Internship extends Model
         'requirements',
         'eligible_courses',
         'allowance',
+        'perks',
         'start_date',
         'end_date',
+        'application_deadline',
         'schedule',
+        'schedule_type',
+        'weekly_hours',
+        'schedule_days',
+        'time_in',
+        'time_out',
+        'timezone',
+        'is_flexible',
         'tasks',
         'required_skills',
         'intern_gains',
@@ -43,8 +54,13 @@ class Internship extends Model
         'eligible_courses' => 'array',
         'required_skills' => 'array',
         'required_documents' => 'array',
+        'schedule_days' => 'array',
+        'perks' => 'array',
+        'weekly_hours' => 'decimal:2',
+        'is_flexible' => 'boolean',
         'start_date' => 'date',
         'end_date' => 'date',
+        'application_deadline' => 'date',
     ];
 
     public function company(): BelongsTo
@@ -55,5 +71,15 @@ class Internship extends Model
     public function school(): BelongsTo
     {
         return $this->belongsTo(School::class);
+    }
+
+    public function applications(): HasMany
+    {
+        return $this->hasMany(Application::class);
+    }
+
+    public function savedInternships(): HasMany
+    {
+        return $this->hasMany(SavedInternship::class);
     }
 }

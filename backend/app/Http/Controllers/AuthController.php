@@ -36,19 +36,36 @@ class AuthController extends Controller
     public function register(Request $request)
     {
         try {
+            if ($passwordError = $this->passwordPolicyError($request->input('password'))) {
+                return response()->json([
+                    'message' => $passwordError,
+                    'errors' => ['password' => [$passwordError]],
+                ], Response::HTTP_BAD_REQUEST);
+            }
+
             $data = $request->validate([
                 'email' => ['required', 'email', 'max:255', 'unique:users,email'],
-                'password' => ['required', 'string', 'min:8'],
+                'password' => ['required', 'string', 'min:8', 'regex:/[A-Za-z]/', 'regex:/[0-9]/'],
                 'fullName' => ['required', 'string', 'max:255'],
                 'role' => ['nullable', Rule::in(['student', 'school', 'company', 'guest', null])],
                 'profile' => ['nullable', 'array'],
                 'subscriptionPlan' => ['nullable', 'string'],
                 'billingCycle' => ['nullable', 'string'],
                 'schoolSubscriptionCode' => ['nullable', 'string'],
-            ]);
+            ], $this->passwordValidationMessages());
 
             $role = $data['role'] ?? 'guest';
             $profile = $data['profile'] ?? [];
+
+            // Student accounts are school-provisioned only (roster invite + account setup).
+            if ($role === 'student') {
+                return response()->json([
+                    'message' => 'Student accounts are created by your school. Use the school-issued setup link or login credentials instead of public registration.',
+                    'errors' => [
+                        'role' => ['Student accounts must be provisioned by your school.'],
+                    ],
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
 
             if ($role === 'school' || $role === 'company') {
                 $created = $this->organizationAccountProvisioner->create([
@@ -71,20 +88,8 @@ class AuthController extends Controller
                 ], Response::HTTP_CREATED);
             }
 
-            $school = null;
-            if ($role === 'student' && ! empty($data['schoolSubscriptionCode'])) {
-                $school = School::query()
-                    ->with('organization')
-                    ->where('subscription_code', $data['schoolSubscriptionCode'])
-                    ->whereHas('user', fn ($q) => $q->where('is_active', true))
-                    ->first();
-                if (! $school) {
-                    return response()->json(['message' => 'School subscription code is invalid or inactive.'], Response::HTTP_UNPROCESSABLE_ENTITY);
-                }
-            }
-
-            $user = DB::transaction(function () use ($data, $role, $profile, $school) {
-                $user = User::query()->create([
+            $user = DB::transaction(function () use ($data, $role, $profile) {
+                return User::query()->create([
                     'name' => trim($data['fullName']),
                     'email' => strtolower(trim($data['email'])),
                     'password' => $data['password'],
@@ -93,42 +98,8 @@ class AuthController extends Controller
                     'is_active' => true,
                     'is_temporary' => false,
                     'must_change_password' => false,
-                    'profile_setup_complete' => in_array($role, ['student', 'school', 'company'], true),
+                    'profile_setup_complete' => false,
                 ]);
-
-                if ($role === 'student') {
-                    $schoolId = null;
-                    $organizationId = null;
-                    if (! empty($profile['schoolId'])) {
-                        $schoolId = (int) $profile['schoolId'];
-                    }
-                    if ($school) {
-                        $schoolId = $school->id;
-                        $organizationId = $school->organization_id;
-                    }
-                    Student::query()->create([
-                        'user_id' => $user->id,
-                        'school_id' => $schoolId,
-                        'organization_id' => $organizationId,
-                        'student_id_number' => $profile['studentNumber'] ?? $profile['studentId'] ?? null,
-                        'school_name' => $profile['schoolName'] ?? null,
-                        'school_subscription_code' => $data['schoolSubscriptionCode'] ?? null,
-                        'course' => $profile['course'] ?? null,
-                        'year_level' => $profile['yearLevel'] ?? null,
-                    ]);
-
-                    if ($school?->organization) {
-                        $this->tenantRoleService->ensureDefaultRoles($school->organization);
-                        $this->attachOrganizationMembership(
-                            $user,
-                            $school->organization,
-                            'intern',
-                            (string) ($profile['course'] ?? 'Student')
-                        );
-                    }
-                }
-
-                return $user;
             });
 
             $this->loadUserRelations($user);
@@ -218,9 +189,16 @@ class AuthController extends Controller
 
     public function updatePassword(Request $request)
     {
+        if ($passwordError = $this->passwordPolicyError($request->input('password'))) {
+            return response()->json([
+                'message' => $passwordError,
+                'errors' => ['password' => [$passwordError]],
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
         $data = $request->validate([
-            'password' => ['required', 'string', 'min:8', 'confirmed'],
-        ]);
+            'password' => ['required', 'string', 'min:8', 'regex:/[A-Za-z]/', 'regex:/[0-9]/', 'confirmed'],
+        ], $this->passwordValidationMessages());
 
         $request->user()->update([
             'password' => $data['password'],
@@ -257,10 +235,17 @@ class AuthController extends Controller
 
     public function completeAccountSetup(Request $request)
     {
+        if ($passwordError = $this->passwordPolicyError($request->input('password'))) {
+            return response()->json([
+                'message' => $passwordError,
+                'errors' => ['password' => [$passwordError]],
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
         $data = $request->validate([
             'token' => ['required', 'string'],
-            'password' => ['required', 'string', 'min:8', 'confirmed'],
-        ]);
+            'password' => ['required', 'string', 'min:8', 'regex:/[A-Za-z]/', 'regex:/[0-9]/', 'confirmed'],
+        ], $this->passwordValidationMessages());
 
         $setupToken = $this->findValidAccountSetupToken($data['token']);
         if (! $setupToken) {
@@ -320,6 +305,8 @@ class AuthController extends Controller
             $profile['yearLevel'] = $s->year_level;
         }
 
+        $verificationStatus = null;
+
         if ($user->relationLoaded('company') && $user->company) {
             $c = $user->company;
             $profile['companyName'] = $c->company_name;
@@ -331,6 +318,7 @@ class AuthController extends Controller
             $profile['contactPersonTitle'] = $c->contact_person_title;
             $profile['contactPersonEmail'] = $c->contact_person_email;
             $profile['companyContactNumber'] = $c->company_contact_number;
+            $verificationStatus = $c->verification_status;
         }
 
         if ($user->relationLoaded('school') && $user->school) {
@@ -342,12 +330,28 @@ class AuthController extends Controller
             $profile['officialSchoolEmail'] = $sch->official_school_email;
             $profile['schoolContactNumber'] = $sch->school_contact_number;
             $profile['schoolAddress'] = $sch->school_address;
+            $verificationStatus = $sch->verification_status;
         }
 
         if ($activeOrganization) {
             $profile['organizationId'] = (string) $activeOrganization->id;
             $profile['organizationType'] = $activeOrganization->type;
             $profile['organizationName'] = $activeOrganization->name;
+        }
+
+        $verificationRejectionReason = null;
+        if ($activeOrganization && is_array($activeOrganization->settings)) {
+            $reason = $activeOrganization->settings['verification_rejection_reason'] ?? null;
+            if (is_string($reason) && trim($reason) !== '') {
+                $verificationRejectionReason = trim($reason);
+            }
+        }
+
+        if ($verificationStatus !== null) {
+            $profile['verificationStatus'] = (string) $verificationStatus;
+        }
+        if ($verificationRejectionReason !== null) {
+            $profile['verificationRejectionReason'] = $verificationRejectionReason;
         }
 
         $appRole = $user->effectiveAppRole();
@@ -360,6 +364,8 @@ class AuthController extends Controller
             'legacyRole' => $user->role,
             'isTemporary' => $user->is_temporary,
             'isActive' => $user->is_active,
+            'verificationStatus' => $verificationStatus !== null ? (string) $verificationStatus : null,
+            'verificationRejectionReason' => $verificationRejectionReason,
             'profileSetupComplete' => $user->profile_setup_complete,
             'mustChangePassword' => $user->must_change_password,
             'profile' => $profile,
@@ -475,5 +481,33 @@ class AuthController extends Controller
             'tenant_id' => $organization->id,
             'role_id' => $role->id,
         ])->save();
+    }
+
+    /**
+     * Match frontend RegisterSimple policy: min 8 chars, at least one letter and one number.
+     */
+    private function passwordPolicyError(mixed $password): ?string
+    {
+        $value = is_string($password) ? $password : '';
+        $message = 'Password must be at least 8 characters and include a letter and a number';
+
+        if (strlen($value) < 8 || ! preg_match('/[A-Za-z]/', $value) || ! preg_match('/[0-9]/', $value)) {
+            return $message;
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function passwordValidationMessages(): array
+    {
+        $message = 'Password must be at least 8 characters and include a letter and a number';
+
+        return [
+            'password.min' => $message,
+            'password.regex' => $message,
+        ];
     }
 }

@@ -177,7 +177,7 @@ async function saveType() {
 
     if (form.value.id) {
       await updateContractType(form.value.id, payload)
-      success('Contract type updated.')
+      success('Agreement type updated.')
     } else {
       await createContractType(payload)
       success('Custom contract type created.')
@@ -199,7 +199,7 @@ async function confirmDelete() {
   if (!deleteTarget.value) return
   try {
     await deleteContractType(deleteTarget.value.id)
-    success('Contract type deleted.')
+    success('Agreement type deleted.')
     deleteTarget.value = null
     await loadTypes()
   } catch (caughtError) {
@@ -215,21 +215,21 @@ onMounted(() => {
 </script>
 
 <template>
-  <MainLayout :role="currentRole" title="Manage Contract Types" active-item="contracts">
+  <MainLayout :role="currentRole" title="Manage Agreement Types" active-item="agreements">
     <div class="space-y-6">
       <Card class="border-border/80 shadow-sm">
         <CardHeader class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div class="space-y-2">
-            <p class="text-sm font-semibold uppercase tracking-[0.28em] text-sky-700">Contracts</p>
+            <p class="text-sm font-semibold uppercase tracking-[0.28em] text-primary">Agreements</p>
             <div>
-              <h2 class="text-3xl font-semibold tracking-tight text-foreground">Manage contract types</h2>
+              <h2 class="text-3xl font-semibold tracking-tight text-foreground">Manage agreement types</h2>
               <p class="mt-2 max-w-2xl text-sm text-muted-foreground">
                 Build custom agreement templates for your organization while keeping the standard library available for everyday requests.
               </p>
             </div>
           </div>
           <div class="flex flex-wrap gap-3">
-            <Button variant="outline" @click="router.push({ name: 'contracts' })">Back to Contracts</Button>
+            <Button variant="outline" @click="router.push({ name: 'agreements' })">Back to Agreements</Button>
             <Button @click="openCreateDialog">
               <Plus class="h-4 w-4" />
               New Custom Type
@@ -241,9 +241,9 @@ onMounted(() => {
       <div class="grid gap-4 md:grid-cols-3">
         <Card v-for="stat in stats" :key="stat.label" class="border-border/80 shadow-sm">
           <CardContent class="p-5">
-            <p class="text-sm font-medium text-slate-500">{{ stat.label }}</p>
-            <p class="mt-2 text-3xl font-semibold text-slate-950">{{ stat.value }}</p>
-            <p class="mt-3 text-sm text-slate-600">{{ stat.copy }}</p>
+            <p class="text-sm font-medium text-muted-foreground">{{ stat.label }}</p>
+            <p class="mt-2 text-3xl font-semibold text-foreground">{{ stat.value }}</p>
+            <p class="mt-3 text-sm text-muted-foreground">{{ stat.copy }}</p>
           </CardContent>
         </Card>
       </div>
@@ -255,7 +255,7 @@ onMounted(() => {
             <p class="text-sm text-muted-foreground">These templates belong to your organization and can be tailored for special partner requirements.</p>
           </div>
           <div class="relative max-w-md">
-            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input v-model="search" placeholder="Search custom types..." class="pl-9" />
           </div>
         </CardHeader>
@@ -269,26 +269,26 @@ onMounted(() => {
                 <div class="flex items-start justify-between gap-4">
                   <div class="space-y-2">
                     <div class="flex items-center gap-2">
-                      <div class="rounded-2xl bg-sky-100 p-2.5 text-sky-700">
+                      <div class="rounded-2xl bg-accent p-2.5 text-primary">
                         <Layers3 class="h-5 w-5" />
                       </div>
-                      <p class="text-lg font-semibold text-slate-950">{{ type.name }}</p>
+                      <p class="text-lg font-semibold text-foreground">{{ type.name }}</p>
                     </div>
-                    <p class="text-sm leading-6 text-slate-600">{{ type.description || 'No description added yet.' }}</p>
+                    <p class="text-sm leading-6 text-muted-foreground">{{ type.description || 'No description added yet.' }}</p>
                   </div>
-                  <span class="rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]" :class="type.isActive === false ? 'bg-slate-100 text-slate-600' : 'bg-emerald-100 text-emerald-700'">
+                  <span class="rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]" :class="type.isActive === false ? 'bg-muted text-muted-foreground' : 'bg-emerald-100 text-emerald-700'">
                     {{ type.isActive === false ? 'Inactive' : 'Active' }}
                   </span>
                 </div>
 
                 <div class="grid gap-3 sm:grid-cols-2">
-                  <div class="rounded-xl bg-slate-50 p-4">
-                    <p class="text-sm text-slate-500">Fields</p>
-                    <p class="mt-2 font-medium text-slate-900">{{ type.fieldsSchema.length }}</p>
+                  <div class="rounded-xl bg-muted p-4">
+                    <p class="text-sm text-muted-foreground">Fields</p>
+                    <p class="mt-2 font-medium text-foreground">{{ type.fieldsSchema.length }}</p>
                   </div>
-                  <div class="rounded-xl bg-slate-50 p-4">
-                    <p class="text-sm text-slate-500">Base Template</p>
-                    <p class="mt-2 font-medium text-slate-900">{{ type.baseContractTypeId ? 'Derived from standard type' : 'Built from scratch' }}</p>
+                  <div class="rounded-xl bg-muted p-4">
+                    <p class="text-sm text-muted-foreground">Base Template</p>
+                    <p class="mt-2 font-medium text-foreground">{{ type.baseContractTypeId ? 'Derived from standard type' : 'Built from scratch' }}</p>
                   </div>
                 </div>
 
@@ -322,15 +322,15 @@ onMounted(() => {
           <Card v-for="type in globalTypes" :key="type.id" class="border-border/70 shadow-none">
             <CardContent class="space-y-4 p-5">
               <div class="flex items-center gap-3">
-                <div class="rounded-2xl bg-slate-100 p-2.5 text-slate-700">
+                <div class="rounded-2xl bg-muted p-2.5 text-foreground">
                   <FilePlus2 class="h-5 w-5" />
                 </div>
                 <div>
-                  <p class="text-lg font-semibold text-slate-950">{{ type.name }}</p>
-                  <p class="text-sm text-slate-500">{{ type.fieldsSchema.length }} fields</p>
+                  <p class="text-lg font-semibold text-foreground">{{ type.name }}</p>
+                  <p class="text-sm text-muted-foreground">{{ type.fieldsSchema.length }} fields</p>
                 </div>
               </div>
-              <p class="text-sm leading-6 text-slate-600">{{ type.description || 'Standard agreement template.' }}</p>
+              <p class="text-sm leading-6 text-muted-foreground">{{ type.description || 'Standard agreement template.' }}</p>
             </CardContent>
           </Card>
         </CardContent>
@@ -340,8 +340,8 @@ onMounted(() => {
     <Dialog v-model:open="editorOpen">
       <template #default="{ close }">
         <DialogHeader>
-          <DialogTitle>{{ form.id ? 'Edit Custom Contract Type' : 'Create Custom Contract Type' }}</DialogTitle>
-          <p class="text-sm text-slate-600">Define the fields your organization needs when standard contract templates are not enough.</p>
+          <DialogTitle>{{ form.id ? 'Edit Custom Agreement Type' : 'Create Custom Agreement Type' }}</DialogTitle>
+          <p class="text-sm text-muted-foreground">Define the fields your organization needs when standard contract templates are not enough.</p>
         </DialogHeader>
 
         <div class="mt-6 space-y-6">
@@ -370,11 +370,11 @@ onMounted(() => {
             <FormItem>
               <FormLabel>Status</FormLabel>
               <FormControl>
-                <div class="grid grid-cols-2 gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-2">
+                <div class="grid grid-cols-2 gap-2 rounded-2xl border border-border bg-muted p-2">
                   <button
                     type="button"
                     class="rounded-xl px-3 py-2 text-sm font-medium transition"
-                    :class="form.isActive ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500'"
+                    :class="form.isActive ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground'"
                     @click="form.isActive = true"
                   >
                     Active
@@ -382,7 +382,7 @@ onMounted(() => {
                   <button
                     type="button"
                     class="rounded-xl px-3 py-2 text-sm font-medium transition"
-                    :class="!form.isActive ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500'"
+                    :class="!form.isActive ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground'"
                     @click="form.isActive = false"
                   >
                     Inactive
@@ -395,8 +395,8 @@ onMounted(() => {
           <div class="space-y-4">
             <div class="flex items-center justify-between gap-3">
               <div>
-                <h3 class="text-lg font-semibold text-slate-950">Field Builder</h3>
-                <p class="text-sm text-slate-600">Add the fields that should appear when this contract type is selected.</p>
+                <h3 class="text-lg font-semibold text-foreground">Field Builder</h3>
+                <p class="text-sm text-muted-foreground">Add the fields that should appear when this contract type is selected.</p>
               </div>
               <Button type="button" variant="outline" @click="addField">
                 <Plus class="h-4 w-4" />
@@ -437,11 +437,11 @@ onMounted(() => {
                   <FormItem>
                     <FormLabel>Required</FormLabel>
                     <FormControl>
-                      <div class="grid grid-cols-2 gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-2">
+                      <div class="grid grid-cols-2 gap-2 rounded-2xl border border-border bg-muted p-2">
                         <button
                           type="button"
                           class="rounded-xl px-3 py-2 text-sm font-medium transition"
-                          :class="field.required ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500'"
+                          :class="field.required ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground'"
                           @click="field.required = true"
                         >
                           Required
@@ -449,7 +449,7 @@ onMounted(() => {
                         <button
                           type="button"
                           class="rounded-xl px-3 py-2 text-sm font-medium transition"
-                          :class="!field.required ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500'"
+                          :class="!field.required ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground'"
                           @click="field.required = false"
                         >
                           Optional
