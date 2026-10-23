@@ -1,8 +1,14 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 
+import { useAnchoredOverlay } from '@/composables/useAnchoredOverlay'
+
 const open = ref(false)
-const root = ref<HTMLElement | null>(null)
+function closePopover() {
+  setOpen(false)
+}
+
+const { triggerRef, panelRef, panelStyle, containsTarget } = useAnchoredOverlay(open, 'end', closePopover)
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
@@ -17,15 +23,8 @@ function toggleOpen() {
   setOpen(!open.value)
 }
 
-function closePopover() {
-  setOpen(false)
-}
-
 function onDocumentClick(event: MouseEvent) {
-  if (!root.value) return
-
-  const target = event.target as Node | null
-  if (target && !root.value.contains(target)) {
+  if (!containsTarget(event.target)) {
     closePopover()
   }
 }
@@ -40,11 +39,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="root" class="relative inline-flex">
+  <div ref="triggerRef" class="relative inline-flex">
     <div @click="toggleOpen">
       <slot name="trigger" :open="open" />
     </div>
+  </div>
 
+  <Teleport to="body">
     <transition
       enter-active-class="transition duration-150 ease-out"
       enter-from-class="translate-y-1 opacity-0"
@@ -55,10 +56,13 @@ onBeforeUnmount(() => {
     >
       <div
         v-if="open"
-        class="absolute right-0 top-full z-50 mt-2 w-80 rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-lg"
+        ref="panelRef"
+        :style="panelStyle"
+        class="w-80 rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-lg"
+        role="dialog"
       >
         <slot :close="closePopover" />
       </div>
     </transition>
-  </div>
+  </Teleport>
 </template>

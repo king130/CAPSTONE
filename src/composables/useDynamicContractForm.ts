@@ -64,17 +64,21 @@ export function useDynamicContractForm(requestedByRole: 'school' | 'company') {
   }
 
   async function submit() {
+    if (!subject.value.trim() || !purpose.value.trim()) {
+      error.value = 'Subject and purpose are required.'
+      throw new Error(error.value)
+    }
     submitting.value = true
     error.value = null
     try {
       return await submitDynamicContract({
         requestedByRole,
-        subject: subject.value,
+        subject: subject.value.trim(),
         contractTypeId: selectedTypeId.value || undefined,
         contractTypeLabel: selectedType.value?.name,
         schoolId: requestedByRole === 'company' ? partnerUserId.value : undefined,
         companyId: requestedByRole === 'school' ? partnerUserId.value : undefined,
-        purpose: purpose.value || undefined,
+        purpose: purpose.value.trim(),
         startDate: startDate.value || undefined,
         endDate: endDate.value || undefined,
         notes: notes.value || undefined,

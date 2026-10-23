@@ -201,6 +201,67 @@ class OrganizationMediaSecurityTest extends TestCase
         $this->assertSame(3, OrganizationMedia::query()->where('organization_id', $ctx['organization']->id)->count());
     }
 
+    public function test_company_photos_stay_isolated_across_organizations(): void
+    {
+        Storage::fake('public');
+        $companyA = $this->createCompanyContext();
+        $companyB = $this->createCompanyContext('standard');
+
+        Sanctum::actingAs($companyA['user']);
+        $uploadA = $this->post('/api/organization-media', [
+            'file' => $this->fakeJpeg('company-a-logo.png'),
+            'caption' => 'Company A',
+            'is_cover' => true,
+        ], ['Accept' => 'application/json']);
+        $uploadA->assertCreated();
+
+        Sanctum::actingAs($companyB['user']);
+        $uploadB = $this->post('/api/organization-media', [
+            'file' => $this->fakeJpeg('company-b-logo.png'),
+            'caption' => 'Company B',
+            'is_cover' => true,
+        ], ['Accept' => 'application/json']);
+        $uploadB->assertCreated();
+
+        $this->assertNotSame($uploadA->json('data.path'), $uploadB->json('data.path'));
+        $this->assertStringStartsWith('organization-media/'.$companyA['organization']->id.'/', (string) $uploadA->json('data.path'));
+        $this->assertStringStartsWith('organization-media/'.$companyB['organization']->id.'/', (string) $uploadB->json('data.path'));
+
+        $this->giveProfileAvatar($companyA['user'], 'a-profile.jpg');
+        $this->giveProfileAvatar($companyB['user'], 'b-profile.jpg');
+
+        $publicA = $this->getJson('/api/organizations/'.$companyA['organization']->id);
+        $publicB = $this->getJson('/api/organizations/'.$companyB['organization']->id);
+        $publicA->assertOk();
+        $publicB->assertOk();
+        $this->assertStringContainsString('/profile/avatar/'.$companyA['user']->id, (string) $publicA->json('data.coverImage'));
+        $this->assertStringContainsString('/profile/avatar/'.$companyB['user']->id, (string) $publicB->json('data.coverImage'));
+        $this->assertStringNotContainsString((string) $uploadB->json('data.path'), (string) $publicA->json('data.coverImage'));
+        $this->assertStringNotContainsString((string) $uploadA->json('data.path'), (string) $publicB->json('data.coverImage'));
+
+        $galleryA = $this->getJson('/api/organizations/'.$companyA['organization']->id.'/media');
+        $galleryB = $this->getJson('/api/organizations/'.$companyB['organization']->id.'/media');
+        $galleryA->assertJsonPath('data.0.caption', 'Company A');
+        $galleryB->assertJsonPath('data.0.caption', 'Company B');
+        $this->assertSame(1, count($galleryA->json('data')));
+        $this->assertSame(1, count($galleryB->json('data')));
+
+        Sanctum::actingAs($companyA['user']);
+        $this->post('/api/organization-media', [
+            'file' => $this->fakeJpeg('company-a-logo-2.png'),
+            'caption' => 'Company A replacement',
+        ], ['Accept' => 'application/json'])->assertCreated();
+
+        $this->getJson('/api/organizations/'.$companyB['organization']->id.'/media')
+            ->assertJsonPath('data.0.caption', 'Company B');
+        $this->assertSame(1, OrganizationMedia::query()->where('organization_id', $companyB['organization']->id)->count());
+
+        Sanctum::actingAs($companyA['user']);
+        $this->patchJson('/api/organization-media/'.$uploadB->json('data.id'), [
+            'caption' => 'Stolen',
+        ])->assertForbidden();
+    }
+
     public function test_public_media_index_lists_organization_photos(): void
     {
         Storage::fake('public');
@@ -216,5 +277,14 @@ class OrganizationMediaSecurityTest extends TestCase
         $response->assertOk();
         $response->assertJsonPath('data.0.caption', 'Lobby');
         $this->assertNotEmpty($response->json('data.0.url'));
+    }
+
+    private function giveProfileAvatar(User $user, string $filename): void
+    {
+        $path = 'avatars/'.$user->id.'/'.$filename;
+        Storage::disk('public')->put($path, 'avatar');
+        $user->forceFill([
+            'profile' => array_merge($user->profile ?? [], ['avatarPath' => $path]),
+        ])->save();
     }
 }

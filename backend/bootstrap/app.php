@@ -18,6 +18,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'org.verified' => \App\Http\Middleware\EnsureOrganizationVerified::class,
             'user.active' => \App\Http\Middleware\EnsureUserIsActive::class,
             'auth.optional.sanctum' => \App\Http\Middleware\OptionalSanctumAuth::class,
+            'subscription.write' => \App\Http\Middleware\EnsureSubscriptionWritable::class,
         ]);
 
         $middleware->redirectGuestsTo(function (Request $request) {

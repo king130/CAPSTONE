@@ -6,6 +6,7 @@ use App\Models\Application;
 use App\Models\ApplicationAssessment;
 use App\Models\OjtLog;
 use App\Services\PermissionGate;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -16,12 +17,12 @@ class ReportExportController extends Controller
     {
     }
 
-    public function export(Request $request): StreamedResponse|Response
+    public function export(Request $request): StreamedResponse|JsonResponse|Response
     {
         $user = $request->user();
         $appRole = $user->effectiveAppRole();
 
-        if ($appRole !== 'admin' && ! $this->permissions->userCanAny($user, ['org.reports_export', 'org.reports_view', 'org.view_reports'])) {
+        if ($appRole !== 'admin' && ! $this->permissions->userCan($user, 'org.reports_export')) {
             return response()->json(['message' => 'Missing permission to export reports.'], Response::HTTP_FORBIDDEN);
         }
 

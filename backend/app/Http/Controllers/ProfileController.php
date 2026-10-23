@@ -11,7 +11,9 @@ use App\Models\Student;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Services\TenantRoleService;
+use App\Support\CaviteAddress;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 use Illuminate\Http\Response;
 use Illuminate\Validation\Rule;
 
@@ -44,6 +46,10 @@ class ProfileController extends Controller
             'profileSetupComplete' => ['sometimes', 'boolean'],
             'role' => ['sometimes', Rule::in(['student', 'school', 'company', 'guest'])],
         ]);
+
+        if ($user->role === 'student') {
+            return $this->updateStudentSelfServiceProfile($user, $data);
+        }
 
         if (isset($data['displayName'])) {
             $user->name = $data['displayName'];
@@ -80,6 +86,89 @@ class ProfileController extends Controller
 
         $user->save();
 
+        return $this->profileResponse($user);
+    }
+
+    /**
+     * Students may only self-update contact details. School-managed identity/enrollment
+     * fields are rejected with 422 so clients cannot treat forbidden writes as success.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function updateStudentSelfServiceProfile(User $user, array $data)
+    {
+        $errors = [];
+
+        foreach (['name', 'displayName', 'role'] as $topLevelKey) {
+            if (array_key_exists($topLevelKey, $data)) {
+                $errors[$topLevelKey] = [
+                    'This field is managed by your school and cannot be changed from your profile.',
+                ];
+            }
+        }
+
+        $profile = is_array($data['profile'] ?? null) ? $data['profile'] : [];
+        $forbiddenProfileKeys = [
+            'studentNumber',
+            'studentId',
+            'student_id_number',
+            'course',
+            'yearLevel',
+            'year_level',
+            'schoolName',
+            'school_name',
+            'schoolId',
+            'school_id',
+            'preferredField',
+            'preferred_field',
+            'organizationId',
+            'organization_id',
+            'schoolSubscriptionCode',
+            'school_subscription_code',
+            'email',
+            'subscription',
+            'companyName',
+            'institutionName',
+        ];
+
+        foreach ($forbiddenProfileKeys as $key) {
+            if (array_key_exists($key, $profile)) {
+                $errors['profile.'.$key] = [
+                    'This field is managed by your school and cannot be changed from your profile.',
+                ];
+            }
+        }
+
+        if ($errors !== []) {
+            return response()->json([
+                'message' => 'Student identity and enrollment details are managed by your school.',
+                'errors' => $errors,
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        if (array_key_exists('contactNumber', $profile) && $user->student) {
+            $contactNumber = $profile['contactNumber'];
+            $user->student->contact_number = is_string($contactNumber) || is_numeric($contactNumber)
+                ? (string) $contactNumber
+                : $user->student->contact_number;
+            $user->student->save();
+
+            $user->profile = array_merge($user->profile ?? [], [
+                'contactNumber' => $user->student->contact_number,
+            ]);
+        }
+
+        if (isset($data['profileSetupComplete'])) {
+            $user->profile_setup_complete = $data['profileSetupComplete'];
+        }
+
+        $user->save();
+
+        return $this->profileResponse($user);
+    }
+
+    private function profileResponse(User $user)
+    {
         $freshUser = $user->fresh([
             'student',
             'company',
@@ -100,28 +189,99 @@ class ProfileController extends Controller
     private function syncRoleSpecificProfile(User $user, array $profile): void
     {
         $organization = $user->primaryOrganizationMembership()?->organization;
+        $hostCompany = $user->organizationCompany() ?? $user->company;
+        $isHostWorkspace = $user->effectiveAppRole() === 'company'
+            || \App\Support\OrganizationTypes::isHostType($organization?->type)
+            || in_array($user->role, ['company', 'municipal_hall'], true);
 
-        if ($user->role === 'company' && $user->company) {
-            $user->company->fill([
-                'company_name' => $profile['companyName'] ?? $user->company->company_name,
-                'company_type' => $profile['companyType'] ?? $user->company->company_type,
-                'industry_type' => $profile['industryType'] ?? $user->company->industry_type,
-                'company_address' => $profile['companyAddress'] ?? $user->company->company_address,
-                'company_email' => $profile['companyEmail'] ?? $user->company->company_email,
-                'contact_person_name' => $profile['contactPersonName'] ?? $user->company->contact_person_name,
-                'contact_person_title' => $profile['contactPersonTitle'] ?? $user->company->contact_person_title,
-                'contact_person_email' => $profile['contactPersonEmail'] ?? $user->company->contact_person_email,
-                'company_contact_number' => $profile['companyContactNumber'] ?? $profile['contactNumber'] ?? $user->company->company_contact_number,
+        if ($isHostWorkspace && $hostCompany) {
+            $orgLevelKeys = [
+                'companyName',
+                'officialName',
+                'companyType',
+                'industryType',
+                'companyAddress',
+                'officialAddress',
+                'companyEmail',
+                'officialEmail',
+                'contactPersonName',
+                'representativeName',
+                'contactPersonTitle',
+                'representativePosition',
+                'contactPersonEmail',
+                'companyContactNumber',
+                'locationArea',
+                'cityMunicipality',
+                'lguType',
+            ];
+            $touchesOrgLevel = collect($orgLevelKeys)->contains(fn (string $key) => array_key_exists($key, $profile));
+            if ($touchesOrgLevel && ! $this->canManageOrganizationProfile($user)) {
+                throw ValidationException::withMessages([
+                    'profile' => ['Only organization administrators can update organization-level settings.'],
+                ]);
+            }
+
+            $canonicalAddress = CaviteAddress::canonicalFromProfile($profile, $hostCompany->company_address);
+            if (isset($canonicalAddress['error'])) {
+                throw ValidationException::withMessages([
+                    'profile.companyAddress' => [$canonicalAddress['error']],
+                ]);
+            }
+
+            $nextName = $profile['officialName']
+                ?? $profile['companyName']
+                ?? $hostCompany->company_name;
+
+            $hostCompany->fill([
+                'company_name' => $nextName,
+                'company_type' => $profile['companyType'] ?? $hostCompany->company_type,
+                'lgu_type' => array_key_exists('lguType', $profile)
+                    ? $profile['lguType']
+                    : $hostCompany->lgu_type,
+                'industry_type' => $profile['industryType'] ?? $hostCompany->industry_type,
+                'company_address' => $canonicalAddress['address'] ?? $hostCompany->company_address,
+                'city_municipality' => $canonicalAddress['city']
+                    ?? ($profile['locationArea'] ?? $profile['cityMunicipality'] ?? $hostCompany->city_municipality),
+                'company_email' => $profile['companyEmail']
+                    ?? $profile['officialEmail']
+                    ?? $hostCompany->company_email,
+                'contact_person_name' => $profile['contactPersonName']
+                    ?? $profile['representativeName']
+                    ?? $hostCompany->contact_person_name,
+                'contact_person_title' => $profile['contactPersonTitle']
+                    ?? $profile['representativePosition']
+                    ?? $hostCompany->contact_person_title,
+                'contact_person_email' => $profile['contactPersonEmail']
+                    ?? $profile['officialEmail']
+                    ?? $hostCompany->contact_person_email,
+                'company_contact_number' => $profile['companyContactNumber']
+                    ?? $profile['contactNumber']
+                    ?? $hostCompany->company_contact_number,
             ]);
-            $user->company->save();
+            $hostCompany->save();
 
-            if ($organization && ! empty($profile['companyName'])) {
-                $organization->name = (string) $profile['companyName'];
+            if ($organization && $nextName) {
+                $organization->name = (string) $nextName;
                 $organization->save();
+            }
+
+            if ($organization && isset($canonicalAddress['address'])) {
+                CaviteAddress::rememberOnOrganization(
+                    $organization,
+                    $canonicalAddress['address'],
+                    $canonicalAddress['city'] ?? null,
+                );
             }
         }
 
         if ($user->role === 'school' && $user->school) {
+            $canonicalAddress = CaviteAddress::canonicalFromProfile($profile, $user->school->school_address);
+            if (isset($canonicalAddress['error'])) {
+                throw ValidationException::withMessages([
+                    'profile.schoolAddress' => [$canonicalAddress['error']],
+                ]);
+            }
+
             $user->school->fill([
                 'institution_name' => $profile['institutionName'] ?? $user->school->institution_name,
                 'institution_type' => $profile['institutionType'] ?? $user->school->institution_type,
@@ -129,7 +289,7 @@ class ProfileController extends Controller
                 'position' => $profile['position'] ?? $user->school->position,
                 'official_school_email' => $profile['officialSchoolEmail'] ?? $user->school->official_school_email,
                 'school_contact_number' => $profile['schoolContactNumber'] ?? $profile['contactNumber'] ?? $user->school->school_contact_number,
-                'school_address' => $profile['schoolAddress'] ?? $user->school->school_address,
+                'school_address' => $canonicalAddress['address'] ?? $user->school->school_address,
             ]);
             $user->school->save();
 
@@ -137,21 +297,18 @@ class ProfileController extends Controller
                 $organization->name = (string) $profile['institutionName'];
                 $organization->save();
             }
+
+            if ($organization && isset($canonicalAddress['address'])) {
+                CaviteAddress::rememberOnOrganization(
+                    $organization,
+                    $canonicalAddress['address'],
+                    $canonicalAddress['city'] ?? null,
+                );
+            }
         }
 
-        if ($user->role === 'student' && $user->student) {
-            // School membership is not client-controlled. Attachment may only occur via
-            // validated subscription-code registration or school invitation flows.
-            $user->student->fill([
-                'student_id_number' => $profile['studentNumber'] ?? $profile['studentId'] ?? $user->student->student_id_number,
-                'school_name' => $profile['schoolName'] ?? $user->student->school_name,
-                'course' => $profile['course'] ?? $user->student->course,
-                'year_level' => $profile['yearLevel'] ?? $user->student->year_level,
-                'preferred_field' => $profile['preferredField'] ?? $user->student->preferred_field,
-                'contact_number' => $profile['contactNumber'] ?? $user->student->contact_number,
-            ]);
-            $user->student->save();
-        }
+        // Student self-service identity/enrollment updates are handled exclusively by
+        // updateStudentSelfServiceProfile(); this method must not write student fields.
     }
 
     private function promoteGuestRole(User $user, string $newRole): void
@@ -223,6 +380,25 @@ class ProfileController extends Controller
             }
             $user->role = 'school';
         }
+    }
+
+    private function canManageOrganizationProfile(User $user): bool
+    {
+        $user->loadMissing(['company.organization', 'school.organization']);
+
+        $organization = $user->primaryOrganizationMembership()?->organization
+            ?? $user->activeOrganization()
+            ?? $user->company?->organization
+            ?? $user->school?->organization;
+
+        if ($organization && (int) $organization->owner_user_id === (int) $user->id) {
+            return true;
+        }
+
+        return app(\App\Services\PermissionGate::class)->userCanAny($user, [
+            'org.manage_profile',
+            'manage_profile',
+        ]);
     }
 
     private function attachOrganizationMembership(User $user, Organization $organization, string $roleSlug, string $title = ''): void

@@ -5,6 +5,8 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Validation\ValidationException;
 
 class Application extends Model
 {
@@ -13,6 +15,7 @@ class Application extends Model
         'student_id',
         'company_id',
         'status',
+        'tracker_stage',
         'cover_letter',
         'notes',
         'resume_url',
@@ -22,12 +25,29 @@ class Application extends Model
         'student_name',
         'student_email',
         'student_course',
+        'required_ojt_hours',
     ];
 
     protected $casts = [
         'documents' => 'array',
         'documents_pending' => 'boolean',
+        'required_ojt_hours' => 'integer',
     ];
+
+    protected static function booted(): void
+    {
+        static::saving(function (self $application): void {
+            if ($application->required_ojt_hours === null) {
+                return;
+            }
+
+            if ((int) $application->required_ojt_hours < 1) {
+                throw ValidationException::withMessages([
+                    'required_ojt_hours' => ['Required OJT hours must be a positive integer when set.'],
+                ]);
+            }
+        });
+    }
 
     public function internship(): BelongsTo
     {
@@ -54,6 +74,26 @@ class Application extends Model
         return $this->hasMany(ApplicationAssessment::class);
     }
 
+    public function stageEvents(): HasMany
+    {
+        return $this->hasMany(ApplicationStageEvent::class);
+    }
+
+    public function placementSchedule(): HasOne
+    {
+        return $this->hasOne(PlacementSchedule::class);
+    }
+
+    public function placementScheduleRequests(): HasMany
+    {
+        return $this->hasMany(PlacementScheduleRequest::class);
+    }
+
+    public function placementScheduleVersions(): HasMany
+    {
+        return $this->hasMany(PlacementScheduleVersion::class);
+    }
+
     public function ojtLogs(): HasMany
     {
         return $this->hasMany(OjtLog::class);
@@ -62,5 +102,10 @@ class Application extends Model
     public function certificates(): HasMany
     {
         return $this->hasMany(Certificate::class);
+    }
+
+    public function hoursAgreement(): HasOne
+    {
+        return $this->hasOne(ApplicationHoursAgreement::class);
     }
 }

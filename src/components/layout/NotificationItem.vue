@@ -41,7 +41,7 @@ const iconConfig = computed(() => {
     case 'endorsement':
       return {
         icon: GraduationCap,
-        class: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300',
+        class: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200',
       }
     case 'hours':
       return {

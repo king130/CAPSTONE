@@ -46,6 +46,14 @@ class OrganizationMedia extends Model
             return null;
         }
 
-        return Storage::disk('public')->url($this->path);
+        // Serve through the API (same pattern as profile avatars). Direct /storage/*
+        // URLs break on some shared hosts (e.g. Hostinger image pipeline → 422).
+        $url = url('/api/organization-media/'.$this->id.'/file');
+        $version = $this->updated_at?->getTimestamp();
+        if ($version) {
+            $url .= '?v='.$version;
+        }
+
+        return $url;
     }
 }

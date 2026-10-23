@@ -21,7 +21,7 @@ const emit = defineEmits<{
 
 const panelClass = computed(() =>
   cn(
-    'fixed inset-y-0 z-50 w-[18rem] border-border bg-background p-6 shadow-xl transition-transform duration-200 ease-out',
+    'fixed inset-y-0 z-sheet w-[18rem] border-border bg-background p-6 shadow-xl transition-transform duration-200 ease-out',
     props.side === 'left'
       ? 'left-0 border-r data-[open=true]:translate-x-0'
       : 'right-0 border-l data-[open=true]:translate-x-0',
@@ -55,7 +55,7 @@ function closeSheet() {
       <button
         v-if="open"
         type="button"
-        class="fixed inset-0 z-40 bg-black/50"
+        class="fixed inset-0 z-sheet bg-black/50"
         aria-label="Close navigation"
         @click="closeSheet"
       />

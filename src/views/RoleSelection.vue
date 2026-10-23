@@ -6,15 +6,24 @@ import Swal from '@/services/swal'
 
 const router = useRouter()
 const authStore = useAuthStore()
-const selectedRole = ref<'student' | 'school' | 'company' | null>(null)
+const selectedRole = ref<'student' | 'school' | 'company' | 'municipal_hall' | null>(null)
 const loading = ref(false)
 
 async function selectRole() {
   if (!selectedRole.value || !authStore.user) return
 
-  // School/company must use registration (POST /auth/register), not profile role promotion.
-  if (selectedRole.value === 'school' || selectedRole.value === 'company') {
-    const registerPath = selectedRole.value === 'school' ? '/register/school' : '/register/company'
+  // Org accounts must use registration (POST /auth/register), not profile role promotion.
+  if (
+    selectedRole.value === 'school' ||
+    selectedRole.value === 'company' ||
+    selectedRole.value === 'municipal_hall'
+  ) {
+    const registerPath =
+      selectedRole.value === 'school'
+        ? '/register/school'
+        : selectedRole.value === 'municipal_hall'
+          ? '/register/municipal-hall'
+          : '/register/company'
     loading.value = true
     try {
       // RegisterSimple redirects logged-in guests away; clear session so registration can proceed.
@@ -103,6 +112,23 @@ async function selectRole() {
             <li>Track performance</li>
           </ul>
         </button>
+
+        <button
+          type="button"
+          class="role-card"
+          :class="{ active: selectedRole === 'municipal_hall' }"
+          @click="selectedRole = 'municipal_hall'"
+        >
+          <div class="role-icon">🏛️</div>
+          <h3>Municipal Hall / LGU</h3>
+          <p>I represent a Cavite local government office hosting OJT</p>
+          <ul class="features-list">
+            <li>Post LGU internship openings</li>
+            <li>Review endorsed students</li>
+            <li>Approve DTRs for assigned interns</li>
+            <li>Submit verification documents</li>
+          </ul>
+        </button>
       </div>
 
       <button
@@ -120,7 +146,7 @@ async function selectRole() {
       </button>
 
       <p class="help-text">
-        Students use school-issued accounts. Schools and companies register their organization here.
+        Students use school-issued accounts. Schools, companies, and municipal halls register their organization here.
       </p>
     </div>
   </div>
@@ -138,7 +164,7 @@ async function selectRole() {
 }
 
 .role-selection-container {
-  background: white;
+  background: hsl(var(--card));
   border-radius: 16px;
   padding: 3rem;
   max-width: 1200px;
@@ -161,13 +187,13 @@ async function selectRole() {
 .header h1 {
   font-size: 2.5rem;
   font-weight: 700;
-  color: #111827;
+  color: hsl(var(--foreground));
   margin: 0 0 0.5rem 0;
 }
 
 .header p {
   font-size: 1.125rem;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   margin: 0;
 }
 
@@ -179,7 +205,7 @@ async function selectRole() {
 }
 
 .role-card {
-  background: white;
+  background: hsl(var(--card));
   border: 3px solid #e5e7eb;
   border-radius: 12px;
   padding: 2rem;
@@ -207,13 +233,13 @@ async function selectRole() {
 .role-card h3 {
   font-size: 1.5rem;
   font-weight: 700;
-  color: #111827;
+  color: hsl(var(--foreground));
   margin: 0 0 0.5rem 0;
 }
 
 .role-card p {
   font-size: 0.95rem;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   margin: 0 0 1.5rem 0;
 }
 
@@ -226,7 +252,7 @@ async function selectRole() {
 
 .features-list li {
   padding: 0.5rem 0;
-  color: #374151;
+  color: hsl(var(--muted-foreground));
   font-size: 0.9rem;
   position: relative;
   padding-left: 1.5rem;
@@ -267,7 +293,7 @@ async function selectRole() {
 .help-text {
   text-align: center;
   margin-top: 1.5rem;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   font-size: 0.9rem;
 }
 

@@ -10,6 +10,7 @@ import {
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
+import ApplicationCapacity from '@/components/internships/ApplicationCapacity.vue'
 import SaveInternshipButton from '@/components/internships/SaveInternshipButton.vue'
 import PublicSiteHeader from '@/components/PublicSiteHeader.vue'
 import Badge from '@/components/ui/badge/Badge.vue'
@@ -407,13 +408,13 @@ onUnmounted(() => {
           </h1>
           <p class="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
             Browse openings the way you’d scan hotel stays — cover, host, location, and availability first.
-            Course-based decision support helps you spot program fit; school partnerships control who can apply.
+            Each posting lists the courses that company accepts. School partnerships control who can apply.
           </p>
         </div>
       </section>
 
       <section class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        <div class="sticky top-0 z-10 -mx-4 space-y-3 border-b border-border bg-background/95 px-4 py-4 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+        <div class="sticky top-0 z-sticky -mx-4 space-y-3 border-b border-border bg-background/95 px-4 py-4 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
           <div class="relative">
             <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -473,7 +474,7 @@ onUnmounted(() => {
 
           <div class="flex flex-wrap items-center justify-between gap-2">
             <p class="text-sm text-muted-foreground">
-              <span class="font-medium text-foreground">Course-based decision support</span>
+              <span class="font-medium text-foreground">Accepted courses</span>
               · {{ loading ? 'Loading…' : resultCountLabel }}
             </p>
             <Button type="button" variant="ghost" size="sm" @click="clearFilters">Clear filters</Button>
@@ -500,15 +501,15 @@ onUnmounted(() => {
           <article
             v-for="card in visibleCards"
             :key="card.id"
-            class="group flex flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-sm transition hover:border-primary/30"
+            class="group isolate flex flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-sm transition hover:border-primary/30"
           >
             <div class="relative aspect-[16/10] overflow-hidden bg-muted">
               <RouterLink :to="{ name: 'internship-detail', params: { id: card.id } }" class="absolute inset-0 block">
                 <img
                   v-if="card.coverImage"
                   :src="card.coverImage"
-                  :alt="`${card.title} cover`"
-                  class="h-full w-full object-cover transition duration-300 group-hover:scale-[1.02]"
+                  :alt="`${card.companyName || card.hostName || 'Company'} logo`"
+                  class="h-full w-full object-contain p-6"
                   loading="lazy"
                 />
                 <div
@@ -516,7 +517,7 @@ onUnmounted(() => {
                   class="flex h-full w-full flex-col items-center justify-center gap-2 bg-[radial-gradient(circle_at_top,_hsl(var(--muted-foreground)/0.12),_transparent_55%)] text-muted-foreground"
                 >
                   <Building2 class="h-8 w-8 opacity-70" />
-                  <span class="text-xs font-medium">No cover photo</span>
+                  <span class="text-xs font-medium">No company logo</span>
                 </div>
               </RouterLink>
               <div class="pointer-events-none absolute left-3 top-3">
@@ -581,20 +582,29 @@ onUnmounted(() => {
                 </span>
                 <span class="inline-flex items-center gap-1.5">
                   <Wallet class="h-3.5 w-3.5 shrink-0" />
-                  {{ card.allowance?.trim() || 'Allowance TBA' }}
+                  {{ card.allowance?.trim() || 'No allowance' }}
                 </span>
               </div>
 
+              <ApplicationCapacity
+                :slots-available="card.slotsAvailable"
+                :slots-remaining="card.slotsRemaining"
+                :filled-slots="card.filledSlots"
+                compact
+              />
+
               <div class="flex flex-wrap items-center gap-2">
-                <Badge variant="outline">{{ card.slotsLeft }} slot{{ card.slotsLeft === 1 ? '' : 's' }} left</Badge>
-                <Badge
-                  v-if="isAuthenticatedStudent || studentCourse"
-                  :variant="card.courseMatchVariant"
-                  :title="'Course-based decision support'"
-                >
-                  {{ card.courseMatchLabel }}
+                <Badge v-if="card.previewPhotos?.length" variant="outline">
+                  {{ card.previewPhotos.length }} company photo{{ card.previewPhotos.length === 1 ? '' : 's' }}
                 </Badge>
-                <Badge v-else variant="outline">Course-based decision support</Badge>
+                <Badge
+                  v-for="course in (card.eligibleCourses || []).slice(0, 3)"
+                  :key="`${card.id}-${course}`"
+                  variant="outline"
+                >
+                  {{ course }}
+                </Badge>
+                <Badge v-if="!(card.eligibleCourses || []).length" variant="outline">Open to all courses</Badge>
               </div>
 
               <p v-if="isAuthenticatedStudent && !card.partnered" class="text-xs leading-5 text-muted-foreground">

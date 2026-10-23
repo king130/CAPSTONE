@@ -71,6 +71,10 @@ class AdminController extends Controller
                         'name' => $company->company_name,
                         'industry' => $company->industry_type,
                         'address' => $company->company_address,
+                        'cityMunicipality' => $company->city_municipality,
+                        'lguType' => $company->lgu_type,
+                        'organizationType' => $primaryMembership?->organization?->type
+                            ?? ($company->lgu_type ? 'municipal_hall' : 'company'),
                         'verificationStatus' => $company->verification_status,
                         'verificationRejectionReason' => $primaryMembership?->organization?->settings['verification_rejection_reason'] ?? null,
                     ] : null,
@@ -94,7 +98,7 @@ class AdminController extends Controller
             'role' => ['sometimes', 'string', 'max:32'],
             'isActive' => ['sometimes', 'boolean'],
             'profileSetupComplete' => ['sometimes', 'boolean'],
-            'verificationStatus' => ['sometimes', 'string', 'in:pending,approved,rejected'],
+            'verificationStatus' => ['sometimes', 'string', 'in:pending,under_review,approved,rejected'],
             'verificationRejectionReason' => ['nullable', 'string', 'max:1000'],
         ]);
 
@@ -141,7 +145,10 @@ class AdminController extends Controller
                 $previousStatus = strtolower(trim((string) ($user->company->verification_status ?? 'pending')));
                 $organization = $user->company->organization;
                 $ownerUserId = $organization?->owner_user_id ?? $user->company->user_id;
-                $orgLabel = $user->company->company_name ?: 'your company';
+                $orgType = $organization?->type
+                    ?? ($user->company->lgu_type ? 'municipal_hall' : 'company');
+                $orgLabel = $user->company->company_name
+                    ?: ($orgType === 'municipal_hall' ? 'your municipal hall' : 'your company');
                 $user->company()->update(['verification_status' => $nextStatus]);
             }
 
@@ -149,8 +156,26 @@ class AdminController extends Controller
                 $settings = is_array($organization->settings) ? $organization->settings : [];
                 if ($nextStatus === 'rejected') {
                     $settings['verification_rejection_reason'] = $rejectionReason;
+                    \App\Models\OrganizationVerificationDocument::query()
+                        ->where('organization_id', $organization->id)
+                        ->where('status', 'pending')
+                        ->update([
+                            'status' => 'rejected',
+                            'rejection_reason' => $rejectionReason,
+                            'reviewed_by_user_id' => $request->user()->id,
+                            'reviewed_at' => now(),
+                        ]);
                 } elseif ($nextStatus === 'approved') {
                     unset($settings['verification_rejection_reason']);
+                    \App\Models\OrganizationVerificationDocument::query()
+                        ->where('organization_id', $organization->id)
+                        ->whereIn('status', ['pending', 'rejected'])
+                        ->update([
+                            'status' => 'approved',
+                            'rejection_reason' => null,
+                            'reviewed_by_user_id' => $request->user()->id,
+                            'reviewed_at' => now(),
+                        ]);
                 }
                 $organization->settings = $settings;
                 $organization->save();
@@ -187,6 +212,18 @@ class AdminController extends Controller
                             'type' => 'registration',
                             'verificationStatus' => 'rejected',
                             'rejectionReason' => $rejectionReason,
+                            'redirectTo' => '/organization-verification',
+                        ],
+                    ]);
+                } elseif ($nextStatus === 'under_review') {
+                    Notification::query()->create([
+                        'user_id' => (int) $ownerUserId,
+                        'title' => 'Organization under review',
+                        'body' => $orgLabel.' verification documents are now under review.',
+                        'channel' => 'in_app',
+                        'metadata' => [
+                            'type' => 'registration',
+                            'verificationStatus' => 'under_review',
                             'redirectTo' => '/organization-verification',
                         ],
                     ]);

@@ -5,6 +5,7 @@ import { RouterLink } from 'vue-router'
 import Swal from '@/services/swal'
 import { useAuthStore } from '@/stores/auth'
 import { updateCurrentUserPassword } from '@/services/auth'
+import { isChangePasswordFormValid, passwordPolicyError } from '@/utils/passwordPolicy'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -19,9 +20,9 @@ const passwordMismatch = computed(() => {
   return !!confirmPassword.value && newPassword.value !== confirmPassword.value
 })
 
-const isValid = computed(() => {
-  return newPassword.value.length >= 6 && newPassword.value === confirmPassword.value
-})
+const passwordError = computed(() => passwordPolicyError(newPassword.value))
+
+const isValid = computed(() => isChangePasswordFormValid(newPassword.value, confirmPassword.value))
 
 function getRoleDashboard(role: string | null): string {
   switch (role) {
@@ -53,6 +54,8 @@ async function onSubmit() {
   saving.value = true
   try {
     await updateCurrentUserPassword(newPassword.value)
+    // Server clears must_change_password; refresh store before navigate so the router guard allows exit.
+    await authStore.refreshUser()
     await Swal.fire({
       icon: 'success',
       title: 'Password Updated',
@@ -122,8 +125,8 @@ async function onSubmit() {
           </div>
         </label>
 
-        <small v-if="newPassword && newPassword.length < 6" class="error-text">
-          Password must be at least 6 characters.
+        <small v-if="passwordError" class="error-text">
+          {{ passwordError }}
         </small>
         <small v-if="passwordMismatch" class="error-text">
           Passwords do not match.
@@ -143,7 +146,7 @@ async function onSubmit() {
   margin: 0 0 16px;
   background: #eff6ff;
   border: 1px solid #bfdbfe;
-  color: #1e3a8a;
+  color: hsl(var(--foreground));
   border-radius: 8px;
   padding: 10px 12px;
   font-size: 12px;

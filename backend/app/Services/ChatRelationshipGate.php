@@ -9,6 +9,7 @@ use App\Models\OrganizationMembership;
 use App\Models\School;
 use App\Models\Student;
 use App\Models\User;
+use Illuminate\Support\Collection;
 
 /**
  * Determines whether two users may open a direct chat based on
@@ -49,6 +50,148 @@ class ChatRelationshipGate
         }
 
         return false;
+    }
+
+    /**
+     * Users the actor may start a chat with, limited to relationship-eligible peers
+     * (approved org counterparts and, for orgs, internship-linked students).
+     * Used by the new-chat directory UI; always filtered by canCommunicate().
+     *
+     * @return Collection<int, User>
+     */
+    public function eligiblePartnerUsers(User $actor): Collection
+    {
+        $role = $actor->effectiveAppRole();
+        if (! in_array($role, ['student', 'school', 'company'], true)) {
+            return collect();
+        }
+
+        $candidateIds = collect();
+
+        if ($role === 'company') {
+            $company = $this->companyForOrganizationMember($actor);
+            if (! $company) {
+                return collect();
+            }
+
+            $candidateIds = School::query()
+                ->where('verification_status', 'approved')
+                ->whereNotNull('user_id')
+                ->pluck('user_id');
+
+            // Students with endorsed/accepted applications to this company.
+            $linkedStudentIds = Application::query()
+                ->where('company_id', $company->id)
+                ->whereIn('status', self::QUALIFYING_APPLICATION_STATUSES)
+                ->pluck('student_id')
+                ->filter()
+                ->unique()
+                ->values();
+
+            if ($linkedStudentIds->isNotEmpty()) {
+                $candidateIds = $candidateIds->merge(
+                    Student::query()
+                        ->whereIn('id', $linkedStudentIds)
+                        ->whereNotNull('user_id')
+                        ->pluck('user_id')
+                );
+            }
+        } elseif ($role === 'school') {
+            $school = $this->schoolForOrganizationMember($actor);
+            if (! $school) {
+                return collect();
+            }
+
+            $candidateIds = Company::query()
+                ->where('verification_status', 'approved')
+                ->whereNotNull('user_id')
+                ->pluck('user_id');
+
+            // Students belonging to this school (same link used by canCommunicate).
+            $candidateIds = $candidateIds->merge(
+                Student::query()
+                    ->where(function ($query) use ($school) {
+                        $query->where('school_id', $school->id);
+                        if ($school->organization_id) {
+                            $query->orWhere('organization_id', $school->organization_id);
+                        }
+                    })
+                    ->whereNotNull('user_id')
+                    ->pluck('user_id')
+            );
+        } else {
+            $student = $this->studentRecord($actor);
+            if (! $student) {
+                return collect();
+            }
+
+            $school = null;
+            if ($student->school_id) {
+                $school = School::query()->find($student->school_id);
+            } elseif ($student->organization_id) {
+                $school = School::query()->where('organization_id', $student->organization_id)->first();
+            }
+
+            // Student's own school is always a candidate when linked (even if pending verification).
+            if ($school && $school->user_id) {
+                $candidateIds->push($school->user_id);
+            }
+
+            $companyIds = Application::query()
+                ->where('student_id', $student->id)
+                ->whereIn('status', self::QUALIFYING_APPLICATION_STATUSES)
+                ->pluck('company_id')
+                ->filter()
+                ->unique()
+                ->values();
+
+            if ($companyIds->isNotEmpty()) {
+                $candidateIds = $candidateIds->merge(
+                    Company::query()
+                        ->whereIn('id', $companyIds)
+                        ->where('verification_status', 'approved')
+                        ->whereNotNull('user_id')
+                        ->pluck('user_id')
+                );
+            }
+        }
+
+        $candidateIds = $candidateIds
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn (int $id) => $id > 0 && $id !== (int) $actor->id)
+            ->unique()
+            ->values();
+
+        if ($candidateIds->isEmpty()) {
+            return collect();
+        }
+
+        return User::query()
+            ->whereIn('id', $candidateIds)
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get()
+            ->filter(fn (User $peer) => $this->canCommunicate($actor, $peer))
+            ->values();
+    }
+
+    public function peerOrganizationIsApproved(User $peer): bool
+    {
+        $role = $peer->effectiveAppRole();
+        if ($role === 'school') {
+            $school = $this->schoolForOrganizationMember($peer) ?? School::query()->where('user_id', $peer->id)->first();
+
+            return $school && strtolower((string) $school->verification_status) === 'approved';
+        }
+
+        if ($role === 'company') {
+            $company = $this->companyForOrganizationMember($peer) ?? Company::query()->where('user_id', $peer->id)->first();
+
+            return $company && strtolower((string) $company->verification_status) === 'approved';
+        }
+
+        // Students are not organization counterparties in the new-chat directory sense.
+        return true;
     }
 
     private function studentSchoolLinked(User $studentUser, User $schoolSideUser): bool
@@ -214,7 +357,7 @@ class ChatRelationshipGate
         }
 
         $membership = $this->activeMembership($user->id);
-        if (! $membership || $membership->organization?->type !== 'company') {
+        if (! $membership || ! \App\Support\OrganizationTypes::isHostType($membership->organization?->type)) {
             return null;
         }
 

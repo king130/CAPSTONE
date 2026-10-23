@@ -24,9 +24,10 @@ import DropdownMenu from '@/components/ui/dropdown-menu/DropdownMenu.vue'
 import DropdownMenuItem from '@/components/ui/dropdown-menu/DropdownMenuItem.vue'
 import Sheet from '@/components/ui/sheet/Sheet.vue'
 import NotificationBell from '@/components/layout/NotificationBell.vue'
+import SubscriptionAccessBanner from '@/components/SubscriptionAccessBanner.vue'
 import { useTheme } from '@/composables/useTheme'
 import type { LayoutIconName, LayoutNavItem, LayoutRole } from '@/layouts/navigation'
-import { defaultNavItems } from '@/layouts/navigation'
+import { defaultNavItems, visibleNavItems } from '@/layouts/navigation'
 import { buildProfileAvatarUrl } from '@/services/profileMedia'
 import { useAuthStore } from '@/stores/auth'
 import { cn } from '@/lib/utils'
@@ -67,7 +68,12 @@ const iconMap: Record<LayoutIconName, object> = {
   clock: Clock3,
 }
 
-const resolvedNavItems = computed(() => props.navItems ?? defaultNavItems[props.role])
+const resolvedNavItems = computed(() => {
+  if (props.navItems) return props.navItems
+  if (props.role === 'admin' || props.role === 'student') return defaultNavItems[props.role]
+  const assigned = authStore.user?.memberships?.[0]?.permissions ?? []
+  return visibleNavItems(props.role, assigned)
+})
 
 const displayName = computed(() => authStore.user?.displayName || authStore.user?.email || 'User')
 
@@ -134,7 +140,7 @@ function handleItemClick(item: LayoutNavItem) {
 
 <template>
   <div class="min-h-screen bg-background text-foreground">
-    <aside class="fixed inset-y-0 left-0 z-30 hidden w-72 border-r border-border bg-background/95 backdrop-blur lg:flex lg:flex-col">
+    <aside class="fixed inset-y-0 left-0 z-sidebar hidden w-72 border-r border-border bg-background/95 backdrop-blur lg:flex lg:flex-col">
       <div class="border-b border-border px-6 py-6">
         <div class="flex items-center gap-3">
           <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-primary text-lg font-semibold text-primary-foreground">
@@ -169,7 +175,7 @@ function handleItemClick(item: LayoutNavItem) {
     </aside>
 
     <div class="lg:pl-72">
-      <header class="sticky top-0 z-20 border-b border-border bg-background/90 backdrop-blur">
+      <header class="sticky top-0 z-header border-b border-border bg-background/90 backdrop-blur">
         <div class="flex h-16 items-center justify-between gap-4 px-4 sm:px-6">
           <div class="flex items-center gap-3">
             <Sheet :open="mobileOpen" @update:open="mobileOpen = $event">
@@ -243,8 +249,8 @@ function handleItemClick(item: LayoutNavItem) {
 
               <template #default="{ close }">
                 <div class="px-3 py-2">
-                  <p class="text-sm font-semibold">{{ displayName }}</p>
-                  <p class="text-xs text-muted-foreground">{{ authStore.user?.email }}</p>
+                  <p class="truncate text-sm font-semibold">{{ displayName }}</p>
+                  <p class="truncate text-xs text-muted-foreground">{{ authStore.user?.email }}</p>
                 </div>
                 <DropdownMenuItem @click="handleProfile(); close()">
                   <Settings class="h-4 w-4" />
@@ -261,6 +267,7 @@ function handleItemClick(item: LayoutNavItem) {
       </header>
 
       <main class="min-h-[calc(100vh-4rem)] p-4 sm:p-6">
+        <SubscriptionAccessBanner />
         <slot />
       </main>
     </div>

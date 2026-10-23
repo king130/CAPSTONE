@@ -13,7 +13,22 @@ class Subscription extends Model
         'billing_cycle',
         'starts_at',
         'ends_at',
+        'trial_started_at',
+        'trial_ends_at',
+        'grace_ends_at',
+        'access_note',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'starts_at' => 'date',
+            'ends_at' => 'date',
+            'trial_started_at' => 'datetime',
+            'trial_ends_at' => 'datetime',
+            'grace_ends_at' => 'datetime',
+        ];
+    }
 
     public function organizations(): HasMany
     {

@@ -47,7 +47,8 @@ class EnsureOrganizationVerified
         $verificationStatus = null;
         if ($organization->type === 'school') {
             $verificationStatus = $user->organizationSchool()?->verification_status;
-        } elseif ($organization->type === 'company') {
+        } elseif (\App\Support\OrganizationTypes::isHostType($organization->type)) {
+            // Company and Municipal Hall staff inherit the host profile verification status.
             $verificationStatus = $user->organizationCompany()?->verification_status;
         }
 
@@ -61,6 +62,13 @@ class EnsureOrganizationVerified
             return response()->json([
                 'message' => 'Organization verification was rejected.',
                 'code' => 'organization_verification_rejected',
+            ], Response::HTTP_FORBIDDEN);
+        }
+
+        if ($verificationStatus === 'under_review') {
+            return response()->json([
+                'message' => 'Organization verification is under review.',
+                'code' => 'organization_verification_under_review',
             ], Response::HTTP_FORBIDDEN);
         }
 

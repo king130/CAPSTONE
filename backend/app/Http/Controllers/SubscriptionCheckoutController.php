@@ -7,6 +7,7 @@ use App\Models\Subscription;
 use App\Models\SubscriptionPlanDefinition;
 use App\Models\User;
 use App\Services\PermissionGate;
+use App\Services\SubscriptionAccessService;
 use App\Services\SubscriptionPlanService;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Request;
@@ -22,17 +23,21 @@ class SubscriptionCheckoutController extends Controller
      * @var array<int, string>
      */
     private const ALLOWED_PAYMENT_METHOD_TYPES = [
-        'card',
+        // Prefer wallet / card options over QR-only checkout when the merchant has them enabled.
         'gcash',
         'paymaya',
         'grab_pay',
+        'shopee_pay',
+        'card',
         'billease',
         'dob',
+        'qrph',
     ];
 
     public function __construct(
         private readonly SubscriptionPlanService $subscriptionPlans,
         private readonly PermissionGate $permissions,
+        private readonly SubscriptionAccessService $subscriptionAccess,
     ) {
     }
 
@@ -121,6 +126,10 @@ class SubscriptionCheckoutController extends Controller
         $sanitized = [];
         foreach ($configuredMethods as $method) {
             $normalized = strtolower(trim((string) $method));
+            // PayMongo hosted checkout expects shopee_pay; accept the docs alias too.
+            if ($normalized === 'shopeepay') {
+                $normalized = 'shopee_pay';
+            }
             if ($normalized === '' || ! in_array($normalized, self::ALLOWED_PAYMENT_METHOD_TYPES, true)) {
                 continue;
             }
@@ -149,7 +158,9 @@ class SubscriptionCheckoutController extends Controller
         $paymongoSecretKey = (string) config('services.paymongo.secret_key', '');
         if ($paymongoSecretKey === '') {
             return response()->json([
-                'message' => 'PayMongo test mode is not configured yet. Add PAYMONGO_SECRET_KEY to your backend environment first.',
+                'message' => 'Payment is not connected. Paid checkout is unavailable until PayMongo is configured. Ask a platform admin to activate a plan manually, or continue on your trial while it lasts.',
+                'code' => 'paymongo_not_configured',
+                'paymentConnected' => false,
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
@@ -158,39 +169,65 @@ class SubscriptionCheckoutController extends Controller
             return $organization;
         }
 
-        if ($organization->type !== $data['role']) {
+        $checkoutRole = (string) $data['role'];
+        $roleMatches = $organization->type === $checkoutRole
+            || (\App\Support\OrganizationTypes::isHostType($organization->type) && $checkoutRole === 'company');
+        if (! $roleMatches) {
             return response()->json([
                 'message' => 'The requested plan role does not match your organization type.',
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
         $planSlug = strtolower(trim((string) $data['planId']));
+        if ($planSlug === 'free') {
+            return response()->json([
+                'message' => 'The free plan is no longer available. Choose a paid plan or continue on your trial.',
+                'code' => 'plan_not_selectable',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
         /** @var SubscriptionPlanDefinition|null $planDefinition */
         $planDefinition = SubscriptionPlanDefinition::query()
             ->where('is_active', true)
             ->where('slug', $planSlug)
+            ->where(function ($q) {
+                $q->where('is_selectable', true)->orWhereNull('is_selectable');
+            })
+            ->where(function ($q) {
+                $q->where('is_legacy', false)->orWhereNull('is_legacy');
+            })
             ->first();
 
         if (! $planDefinition) {
             return response()->json([
                 'message' => 'Selected subscription plan is not available.',
+                'code' => 'plan_not_selectable',
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
         $subscription = $organization->subscription;
         if (! $subscription) {
             $subscription = Subscription::query()->create([
-                'plan' => 'free',
-                'status' => 'active',
+                'plan' => $this->subscriptionAccess->trialPlanSlug(),
+                'status' => 'trialing',
                 'billing_cycle' => 'monthly',
             ]);
+            $this->subscriptionAccess->startTrial($subscription, $organization, $user);
             $organization->subscription_id = $subscription->id;
             $organization->save();
+            $subscription->refresh();
         }
 
         $settings = $organization->settings ?? [];
         $existingPending = $settings['pending_plan_change'] ?? null;
-        if (is_array($existingPending) && ($existingPending['requestId'] ?? null) !== $data['requestId']) {
+        $existingTarget = is_array($existingPending)
+            ? strtolower(trim((string) ($existingPending['targetPlan'] ?? '')))
+            : '';
+        if (
+            is_array($existingPending)
+            && ($existingPending['requestId'] ?? null) !== $data['requestId']
+            && $existingTarget !== $planSlug
+        ) {
             return response()->json([
                 'message' => 'A pending checkout is already in progress for this organization.',
                 'pendingChange' => $existingPending,
@@ -275,6 +312,19 @@ class SubscriptionCheckoutController extends Controller
 
         $attributes = is_array($checkout['attributes'] ?? null) ? $checkout['attributes'] : [];
 
+        $previousPlan = strtolower(trim((string) ($subscription->plan ?: 'free'))) ?: 'free';
+        $previousStatus = strtolower(trim((string) ($subscription->status ?: 'inactive'))) ?: 'inactive';
+        $previousBillingCycle = strtolower(trim((string) ($subscription->billing_cycle ?: 'monthly'))) ?: 'monthly';
+        if (is_array($existingPending) && $existingTarget === $planSlug && $existingTarget !== '') {
+            $storedPreviousPlan = strtolower(trim((string) ($existingPending['previousPlan'] ?? '')));
+            if ($storedPreviousPlan !== '') {
+                $previousPlan = $storedPreviousPlan;
+                $previousStatus = strtolower(trim((string) ($existingPending['previousStatus'] ?? $previousStatus))) ?: $previousStatus;
+                $previousBillingCycle = strtolower(trim((string) ($existingPending['previousBillingCycle'] ?? $previousBillingCycle))) ?: $previousBillingCycle;
+            }
+        }
+        $hasActivePaidPlan = $previousStatus === 'active' && $previousPlan !== 'free';
+
         $pending = [
             'requestId' => $data['requestId'],
             'targetPlan' => (string) $planDefinition->slug,
@@ -282,6 +332,9 @@ class SubscriptionCheckoutController extends Controller
             'amount' => (float) $amount,
             'currency' => 'PHP',
             'billingCycle' => $billingCycle,
+            'previousPlan' => $previousPlan,
+            'previousStatus' => $previousStatus,
+            'previousBillingCycle' => $previousBillingCycle,
             'createdAt' => now()->toIso8601String(),
             'checkoutSessionId' => (string) ($checkout['id'] ?? ''),
             'checkoutUrl' => (string) ($attributes['checkout_url'] ?? ''),
@@ -293,7 +346,11 @@ class SubscriptionCheckoutController extends Controller
         $organization->settings = $settings;
         $organization->save();
 
-        $subscription->status = 'pending';
+        // Keep trial/active status during checkout so access is not revoked mid-payment.
+        // Never flip a trialing org to pending (that would read as expired).
+        if (! $hasActivePaidPlan && ! in_array(strtolower((string) $subscription->status), ['trialing', 'trial', 'active'], true)) {
+            $subscription->status = 'pending';
+        }
         $subscription->billing_cycle = $billingCycle;
         $subscription->save();
         $this->subscriptionPlans->syncOrganizationCompliance($organization->fresh(['subscription', 'owner']));
@@ -320,7 +377,9 @@ class SubscriptionCheckoutController extends Controller
         $paymongoSecretKey = (string) config('services.paymongo.secret_key', '');
         if ($paymongoSecretKey === '') {
             return response()->json([
-                'message' => 'PayMongo test mode is not configured yet. Add PAYMONGO_SECRET_KEY to your backend environment first.',
+                'message' => 'Payment is not connected. Paid checkout cannot be verified until PayMongo is configured.',
+                'code' => 'paymongo_not_configured',
+                'paymentConnected' => false,
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
@@ -391,20 +450,27 @@ class SubscriptionCheckoutController extends Controller
         $subscription = $organization->subscription;
         if (! $subscription) {
             $subscription = Subscription::query()->create([
-                'plan' => 'free',
-                'status' => 'active',
+                'plan' => $this->subscriptionAccess->trialPlanSlug(),
+                'status' => 'trialing',
                 'billing_cycle' => 'monthly',
             ]);
             $organization->subscription_id = $subscription->id;
             $organization->save();
         }
 
-        $subscription->plan = (string) ($pending['targetPlan'] ?? $subscription->plan);
-        $subscription->status = 'active';
-        if (! empty($pending['billingCycle'])) {
-            $subscription->billing_cycle = (string) $pending['billingCycle'];
-        }
-        $subscription->save();
+        $targetPlan = (string) ($pending['targetPlan'] ?? $subscription->plan);
+        $billingCycle = ! empty($pending['billingCycle'])
+            ? (string) $pending['billingCycle']
+            : (string) ($subscription->billing_cycle ?: 'monthly');
+        $this->subscriptionAccess->activatePaid(
+            $subscription,
+            $targetPlan,
+            $organization,
+            $user,
+            $billingCycle,
+            null,
+            'PayMongo checkout verified.'
+        );
 
         $settings = $organization->settings ?? [];
         unset($settings['pending_plan_change']);
@@ -433,36 +499,20 @@ class SubscriptionCheckoutController extends Controller
     }
 
     /**
-     * Switch the caller's primary organization to the free plan.
-     * Does not accept a client-supplied plan slug.
+     * Free plan is legacy and no longer selectable.
      */
     public function switchToFree(Request $request)
     {
-        /** @var User $user */
-        $user = $request->user();
-        $organization = $this->resolveBillableOrganization($user);
-        if ($organization instanceof \Illuminate\Http\JsonResponse) {
-            return $organization;
-        }
-
-        $subscription = $this->ensureOrganizationSubscription($organization);
-        $subscription->plan = 'free';
-        $subscription->status = 'active';
-        $subscription->billing_cycle = 'monthly';
-        $subscription->save();
-
-        $settings = $organization->settings ?? [];
-        unset($settings['pending_plan_change']);
-        $organization->settings = $settings;
-        $organization->save();
-
-        $this->subscriptionPlans->syncOrganizationCompliance($organization->fresh(['subscription', 'owner']));
-
-        return response()->json($this->formattedUserProfile($user));
+        return response()->json([
+            'message' => 'The free plan is no longer available. Choose a paid plan or continue on your trial.',
+            'code' => 'plan_not_selectable',
+        ], Response::HTTP_UNPROCESSABLE_ENTITY);
     }
 
     /**
-     * Cancel an unpaid pending plan upgrade for the caller's primary organization.
+     * Cancel a pending plan checkout for the caller's primary organization.
+     *
+     * Existing paid plans are restored/retained. New unpaid signups return to Free.
      */
     public function cancelPending(Request $request)
     {
@@ -474,18 +524,56 @@ class SubscriptionCheckoutController extends Controller
         }
 
         $subscription = $this->ensureOrganizationSubscription($organization);
-        $wasUnpaidPending = strtolower((string) $subscription->status) === 'pending';
-
         $settings = $organization->settings ?? [];
+        $pending = is_array($settings['pending_plan_change'] ?? null)
+            ? $settings['pending_plan_change']
+            : null;
+
+        $previousPlan = strtolower(trim((string) ($pending['previousPlan'] ?? '')));
+        $previousStatus = strtolower(trim((string) ($pending['previousStatus'] ?? '')));
+        $previousBillingCycle = strtolower(trim((string) ($pending['previousBillingCycle'] ?? '')));
+
+        // Legacy in-flight checkouts may lack previousPlan.
+        // Keep a paid slug already on the row (active paid, or legacy pending that left the paid slug).
+        if ($previousPlan === '') {
+            $currentPlan = strtolower(trim((string) ($subscription->plan ?: ''))) ?: '';
+            $currentStatus = strtolower(trim((string) ($subscription->status ?: '')));
+            if ($currentPlan !== '' && $currentPlan !== 'free' && in_array($currentStatus, ['active', 'pending'], true)) {
+                $previousPlan = $currentPlan;
+                $previousStatus = 'active';
+            }
+        }
+
         unset($settings['pending_plan_change']);
         $organization->settings = $settings;
         $organization->save();
 
-        if ($wasUnpaidPending) {
-            $subscription->plan = 'free';
+        $hadPaidPlan = $previousPlan !== '' && $previousPlan !== 'free';
+        $wasTrialing = in_array(strtolower((string) ($pending['previousStatus'] ?? '')), ['trialing', 'trial'], true)
+            || in_array(strtolower((string) $subscription->status), ['trialing', 'trial'], true)
+            || $subscription->trial_ends_at !== null;
+
+        if ($hadPaidPlan) {
+            $subscription->plan = $previousPlan;
             $subscription->status = 'active';
-            $subscription->billing_cycle = 'monthly';
+            if ($previousBillingCycle !== '') {
+                $subscription->billing_cycle = $previousBillingCycle;
+            }
             $subscription->save();
+        } elseif ($wasTrialing) {
+            // Keep trial dates; do not demote to legacy free.
+            $subscription->status = 'trialing';
+            if ($subscription->plan === 'free' || $subscription->plan === '') {
+                $subscription->plan = $this->subscriptionAccess->trialPlanSlug();
+            }
+            $subscription->billing_cycle = $previousBillingCycle !== '' ? $previousBillingCycle : 'monthly';
+            $subscription->save();
+            if (! $subscription->trial_ends_at) {
+                $this->subscriptionAccess->startTrial($subscription, $organization, $user);
+            }
+        } else {
+            // Unpaid cancel with no trial history → start a trial rather than free.
+            $this->subscriptionAccess->startTrial($subscription, $organization, $user);
         }
 
         $this->subscriptionPlans->syncOrganizationCompliance($organization->fresh(['subscription', 'owner']));
@@ -520,14 +608,15 @@ class SubscriptionCheckoutController extends Controller
         }
 
         $subscription = Subscription::query()->create([
-            'plan' => 'free',
-            'status' => 'active',
+            'plan' => $this->subscriptionAccess->trialPlanSlug(),
+            'status' => 'trialing',
             'billing_cycle' => 'monthly',
         ]);
         $organization->subscription_id = $subscription->id;
         $organization->save();
+        $this->subscriptionAccess->startTrial($subscription, $organization);
 
-        return $subscription;
+        return $subscription->fresh();
     }
 
     /**

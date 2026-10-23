@@ -4,14 +4,18 @@ namespace App\Http\Controllers;
 
 use App\Models\Application;
 use App\Models\ApplicationAssessment;
+use App\Services\ApplicationTracker;
 use App\Services\PermissionGate;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Validation\ValidationException;
 
 class AssessmentController extends Controller
 {
-    public function __construct(private readonly PermissionGate $permissions)
-    {
+    public function __construct(
+        private readonly PermissionGate $permissions,
+        private readonly ApplicationTracker $tracker,
+    ) {
     }
 
     public function index(Request $request)
@@ -68,6 +72,10 @@ class AssessmentController extends Controller
         $user = $request->user();
         $appRole = $user->effectiveAppRole();
 
+        if ($appRole === 'student') {
+            return response()->json(['message' => 'Students cannot submit assessments.'], Response::HTTP_FORBIDDEN);
+        }
+
         if ($appRole !== 'admin' && ! $this->permissions->userCanAny($user, ['org.manage_assessments', 'org.approve_applications'])) {
             return response()->json(['message' => 'Missing permission to manage assessments.'], Response::HTTP_FORBIDDEN);
         }
@@ -78,6 +86,9 @@ class AssessmentController extends Controller
             'rubric_scores' => ['nullable', 'array'],
             'overall_score' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'comments' => ['nullable', 'string'],
+            'technical' => ['nullable', 'numeric', 'min:1', 'max:5'],
+            'communication' => ['nullable', 'numeric', 'min:1', 'max:5'],
+            'attitude' => ['nullable', 'numeric', 'min:1', 'max:5'],
         ]);
 
         $application = Application::query()->with(['student', 'company'])->findOrFail($data['application_id']);
@@ -86,14 +97,48 @@ class AssessmentController extends Controller
             return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
         }
 
+        $this->tracker->ensureStageColumn($application);
+        if ($this->tracker->currentStage($application) !== ApplicationTracker::STAGE_INTERVIEWED) {
+            throw ValidationException::withMessages([
+                'stage' => ['Assessment opens only after the interview is marked complete.'],
+            ]);
+        }
+
+        $locked = ApplicationAssessment::query()
+            ->where('application_id', $application->id)
+            ->whereNotNull('locked_at')
+            ->exists();
+        if ($locked) {
+            throw ValidationException::withMessages([
+                'assessment' => ['Assessment is locked. Authorized users must unlock with a reason to edit.'],
+            ]);
+        }
+
+        $scores = $data['rubric_scores'] ?? [];
+        if (isset($data['technical'], $data['communication'], $data['attitude'])) {
+            $scores = [
+                'technical' => (float) $data['technical'],
+                'communication' => (float) $data['communication'],
+                'attitude' => (float) $data['attitude'],
+            ];
+        }
+
+        $overall = $data['overall_score'] ?? null;
+        if ($overall === null && isset($scores['technical'], $scores['communication'], $scores['attitude'])) {
+            $overall = round(((float) $scores['technical'] + (float) $scores['communication'] + (float) $scores['attitude']) / 3, 2);
+        }
+
         $assessment = ApplicationAssessment::query()->create([
             'application_id' => $application->id,
             'assessed_by_user_id' => $user->id,
-            'stage' => $data['stage'] ?? 'pre_screen',
-            'rubric_scores' => $data['rubric_scores'] ?? null,
-            'overall_score' => $data['overall_score'] ?? null,
+            'stage' => 'final',
+            'rubric_scores' => $scores ?: null,
+            'overall_score' => $overall,
             'comments' => $data['comments'] ?? null,
+            'locked_at' => now(),
         ]);
+
+        $this->tracker->transition($application, ApplicationTracker::STAGE_ASSESSED, $user, 'Assessment submitted');
 
         $assessment->load([
             'application:id,internship_id,student_id,company_id,status,internship_title,student_name',
@@ -144,6 +189,8 @@ class AssessmentController extends Controller
             'rubricScores' => $assessment->rubric_scores ?? [],
             'overallScore' => $assessment->overall_score !== null ? (float) $assessment->overall_score : null,
             'comments' => $assessment->comments,
+            'lockedAt' => $assessment->locked_at?->toIso8601String(),
+            'lockReason' => $assessment->lock_reason,
             'application' => $assessment->application ? [
                 'id' => (string) $assessment->application->id,
                 'internshipTitle' => $assessment->application->internship_title,

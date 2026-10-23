@@ -105,8 +105,8 @@ function mapUserToProfileSettings(user: UserProfile): ProfileSettings {
     companyName: String(profile.companyName ?? ''),
     industry: String(profile.industryType ?? ''),
     address: String(profile.companyAddress ?? profile.schoolAddress ?? ''),
-    addressCity: String(profile.cityMunicipality ?? ''),
-    addressBarangay: String(profile.barangay ?? ''),
+    addressCity: String(profile.cityMunicipality ?? profile.locationArea ?? ''),
+    addressBarangay: String(profile.barangay ?? profile.addressBarangay ?? ''),
     addressZipCode: String(profile.zipCode ?? ''),
     acceptedCourses: JSON.stringify(Array.isArray(profile.courses) ? profile.courses : []),
     officialSchoolEmail: String(profile.officialSchoolEmail ?? ''),
@@ -135,11 +135,24 @@ function notificationPreferenceDefaults(): NotificationPreferences {
   }
 }
 
-function mapProfileSettingsToPayload(profile: ProfileSettings): {
-  displayName: string
+function mapProfileSettingsToPayload(
+  profile: ProfileSettings,
+  role?: string | null,
+): {
+  displayName?: string
   profile: Record<string, unknown>
   profileSetupComplete: boolean
 } {
+  // Students may only self-update contact; school-managed identity fields must not be submitted.
+  if (role === 'student') {
+    return {
+      profileSetupComplete: true,
+      profile: {
+        contactNumber: profile.phone,
+      },
+    }
+  }
+
   const normalizedSchoolName = profile.schoolName || profile.fullName
 
   return {
@@ -205,8 +218,11 @@ export async function fetchSettings(): Promise<SettingsPayload> {
   }
 }
 
-export async function saveProfileSettings(profile: ProfileSettings): Promise<void> {
-  await updateCurrentUserProfile(mapProfileSettingsToPayload(profile))
+export async function saveProfileSettings(
+  profile: ProfileSettings,
+  role?: string | null,
+): Promise<void> {
+  await updateCurrentUserProfile(mapProfileSettingsToPayload(profile, role))
 }
 
 export async function savePasswordSettings(passwordForm: PasswordForm): Promise<void> {

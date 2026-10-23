@@ -17,7 +17,11 @@ import TabsTrigger from '@/components/ui/tabs/TabsTrigger.vue'
 import { resolveNotificationDestination } from '@/composables/useNotificationDestination'
 import { useToast } from '@/composables/useToast'
 import MainLayout from '@/layouts/MainLayout.vue'
-import type { LayoutRole } from '@/layouts/navigation'
+import {
+  isPendingOrRejectedOrganization,
+  pendingOrganizationNavItems,
+  type LayoutRole,
+} from '@/layouts/navigation'
 import type { UserRole } from '@/services/auth'
 import type { Notification } from '@/services/notifications'
 import { useAuthStore } from '@/stores/auth'
@@ -39,6 +43,8 @@ const layoutRole = computed<LayoutRole>(() => {
   if (authStore.user?.role === 'school') return 'school'
   return 'student'
 })
+
+const usePendingOrgNav = computed(() => isPendingOrRejectedOrganization(authStore.user))
 
 const allNotifications = computed(() => notificationStore.items)
 const unreadNotifications = computed(() => notificationStore.unreadItems)
@@ -93,7 +99,12 @@ onMounted(() => {
 </script>
 
 <template>
-  <MainLayout :role="layoutRole" title="Notifications">
+  <MainLayout
+    :role="layoutRole"
+    title="Notifications"
+    :active-item="usePendingOrgNav ? 'notifications' : undefined"
+    :nav-items="usePendingOrgNav ? pendingOrganizationNavItems : undefined"
+  >
     <section class="space-y-6">
       <Card class="border-border/80 shadow-sm">
         <CardHeader class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -190,7 +201,7 @@ onMounted(() => {
                 </template>
                 <Card v-else class="border-dashed border-border/80 shadow-none">
                   <CardContent class="flex flex-col items-center justify-center py-16 text-center">
-                    <div class="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+                    <div class="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200">
                       <Sparkles class="h-7 w-7" />
                     </div>
                     <h3 class="mt-5 text-xl font-semibold text-foreground">You're all caught up!</h3>

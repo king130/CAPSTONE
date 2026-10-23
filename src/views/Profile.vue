@@ -27,8 +27,8 @@ function handleGuestContinue() {
   <div v-if="isGuest" class="flex min-h-[60vh] items-center justify-center px-4">
     <Card class="w-full max-w-xl border-border/80 shadow-sm">
       <CardContent class="space-y-4 p-8 text-center">
-        <h1 class="text-2xl font-semibold text-slate-950">Complete your account setup</h1>
-        <p class="text-sm leading-6 text-slate-600">
+        <h1 class="text-2xl font-semibold text-foreground">Complete your account setup</h1>
+        <p class="text-sm leading-6 text-muted-foreground">
           Settings are available after you choose a role. Continue to role selection to finish setting up your account.
         </p>
         <Button @click="handleGuestContinue">Choose Role</Button>

@@ -1,8 +1,13 @@
 <?php
 
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\AdminSubscriptionController;
 use App\Http\Controllers\ApplicationController;
+use App\Http\Controllers\ApplicationTrackerController;
 use App\Http\Controllers\AssessmentController;
+use App\Http\Controllers\OjtCalendarController;
+use App\Http\Controllers\PlacementScheduleController;
+use App\Http\Controllers\PublicHolidayController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CertificateController;
 use App\Http\Controllers\ChatController;
@@ -14,9 +19,11 @@ use App\Http\Controllers\InternshipController;
 use App\Http\Controllers\InterviewController;
 use App\Http\Controllers\KpiReportController;
 use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\OjtDtrController;
 use App\Http\Controllers\OjtLogController;
 use App\Http\Controllers\OrganizationAccessController;
 use App\Http\Controllers\OrganizationMediaController;
+use App\Http\Controllers\OrganizationVerificationDocumentController;
 use App\Http\Controllers\OrganizationProfileController;
 use App\Http\Controllers\OrganizationPublicController;
 use App\Http\Controllers\SavedInternshipController;
@@ -25,6 +32,7 @@ use App\Http\Controllers\ProfileAvatarController;
 use App\Http\Controllers\ReportExportController;
 use App\Http\Controllers\SubscriptionCheckoutController;
 use App\Http\Controllers\SubscriptionPlanController;
+use App\Http\Controllers\SchoolCourseRequirementController;
 use App\Http\Controllers\SchoolStudentController;
 use App\Http\Controllers\SchoolReportController;
 use App\Http\Controllers\StudentProgressController;
@@ -46,6 +54,8 @@ Route::middleware('auth.optional.sanctum')->group(function () {
     Route::get('organizations/{organization}/media', [OrganizationMediaController::class, 'index'])->whereNumber('organization');
 });
 Route::get('profile/avatar/{user}', [ProfileAvatarController::class, 'show']);
+Route::get('organization-media/{organizationMedia}/file', [OrganizationMediaController::class, 'showFile'])
+    ->whereNumber('organizationMedia');
 Route::get('subscription-plans', [SubscriptionPlanController::class, 'index']);
 
 Route::middleware('auth:sanctum')->group(function () {
@@ -61,6 +71,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('profile/avatar', [ProfileAvatarController::class, 'store']);
     Route::get('documents', [DocumentController::class, 'index']);
     Route::post('documents', [DocumentController::class, 'store']);
+    Route::get('documents/{document}/file', [DocumentController::class, 'download'])->whereNumber('document');
+    Route::delete('documents/{document}', [DocumentController::class, 'destroy'])->whereNumber('document');
     Route::get('internships/eligible', [InternshipController::class, 'eligibleForStudent']);
     Route::get('notifications', [NotificationController::class, 'index']);
     Route::patch('notifications/{id}/read', [NotificationController::class, 'markRead']);
@@ -69,6 +81,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('applications', [ApplicationController::class, 'store']);
 
     // Student wishlist / saved internships (not org-gated).
+    Route::get('organizations', [OrganizationPublicController::class, 'index']);
     Route::get('saved-internships', [SavedInternshipController::class, 'index']);
     Route::post('saved-internships', [SavedInternshipController::class, 'store']);
     Route::delete('saved-internships/{internshipId}', [SavedInternshipController::class, 'destroy'])->whereNumber('internshipId');
@@ -76,14 +89,46 @@ Route::middleware('auth:sanctum')->group(function () {
     // Platform admin routes are not organization-gated.
     Route::get('admin/users', [AdminController::class, 'users']);
     Route::patch('admin/users/{user}', [AdminController::class, 'updateUser']);
+    Route::get('admin/holidays', [PublicHolidayController::class, 'index']);
+    Route::post('admin/holidays', [PublicHolidayController::class, 'store']);
+    Route::patch('admin/holidays/{publicHoliday}', [PublicHolidayController::class, 'update']);
+    Route::delete('admin/holidays/{publicHoliday}', [PublicHolidayController::class, 'destroy']);
+    Route::get('admin/users/{user}/verification-documents', [OrganizationVerificationDocumentController::class, 'adminIndex']);
+    Route::get('admin/verification-documents/{organizationVerificationDocument}/file', [OrganizationVerificationDocumentController::class, 'download'])
+        ->whereNumber('organizationVerificationDocument');
+    Route::patch('admin/verification-documents/{organizationVerificationDocument}', [OrganizationVerificationDocumentController::class, 'adminReview'])
+        ->whereNumber('organizationVerificationDocument');
     Route::patch('admin/subscription-plans/{planSlug}', [SubscriptionPlanController::class, 'update']);
+    Route::get('admin/subscriptions', [AdminSubscriptionController::class, 'index']);
+    Route::get('admin/subscriptions/{organization}', [AdminSubscriptionController::class, 'show'])->whereNumber('organization');
+    Route::post('admin/subscriptions/{organization}/extend-trial', [AdminSubscriptionController::class, 'extendTrial'])->whereNumber('organization');
+    Route::post('admin/subscriptions/{organization}/activate', [AdminSubscriptionController::class, 'activate'])->whereNumber('organization');
+    Route::post('admin/subscriptions/{organization}/deactivate', [AdminSubscriptionController::class, 'deactivate'])->whereNumber('organization');
+
+    // Pending/rejected organizations can still upload verification proof.
+    Route::get('organization-verification/documents', [OrganizationVerificationDocumentController::class, 'index']);
+    Route::post('organization-verification/documents', [OrganizationVerificationDocumentController::class, 'store']);
+    Route::post('organization-verification/submit', [OrganizationVerificationDocumentController::class, 'submitForReview']);
+    Route::post('organization-verification/documents/{organizationVerificationDocument}/resubmit', [OrganizationVerificationDocumentController::class, 'resubmit'])
+        ->whereNumber('organizationVerificationDocument');
+    Route::delete('organization-verification/documents/{organizationVerificationDocument}', [OrganizationVerificationDocumentController::class, 'destroy'])
+        ->whereNumber('organizationVerificationDocument');
+    Route::get('organization-verification/documents/{organizationVerificationDocument}/file', [OrganizationVerificationDocumentController::class, 'download'])
+        ->whereNumber('organizationVerificationDocument');
 
     // Consequential school/company organization actions require approved + active org.
-    Route::middleware('org.verified')->group(function () {
+    // subscription.write gates org mutate actions when trial/paid access has expired (reads stay open).
+    Route::middleware(['org.verified', 'subscription.write'])->group(function () {
+        // Billing remains writable even when expired (middleware allow-list).
         Route::post('subscriptions/checkout', [SubscriptionCheckoutController::class, 'create']);
         Route::post('subscriptions/verify', [SubscriptionCheckoutController::class, 'verify']);
         Route::post('subscriptions/free', [SubscriptionCheckoutController::class, 'switchToFree']);
         Route::post('subscriptions/cancel-pending', [SubscriptionCheckoutController::class, 'cancelPending']);
+
+        Route::get('school-course-requirements', [SchoolCourseRequirementController::class, 'index']);
+        Route::get('school-course-requirements/flagged-students', [SchoolCourseRequirementController::class, 'flaggedStudents']);
+        Route::post('school-course-requirements', [SchoolCourseRequirementController::class, 'store']);
+        Route::patch('school-course-requirements/{schoolCourseRequirement}', [SchoolCourseRequirementController::class, 'update']);
 
         Route::get('school-students', [SchoolStudentController::class, 'index']);
         Route::get('school-students/export', [SchoolStudentController::class, 'export']);
@@ -100,6 +145,19 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::get('applications', [ApplicationController::class, 'index']);
         Route::patch('applications/{application}/status', [ApplicationController::class, 'updateStatus']);
+        Route::get('applications/{application}/tracker', [ApplicationTrackerController::class, 'show']);
+        Route::post('applications/{application}/tracker/transition', [ApplicationTrackerController::class, 'transition']);
+        Route::post('applications/{application}/tracker/assessment', [ApplicationTrackerController::class, 'storeAssessment']);
+        Route::post('applications/{application}/tracker/assessments/{assessment}/unlock', [ApplicationTrackerController::class, 'unlockAssessment']);
+        Route::get('applications/{application}/hours-agreement', [\App\Http\Controllers\HoursAgreementController::class, 'show']);
+        Route::post('applications/{application}/hours-agreement/propose', [\App\Http\Controllers\HoursAgreementController::class, 'propose']);
+        Route::post('applications/{application}/hours-agreement/confirm', [\App\Http\Controllers\HoursAgreementController::class, 'confirm']);
+        Route::post('applications/{application}/hours-agreement/decline', [\App\Http\Controllers\HoursAgreementController::class, 'decline']);
+        Route::get('applications/{application}/schedule', [PlacementScheduleController::class, 'show']);
+        Route::post('applications/{application}/schedule/request', [PlacementScheduleController::class, 'requestChange']);
+        Route::post('applications/{application}/schedule/requests/{scheduleRequest}/decide', [PlacementScheduleController::class, 'decide']);
+        Route::get('applications/{application}/calendar', [OjtCalendarController::class, 'show']);
+        Route::patch('applications/{application}/calendar/start-date', [OjtCalendarController::class, 'updateStartDate']);
 
         // Legacy /contracts routes (kept during rename transition)
         Route::get('contracts', [ContractController::class, 'index']);
@@ -141,6 +199,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('ojt-logs/{ojtLog}', [OjtLogController::class, 'update']);
         Route::delete('ojt-logs/{ojtLog}', [OjtLogController::class, 'destroy']);
 
+        Route::get('ojt-dtrs/placements', [OjtDtrController::class, 'placements']);
+        Route::get('ojt-dtrs', [OjtDtrController::class, 'index']);
+        Route::post('ojt-dtrs', [OjtDtrController::class, 'store']);
+        Route::get('ojt-dtrs/{ojtDtrSubmission}/file', [OjtDtrController::class, 'download'])->whereNumber('ojtDtrSubmission');
+        Route::get('ojt-dtrs/{ojtDtrSubmission}', [OjtDtrController::class, 'show'])->whereNumber('ojtDtrSubmission');
+        Route::post('ojt-dtrs/{ojtDtrSubmission}/approve', [OjtDtrController::class, 'approve'])->whereNumber('ojtDtrSubmission');
+        Route::post('ojt-dtrs/{ojtDtrSubmission}/reject', [OjtDtrController::class, 'reject'])->whereNumber('ojtDtrSubmission');
+        Route::post('ojt-dtrs/{ojtDtrSubmission}/resubmit', [OjtDtrController::class, 'resubmit'])->whereNumber('ojtDtrSubmission');
+
         Route::get('assessments', [AssessmentController::class, 'index']);
         Route::post('assessments', [AssessmentController::class, 'store']);
 
@@ -173,6 +240,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('rbac/tenants/{tenant}/roles/{role}/permissions', [TenantRbacController::class, 'syncPermissions']);
         Route::patch('rbac/tenants/{tenant}/members/{membership}', [TenantRbacController::class, 'updateMember']);
 
+        Route::get('conversations/eligible-partners', [ChatController::class, 'eligiblePartners']);
         Route::get('conversations', [ChatController::class, 'index']);
         Route::post('conversations', [ChatController::class, 'store']);
         Route::get('conversations/{conversation}/messages', [ChatController::class, 'messages']);

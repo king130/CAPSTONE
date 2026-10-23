@@ -13,8 +13,10 @@ class Company extends Model
         'organization_id',
         'company_name',
         'company_type',
+        'lgu_type',
         'industry_type',
         'company_address',
+        'city_municipality',
         'company_email',
         'contact_person_name',
         'contact_person_title',
@@ -26,6 +28,12 @@ class Company extends Model
         'tax_identification_number',
         'verification_status',
     ];
+
+    public function isMunicipalHall(): bool
+    {
+        return $this->organization?->type === 'municipal_hall'
+            || ($this->lgu_type !== null && $this->lgu_type !== '');
+    }
 
     public function user(): BelongsTo
     {

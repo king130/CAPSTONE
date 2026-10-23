@@ -20,6 +20,8 @@ class SubscriptionPlanDefinition extends Model
         'company_internships_limit',
         'organization_photos_limit',
         'is_active',
+        'is_selectable',
+        'is_legacy',
     ];
 
     protected function casts(): array
@@ -28,6 +30,8 @@ class SubscriptionPlanDefinition extends Model
             'school_features' => 'array',
             'company_features' => 'array',
             'is_active' => 'boolean',
+            'is_selectable' => 'boolean',
+            'is_legacy' => 'boolean',
         ];
     }
 }

@@ -26,6 +26,7 @@ import {
   type TenantRole,
   type TenantSummary,
 } from '@/services/tenantRbac'
+import { permissionAliasGroup, permissionDisplayLabel } from '@/services/permissions'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
 
@@ -72,12 +73,14 @@ const newRole = ref({
   description: '',
 })
 const newAccount = ref({
-  type: 'company' as 'company' | 'school',
+  type: 'company' as 'company' | 'school' | 'municipal_hall',
   name: '',
   adminName: '',
   email: '',
   plan: 'free',
   billingCycle: 'monthly',
+  lguType: 'municipality',
+  locationArea: '',
 })
 const newMember = ref({
   name: '',
@@ -214,17 +217,18 @@ function categorizePermission(key: string): PermissionCategoryId {
 }
 
 function permissionLabel(permission: TenantPermission) {
-  return permission.key
-    .replace(/^org\./, '')
-    .replace(/^platform\./, 'platform ')
-    .replace(/contracts/g, 'agreements')
-    .replace(/_/g, ' ')
+  return permissionDisplayLabel(permission.key)
+}
+
+function aliasesForPermission(permissionKey: string) {
+  const meta = permissions.value.find((item) => item.key === permissionKey)
+  return permissionAliasGroup(permissionKey, meta?.aliases)
 }
 
 function roleHasPermission(role: TenantRole, permissionKey: string) {
   const draft = rolePermissionDrafts.value[role.id]
   const source = draft ?? role.permissions
-  return source.includes(permissionKey)
+  return aliasesForPermission(permissionKey).some((key) => source.includes(key))
 }
 
 function syncMemberDrafts(items: TenantMember[]) {
@@ -255,11 +259,12 @@ function hasPendingPermissionChanges(role: TenantRole) {
 
 function togglePermissionDraft(role: TenantRole, permissionKey: string, enabled: boolean) {
   const current = roleDraftPermissions(role)
+  const group = aliasesForPermission(permissionKey)
   rolePermissionDrafts.value = {
     ...rolePermissionDrafts.value,
     [role.id]: enabled
-      ? Array.from(new Set([...current, permissionKey]))
-      : current.filter((item) => item !== permissionKey),
+      ? Array.from(new Set([...current, ...group]))
+      : current.filter((item) => !group.includes(item)),
   }
 }
 
@@ -345,6 +350,7 @@ async function createRole() {
 async function createAccount() {
   if (!isSystemAdmin.value) return
   if (!newAccount.value.name.trim() || !newAccount.value.adminName.trim() || !newAccount.value.email.trim()) return
+  if (newAccount.value.type === 'municipal_hall' && !newAccount.value.locationArea.trim()) return
 
   creatingAccount.value = true
   try {
@@ -355,6 +361,12 @@ async function createAccount() {
       email: newAccount.value.email.trim(),
       plan: newAccount.value.plan,
       billingCycle: newAccount.value.billingCycle,
+      ...(newAccount.value.type === 'municipal_hall'
+        ? {
+            lguType: newAccount.value.lguType,
+            locationArea: newAccount.value.locationArea.trim(),
+          }
+        : {}),
     })
 
     tenants.value = [...tenants.value, response.account].sort((a, b) => a.name.localeCompare(b.name))
@@ -366,6 +378,8 @@ async function createAccount() {
       email: '',
       plan: 'free',
       billingCycle: 'monthly',
+      lguType: 'municipality',
+      locationArea: '',
     }
 
     success('Account created.', {
@@ -547,16 +561,16 @@ watch(selectedTenantId, async (next, previous) => {
 <template>
   <MainLayout :role="currentRole" :title="pageTitle" :active-item="activeItem" :nav-items="navItems">
     <div class="space-y-5">
-      <section class="rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div class="flex flex-col gap-4 border-b border-slate-100 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+      <section class="rounded-2xl border border-border bg-card shadow-sm">
+        <div class="flex flex-col gap-4 border-b border-border px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
           <div class="space-y-2">
             <div class="flex items-center gap-3">
               <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-sky-100 text-sky-700">
                 <ShieldCheck class="h-5 w-5" />
               </div>
               <div>
-                <h2 class="text-xl font-semibold tracking-tight text-slate-950">{{ pageTitle }}</h2>
-                <p class="text-sm text-slate-600">{{ pageSubtitle }}</p>
+                <h2 class="text-xl font-semibold tracking-tight text-foreground">{{ pageTitle }}</h2>
+                <p class="text-sm text-muted-foreground">{{ pageSubtitle }}</p>
               </div>
             </div>
             <div class="flex flex-wrap gap-2">
@@ -571,20 +585,20 @@ watch(selectedTenantId, async (next, previous) => {
 
           <div class="flex w-full flex-col gap-3 sm:max-w-md">
             <div v-if="showAccountSelector">
-              <label class="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-500">Account</label>
-              <Select v-model="selectedTenantId" class="bg-white">
+              <label class="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">Account</label>
+              <Select v-model="selectedTenantId" class="bg-card">
                 <option value="" disabled>Select an account</option>
                 <option v-for="tenant in tenants" :key="tenant.id" :value="tenant.id">
                   {{ tenant.name }} · {{ tenant.type }}
                 </option>
               </Select>
             </div>
-            <div v-else-if="selectedTenant" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-              <span class="font-medium text-slate-950">{{ selectedTenant.name }}</span>
-              <span class="text-slate-500"> · {{ selectedTenant.memberCount }} users · {{ roles.length }} roles</span>
+            <div v-else-if="selectedTenant" class="rounded-xl border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
+              <span class="font-medium text-foreground">{{ selectedTenant.name }}</span>
+              <span class="text-muted-foreground"> · {{ selectedTenant.memberCount }} users · {{ roles.length }} roles</span>
             </div>
             <div class="relative">
-              <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 v-model="search"
                 class="pl-9"
@@ -595,47 +609,71 @@ watch(selectedTenantId, async (next, previous) => {
         </div>
 
         <div class="p-5 sm:p-6">
-          <div v-if="!canManage" class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <div v-if="!canManage" class="rounded-xl border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 px-4 py-3 text-sm text-amber-900">
             Your account does not have access to RBAC management.
           </div>
 
-          <div v-else-if="loading && !roles.length && !isSystemAdmin" class="rounded-xl border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
+          <div v-else-if="loading && !roles.length && !isSystemAdmin" class="rounded-xl border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
             Loading access workspace...
           </div>
 
-          <div v-else-if="!selectedTenant && !isSystemAdmin" class="rounded-xl border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
+          <div v-else-if="!selectedTenant && !isSystemAdmin" class="rounded-xl border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
             No manageable account was found for this user.
           </div>
 
           <div v-else class="space-y-5">
-            <Card v-if="isSystemAdmin" class="border-slate-200 shadow-none">
+            <Card v-if="isSystemAdmin" class="border-border shadow-none">
               <CardHeader class="pb-2">
-                <h3 class="text-base font-semibold text-slate-950">Create Account</h3>
-                <p class="text-sm text-slate-500">Provision a company or school with an admin user.</p>
+                <h3 class="text-base font-semibold text-foreground">Create Account</h3>
+                <p class="text-sm text-muted-foreground">Provision a company, municipal hall, or school with an admin user.</p>
               </CardHeader>
               <CardContent class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 <div>
-                  <label class="mb-1.5 block text-sm font-medium text-slate-700">Type</label>
-                  <Select v-model="newAccount.type" class="bg-white">
+                  <label class="mb-1.5 block text-sm font-medium text-muted-foreground">Type</label>
+                  <Select v-model="newAccount.type" class="bg-card">
                     <option value="company">Company</option>
+                    <option value="municipal_hall">Municipal Hall</option>
                     <option value="school">School</option>
                   </Select>
                 </div>
                 <div>
-                  <label class="mb-1.5 block text-sm font-medium text-slate-700">Account name</label>
-                  <Input v-model="newAccount.name" :placeholder="newAccount.type === 'school' ? 'School name' : 'Company name'" />
+                  <label class="mb-1.5 block text-sm font-medium text-muted-foreground">Account name</label>
+                  <Input
+                    v-model="newAccount.name"
+                    :placeholder="
+                      newAccount.type === 'school'
+                        ? 'School name'
+                        : newAccount.type === 'municipal_hall'
+                          ? 'Official municipal / LGU office name'
+                          : 'Company name'
+                    "
+                  />
                 </div>
+                <template v-if="newAccount.type === 'municipal_hall'">
+                  <div>
+                    <label class="mb-1.5 block text-sm font-medium text-muted-foreground">LGU type</label>
+                    <Select v-model="newAccount.lguType" class="bg-card">
+                      <option value="municipality">Municipality</option>
+                      <option value="city">City</option>
+                      <option value="other_office">Other office</option>
+                    </Select>
+                  </div>
+                  <div>
+                    <label class="mb-1.5 block text-sm font-medium text-muted-foreground">City / municipality (Cavite)</label>
+                    <Input v-model="newAccount.locationArea" placeholder="e.g. Naic" />
+                  </div>
+                </template>
                 <div>
-                  <label class="mb-1.5 block text-sm font-medium text-slate-700">Admin name</label>
+                  <label class="mb-1.5 block text-sm font-medium text-muted-foreground">Admin name</label>
                   <Input v-model="newAccount.adminName" placeholder="Admin full name" />
                 </div>
                 <div>
-                  <label class="mb-1.5 block text-sm font-medium text-slate-700">Admin email</label>
+                  <label class="mb-1.5 block text-sm font-medium text-muted-foreground">Admin email</label>
                   <Input v-model="newAccount.email" type="email" placeholder="admin@example.com" />
                 </div>
                 <div>
-                  <label class="mb-1.5 block text-sm font-medium text-slate-700">Plan</label>
-                  <Select v-model="newAccount.plan" class="bg-white">
+                  <label class="mb-1.5 block text-sm font-medium text-muted-foreground">Plan</label>
+                  <Select v-model="newAccount.plan" class="bg-card">
                     <option value="free">Free</option>
                     <option value="standard">Standard</option>
                     <option value="premium">Premium</option>
@@ -644,7 +682,13 @@ watch(selectedTenantId, async (next, previous) => {
                 <div class="flex items-end">
                   <Button
                     class="w-full gap-2"
-                    :disabled="creatingAccount || !newAccount.name.trim() || !newAccount.adminName.trim() || !newAccount.email.trim()"
+                    :disabled="
+                      creatingAccount ||
+                      !newAccount.name.trim() ||
+                      !newAccount.adminName.trim() ||
+                      !newAccount.email.trim() ||
+                      (newAccount.type === 'municipal_hall' && !newAccount.locationArea.trim())
+                    "
                     @click="createAccount"
                   >
                     <Plus class="h-4 w-4" />
@@ -656,13 +700,13 @@ watch(selectedTenantId, async (next, previous) => {
 
             <template v-if="selectedTenant && props.mode === 'roles'">
               <div class="grid gap-5 xl:grid-cols-[320px_1fr]">
-                <div class="space-y-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                <div class="space-y-4 rounded-2xl border border-border bg-muted/70 p-4">
                   <div>
-                    <h3 class="text-base font-semibold text-slate-950">Roles</h3>
-                    <p class="mt-1 text-sm text-slate-500">Scoped to this account only.</p>
+                    <h3 class="text-base font-semibold text-foreground">Roles</h3>
+                    <p class="mt-1 text-sm text-muted-foreground">Scoped to this account only.</p>
                   </div>
 
-                  <div class="space-y-3 rounded-xl border border-slate-200 bg-white p-3">
+                  <div class="space-y-3 rounded-xl border border-border bg-card p-3">
                     <Input v-model="newRole.name" placeholder="Role name" />
                     <Input v-model="newRole.slug" placeholder="Slug (optional)" />
                     <textarea
@@ -681,18 +725,18 @@ watch(selectedTenantId, async (next, previous) => {
                     <div
                       v-for="role in filteredRoles"
                       :key="role.id"
-                      class="rounded-xl border border-slate-200 bg-white p-3"
+                      class="rounded-xl border border-border bg-card p-3"
                     >
                       <div class="flex items-start justify-between gap-2">
                         <div class="min-w-0">
-                          <p class="truncate font-medium text-slate-950">{{ role.name }}</p>
-                          <p class="mt-0.5 text-xs text-slate-500">
+                          <p class="truncate font-medium text-foreground">{{ role.name }}</p>
+                          <p class="mt-0.5 text-xs text-muted-foreground">
                             {{ role.memberCount }} users · {{ role.permissions.length }} permissions
                           </p>
                         </div>
                         <button
                           type="button"
-                          class="rounded-lg p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                          class="rounded-lg p-1.5 text-muted-foreground transition hover:bg-red-950/40 hover:text-red-300 disabled:opacity-40"
                           :disabled="deletingRoleId === role.id || role.memberCount > 0"
                           :title="role.memberCount > 0 ? 'Reassign users before deleting' : 'Delete role'"
                           @click="removeRole(role)"
@@ -704,22 +748,22 @@ watch(selectedTenantId, async (next, previous) => {
                         Edit permissions
                       </Button>
                     </div>
-                    <p v-if="!filteredRoles.length" class="px-1 py-6 text-center text-sm text-slate-500">
+                    <p v-if="!filteredRoles.length" class="px-1 py-6 text-center text-sm text-muted-foreground">
                       No roles matched your search.
                     </p>
                   </div>
                 </div>
 
                 <div class="space-y-4">
-                  <div class="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div class="rounded-2xl border border-border bg-card p-4">
                     <div class="mb-3 flex items-center gap-2">
-                      <Users class="h-4 w-4 text-slate-500" />
-                      <h3 class="text-base font-semibold text-slate-950">Members</h3>
+                      <Users class="h-4 w-4 text-muted-foreground" />
+                      <h3 class="text-base font-semibold text-foreground">Members</h3>
                     </div>
                     <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                       <Input v-model="newMember.name" placeholder="Full name" />
                       <Input v-model="newMember.email" type="email" placeholder="Email" />
-                      <Select v-model="newMember.roleId" class="bg-white">
+                      <Select v-model="newMember.roleId" class="bg-card">
                         <option value="" disabled>Select role</option>
                         <option v-for="role in roles" :key="role.id" :value="role.id">
                           {{ role.name }}
@@ -736,11 +780,11 @@ watch(selectedTenantId, async (next, previous) => {
                     </div>
                   </div>
 
-                  <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                    <div class="flex flex-col gap-3 border-b border-slate-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div class="isolate overflow-hidden rounded-2xl border border-border bg-card">
+                    <div class="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                       <div>
-                        <p class="font-medium text-slate-950">Role assignments</p>
-                        <p class="text-sm text-slate-500">Change a member’s role, then save.</p>
+                        <p class="font-medium text-foreground">Role assignments</p>
+                        <p class="text-sm text-muted-foreground">Change a member’s role, then save.</p>
                       </div>
                       <div class="flex gap-2">
                         <Button
@@ -763,7 +807,7 @@ watch(selectedTenantId, async (next, previous) => {
 
                     <div v-if="members.length" class="overflow-x-auto">
                       <table class="min-w-full text-sm">
-                        <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                        <thead class="bg-muted text-left text-xs uppercase tracking-wide text-muted-foreground">
                           <tr>
                             <th class="px-4 py-3 font-medium">User</th>
                             <th class="px-4 py-3 font-medium">Role</th>
@@ -773,13 +817,13 @@ watch(selectedTenantId, async (next, previous) => {
                         <tbody class="divide-y divide-slate-100">
                           <tr v-for="member in members" :key="member.id">
                             <td class="px-4 py-3">
-                              <p class="font-medium text-slate-950">{{ member.user.name }}</p>
-                              <p class="text-xs text-slate-500">{{ member.user.email }}</p>
+                              <p class="font-medium text-foreground">{{ member.user.name }}</p>
+                              <p class="text-xs text-muted-foreground">{{ member.user.email }}</p>
                             </td>
                             <td class="px-4 py-3">
                               <Select
                                 :model-value="memberRoleDrafts[member.id] ?? member.role.id"
-                                class="min-w-[180px] bg-white"
+                                class="min-w-[180px] bg-card"
                                 @update:model-value="memberRoleDrafts = { ...memberRoleDrafts, [member.id]: $event }"
                               >
                                 <option v-for="role in roles" :key="role.id" :value="role.id">
@@ -794,7 +838,7 @@ watch(selectedTenantId, async (next, previous) => {
                               </p>
                             </td>
                             <td class="px-4 py-3">
-                              <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+                              <span class="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
                                 {{ member.status }}
                               </span>
                             </td>
@@ -802,7 +846,7 @@ watch(selectedTenantId, async (next, previous) => {
                         </tbody>
                       </table>
                     </div>
-                    <div v-else class="px-4 py-10 text-center text-sm text-slate-500">
+                    <div v-else class="px-4 py-10 text-center text-sm text-muted-foreground">
                       No users in this account yet.
                     </div>
                   </div>
@@ -811,8 +855,8 @@ watch(selectedTenantId, async (next, previous) => {
             </template>
 
             <template v-else-if="selectedTenant && props.mode === 'permissions'">
-              <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <p class="text-sm text-slate-600">
+              <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-muted px-4 py-3">
+                <p class="text-sm text-muted-foreground">
                   <span v-if="hasAnyPendingPermissionChanges" class="font-medium text-amber-700">
                     {{ rolesWithPendingPermissionChanges.length }} role{{ rolesWithPendingPermissionChanges.length === 1 ? '' : 's' }} with unsaved changes.
                   </span>
@@ -837,24 +881,24 @@ watch(selectedTenantId, async (next, previous) => {
                 </div>
               </div>
 
-              <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+              <div class="isolate overflow-hidden rounded-2xl border border-border bg-card">
                 <div class="max-h-[min(70vh,720px)] overflow-auto">
                   <table class="w-max min-w-full border-separate border-spacing-0 text-sm">
                     <thead>
                       <tr>
                         <th
-                          class="sticky left-0 top-0 z-30 min-w-[180px] border-b border-r border-slate-200 bg-slate-50 px-3 py-3 text-left font-semibold text-slate-700"
+                          class="sticky left-0 top-0 z-30 min-w-[180px] border-b border-r border-border bg-muted px-3 py-3 text-left font-semibold text-muted-foreground"
                         >
                           Role
                         </th>
                         <template v-for="category in permissionCategories" :key="category.id">
                           <th
                             :colspan="category.collapsed ? 1 : category.permissions.length"
-                            class="sticky top-0 z-20 border-b border-slate-200 bg-slate-50 px-2 py-2 text-left"
+                            class="sticky top-0 z-20 border-b border-border bg-muted px-2 py-2 text-left"
                           >
                             <button
                               type="button"
-                              class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600 hover:bg-slate-100"
+                              class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:bg-muted"
                               @click="toggleCategory(category.id)"
                             >
                               <ChevronDown
@@ -862,29 +906,29 @@ watch(selectedTenantId, async (next, previous) => {
                                 :class="category.collapsed ? '-rotate-90' : ''"
                               />
                               {{ category.label }}
-                              <span class="font-normal text-slate-400">({{ category.permissions.length }})</span>
+                              <span class="font-normal text-muted-foreground">({{ category.permissions.length }})</span>
                             </button>
                           </th>
                         </template>
                       </tr>
                       <tr>
-                        <th class="sticky left-0 top-[45px] z-30 border-b border-r border-slate-200 bg-white px-3 py-2" />
+                        <th class="sticky left-0 top-[45px] z-30 border-b border-r border-border bg-card px-3 py-2" />
                         <template v-for="category in permissionCategories" :key="`${category.id}-labels`">
                           <template v-if="!category.collapsed">
                             <th
                               v-for="permission in category.permissions"
                               :key="permission.key"
-                              class="sticky top-[45px] z-20 min-w-[120px] max-w-[140px] border-b border-slate-200 bg-white px-2 py-2 text-left align-bottom"
+                              class="sticky top-[45px] z-20 min-w-[120px] max-w-[140px] border-b border-border bg-card px-2 py-2 text-left align-bottom"
                               :title="permission.description || permission.key"
                             >
-                              <p class="text-xs font-medium capitalize leading-4 text-slate-800">
+                              <p class="text-xs font-medium capitalize leading-4 text-foreground">
                                 {{ permissionLabel(permission) }}
                               </p>
                             </th>
                           </template>
                           <th
                             v-else
-                            class="sticky top-[45px] z-20 min-w-[88px] border-b border-slate-200 bg-white px-2 py-2 text-xs text-slate-400"
+                            class="sticky top-[45px] z-20 min-w-[88px] border-b border-border bg-card px-2 py-2 text-xs text-muted-foreground"
                           >
                             Hidden
                           </th>
@@ -897,13 +941,13 @@ watch(selectedTenantId, async (next, previous) => {
                         :id="`role-row-${role.id}`"
                         :key="role.id"
                         class="group"
-                        :class="focusedRoleId === role.id ? 'bg-sky-50/70' : 'hover:bg-slate-50/80'"
+                        :class="focusedRoleId === role.id ? 'bg-accent' : 'hover:bg-muted/80'"
                       >
                         <td
-                          class="sticky left-0 z-10 border-b border-r border-slate-100 bg-white px-3 py-3 align-middle group-hover:bg-slate-50"
-                          :class="focusedRoleId === role.id ? 'bg-sky-50' : ''"
+                          class="sticky left-0 z-10 border-b border-r border-border bg-card px-3 py-3 align-middle group-hover:bg-muted"
+                          :class="focusedRoleId === role.id ? 'bg-accent' : ''"
                         >
-                          <p class="font-medium text-slate-950">{{ role.name }}</p>
+                          <p class="font-medium text-foreground">{{ role.name }}</p>
                           <p v-if="hasPendingPermissionChanges(role)" class="mt-1 text-xs font-medium text-amber-700">
                             Unsaved
                           </p>
@@ -913,7 +957,7 @@ watch(selectedTenantId, async (next, previous) => {
                             <td
                               v-for="permission in category.permissions"
                               :key="`${role.id}-${permission.key}`"
-                              class="border-b border-slate-100 px-2 py-3 text-center align-middle"
+                              class="border-b border-border px-2 py-3 text-center align-middle"
                               :title="permission.description || permission.key"
                             >
                               <Switch
@@ -923,13 +967,13 @@ watch(selectedTenantId, async (next, previous) => {
                               />
                             </td>
                           </template>
-                          <td v-else class="border-b border-slate-100 px-2 py-3 text-center text-xs text-slate-400">
+                          <td v-else class="border-b border-border px-2 py-3 text-center text-xs text-muted-foreground">
                             —
                           </td>
                         </template>
                       </tr>
                       <tr v-if="!filteredRoles.length">
-                        <td :colspan="1 + filteredPermissions.length" class="px-4 py-10 text-center text-sm text-slate-500">
+                        <td :colspan="1 + filteredPermissions.length" class="px-4 py-10 text-center text-sm text-muted-foreground">
                           No roles matched your search.
                         </td>
                       </tr>
@@ -941,7 +985,7 @@ watch(selectedTenantId, async (next, previous) => {
 
             <div
               v-else-if="isSystemAdmin && !selectedTenant"
-              class="rounded-xl border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-500"
+              class="rounded-xl border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground"
             >
               Create an account above, then select it to manage roles and permissions.
             </div>

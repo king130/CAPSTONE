@@ -13,6 +13,7 @@ import {
 import {
   ChatApiError,
   listConversations,
+  listEligibleChatPartners,
   listMessages,
   markConversationRead,
   openConversation,
@@ -20,7 +21,7 @@ import {
   type ChatConversation,
   type ChatMessage,
 } from '@/services/chat'
-import { listPublicProfiles, type PublicProfile } from '@/services/profilesPublic'
+import type { PublicProfile } from '@/services/profilesPublic'
 
 const props = defineProps<{
   userType?: 'intern' | 'company' | 'school'
@@ -328,6 +329,13 @@ async function selectConversation(id: string) {
   }
 }
 
+function backToConversationList() {
+  stopMessagePolling()
+  selectedConversation.value = null
+  rawMessages.value = []
+  messagesError.value = null
+}
+
 async function sendMessage() {
   const conversationId = selectedConversation.value
   if (!conversationId || sending.value) return
@@ -381,23 +389,19 @@ async function openNewChatPanel() {
   partnersLoading.value = true
   showNewChatPanel.value = true
   try {
-    const role = props.userType || authStore.user?.role
-    if (role === 'company') {
-      chatPartners.value = await listPublicProfiles('school')
-    } else if (role === 'school') {
-      chatPartners.value = await listPublicProfiles('company')
-    } else if (role === 'student' || role === 'intern') {
-      const [schools, companies] = await Promise.all([
-        listPublicProfiles('school'),
-        listPublicProfiles('company'),
-      ])
-      chatPartners.value = [...schools, ...companies]
-    } else {
-      chatPartners.value = []
-    }
+    const partners = await listEligibleChatPartners()
+    chatPartners.value = partners.map((partner) => ({
+      uid: partner.uid,
+      displayName: partner.displayName,
+      role: (partner.role as PublicProfile['role']) || 'school',
+      orgName: partner.orgName,
+      email: partner.email,
+      courses: partner.courses,
+      verificationStatus: partner.verificationStatus ?? 'approved',
+    }))
   } catch (caught) {
     chatPartners.value = []
-    newChatError.value = caught instanceof Error ? caught.message : 'Failed to load directory'
+    newChatError.value = caught instanceof Error ? caught.message : 'Failed to load chat partners'
   } finally {
     partnersLoading.value = false
   }
@@ -556,7 +560,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div class="chat-container">
+    <div class="chat-container" :class="{ 'has-active-conversation': !!activeConversation }">
       <aside class="profiles-sidebar">
         <div class="sidebar-header">
           <h2 class="sidebar-title">Chats</h2>
@@ -573,9 +577,9 @@ onUnmounted(() => {
             </button>
           </div>
           <p v-if="newChatError" class="chat-error-text">{{ newChatError }}</p>
-          <p v-if="partnersLoading" class="chat-status-text">Loading directory...</p>
+          <p v-if="partnersLoading" class="chat-status-text">Loading partners...</p>
           <div v-else-if="chatPartners.length === 0" class="new-chat-empty">
-            No users available. Ask them to complete their profile.
+            No eligible partners available to message yet. Start an Agreement or internship relationship first.
           </div>
           <div v-else class="new-chat-list">
             <div
@@ -585,7 +589,7 @@ onUnmounted(() => {
               :class="{ disabled: p.uid === currentUserId || startingChat }"
               @click="p.uid !== currentUserId && !startingChat && startChatWith(p)"
             >
-              <span class="new-chat-name">{{ p.orgName || p.displayName }}</span>
+              <span class="new-chat-name">{{ p.role === 'student' ? p.displayName : (p.orgName || p.displayName) }}</span>
               <span class="new-chat-role">{{ p.role }}</span>
             </div>
           </div>
@@ -641,6 +645,14 @@ onUnmounted(() => {
 
       <main class="main-area" v-if="activeConversation">
         <div class="profile-header">
+          <button
+            type="button"
+            class="chat-back-btn"
+            aria-label="Back to messages"
+            @click="backToConversationList"
+          >
+            Back
+          </button>
           <div class="profile-info">
             <div class="profile-avatar-large-wrapper">
               <img
@@ -739,7 +751,7 @@ onUnmounted(() => {
   position: fixed;
   right: 1.25rem;
   bottom: 1.25rem;
-  z-index: 1000;
+  z-index: var(--z-dropdown);
   display: inline-flex;
   height: 2.75rem;
   width: 2.75rem;
@@ -829,7 +841,7 @@ onUnmounted(() => {
   color: hsl(var(--foreground));
   display: flex;
   flex-direction: column;
-  z-index: 1001;
+  z-index: var(--z-sheet);
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
 }
 
@@ -1168,6 +1180,9 @@ onUnmounted(() => {
 
 /* Profile Header */
 .profile-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 12px 24px;
   border-bottom: 1px solid hsl(var(--border));
   background: hsl(var(--card));
@@ -1463,14 +1478,37 @@ onUnmounted(() => {
   margin: 0;
 }
 
+.chat-back-btn {
+  display: none;
+  margin-right: 8px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .chat-container {
     grid-template-columns: 1fr;
   }
-  
+
   .profiles-sidebar {
+    display: block;
+  }
+
+  .chat-container.has-active-conversation .profiles-sidebar {
     display: none;
+  }
+
+  .chat-back-btn {
+    display: inline-flex;
+    align-items: center;
   }
   
   .message-bubble {

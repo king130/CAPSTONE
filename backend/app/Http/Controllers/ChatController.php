@@ -2,9 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Company;
 use App\Models\Conversation;
 use App\Models\ConversationParticipant;
 use App\Models\Message;
+use App\Models\School;
+use App\Models\Student;
 use App\Models\User;
 use App\Services\ChatRelationshipGate;
 use Illuminate\Http\Request;
@@ -68,6 +71,20 @@ class ChatController extends Controller
             return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
         }
 
+        // School ↔ company starts require an approved counterparty. Student ↔ school/company
+        // may still open when the relationship exists (e.g. student's own pending school).
+        $actorRole = $user->effectiveAppRole();
+        $peerRole = $peer->effectiveAppRole();
+        if (
+            in_array($actorRole, ['school', 'company'], true)
+            && in_array($peerRole, ['school', 'company'], true)
+            && ! $this->relationships->peerOrganizationIsApproved($peer)
+        ) {
+            return response()->json([
+                'message' => 'The selected organization is not approved yet.',
+            ], Response::HTTP_FORBIDDEN);
+        }
+
         $conversation = $this->findDirectConversation((int) $user->id, (int) $peer->id);
 
         if (! $conversation) {
@@ -96,6 +113,56 @@ class ChatController extends Controller
         return response()->json([
             'data' => $this->serializeConversation($conversation, $user),
         ], Response::HTTP_CREATED);
+    }
+
+    /**
+     * Directory for "Start conversation" — relationship-eligible peers only
+     * (approved org counterparts and internship-linked students for organizations).
+     */
+    public function eligiblePartners(Request $request)
+    {
+        /** @var User $user */
+        $user = $request->user();
+        if ($denied = $this->denyNonChatActor($user)) {
+            return $denied;
+        }
+
+        $partners = $this->relationships->eligiblePartnerUsers($user)->map(function (User $peer) {
+            $appRole = $peer->effectiveAppRole() ?? $peer->role;
+            $orgName = $peer->name;
+            $courses = [];
+            $verificationStatus = null;
+
+            if ($appRole === 'school') {
+                $school = School::query()->where('user_id', $peer->id)->first();
+                $orgName = $school?->institution_name ?: ($peer->activeOrganization()?->name ?: $peer->name);
+                $verificationStatus = $school?->verification_status;
+                $profile = is_array($peer->profile) ? $peer->profile : [];
+                $courses = $profile['courses'] ?? [];
+            } elseif ($appRole === 'company') {
+                $company = Company::query()->where('user_id', $peer->id)->first();
+                $orgName = $company?->company_name ?: ($peer->activeOrganization()?->name ?: $peer->name);
+                $verificationStatus = $company?->verification_status;
+                $profile = is_array($peer->profile) ? $peer->profile : [];
+                $courses = $profile['courses'] ?? [];
+            } elseif ($appRole === 'student') {
+                $student = Student::query()->where('user_id', $peer->id)->first();
+                $orgName = $student?->school_name ?: $peer->name;
+                $courses = $student?->course ? [$student->course] : [];
+            }
+
+            return [
+                'uid' => (string) $peer->id,
+                'displayName' => $peer->name,
+                'role' => $appRole,
+                'orgName' => $orgName,
+                'email' => $peer->email,
+                'courses' => $courses,
+                'verificationStatus' => $verificationStatus ? strtolower((string) $verificationStatus) : null,
+            ];
+        })->values();
+
+        return response()->json(['data' => $partners]);
     }
 
     public function messages(Request $request, Conversation $conversation)

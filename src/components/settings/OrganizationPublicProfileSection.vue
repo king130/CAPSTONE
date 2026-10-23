@@ -18,6 +18,7 @@ import Input from '@/components/ui/input/Input.vue'
 import Skeleton from '@/components/ui/skeleton/Skeleton.vue'
 import Textarea from '@/components/ui/textarea/Textarea.vue'
 import { useToast } from '@/composables/useToast'
+import { buildProfileAvatarUrl } from '@/services/profileMedia'
 import {
   deleteOrganizationMedia,
   listOrganizationMedia,
@@ -51,6 +52,14 @@ const media = ref<OrganizationMediaItem[]>([])
 const perkDraft = ref('')
 
 const organizationId = computed(() => authStore.user?.activeOrganization?.id ?? profile.value?.id ?? '')
+const profilePhotoUrl = computed(() => {
+  const currentUser = authStore.user
+  const record = currentUser?.profile as Record<string, unknown> | undefined
+  if (currentUser?.uid && record?.avatarPath) {
+    return buildProfileAvatarUrl(currentUser.uid, currentUser.updatedAt)
+  }
+  return ''
+})
 const photoCount = computed(() => profile.value?.photoCount ?? media.value.length)
 const photoLimit = computed(() => profile.value?.photoLimit ?? 3)
 const atPhotoLimit = computed(() => photoCount.value >= photoLimit.value)
@@ -62,8 +71,6 @@ const publicProfileSchema = toTypedSchema(
   z.object({
     tagline: z.string().max(120, 'Tagline must be 120 characters or fewer.'),
     description: z.string().max(2000, 'Description must be 2000 characters or fewer.'),
-    address: z.string().max(500, 'Address must be 500 characters or fewer.'),
-    city: z.string().max(255, 'City must be 255 characters or fewer.'),
     website: z
       .string()
       .max(255, 'Website must be 255 characters or fewer.')
@@ -87,12 +94,18 @@ const {
   initialValues: {
     tagline: '',
     description: '',
-    address: '',
-    city: '',
     website: '',
     industry: '',
     perksText: '',
   },
+})
+
+const registeredLocation = computed(() => {
+  const address = profile.value?.address?.trim() ?? ''
+  const city = profile.value?.city?.trim() ?? ''
+  if (address) return address
+  if (city) return `${city}, Cavite, Philippines`
+  return ''
 })
 
 const perks = computed(() => {
@@ -109,8 +122,6 @@ function applyProfile(next: OrganizationPublicProfile) {
   setValues({
     tagline: next.tagline,
     description: next.description,
-    address: next.address,
-    city: next.city,
     website: next.website,
     industry: next.industry,
     perksText: JSON.stringify(next.perks),
@@ -121,13 +132,12 @@ async function loadAll() {
   loading.value = true
   loadError.value = ''
   try {
+    media.value = []
     const nextProfile = await fetchOrganizationPublicProfile()
     applyProfile(nextProfile)
-    const orgId = organizationId.value || nextProfile.id
-    if (orgId) {
+    const orgId = nextProfile.id
+    if (orgId && (!organizationId.value || organizationId.value === orgId)) {
       media.value = await listOrganizationMedia(orgId)
-    } else {
-      media.value = []
     }
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : 'Unable to load public profile.'
@@ -166,8 +176,6 @@ const savePublicProfile = handleSubmit(async (formValues) => {
     const next = await updateOrganizationPublicProfile({
       tagline: formValues.tagline || null,
       description: formValues.description || null,
-      address: formValues.address || null,
-      city: formValues.city || null,
       website: formValues.website || null,
       industry: formValues.industry || null,
       perks: perks.value,
@@ -233,23 +241,6 @@ async function saveCaption(item: OrganizationMediaItem, caption: string) {
     success('Caption updated.')
   } catch (err) {
     error(err, { fallback: 'Unable to update caption.' })
-  } finally {
-    mediaBusyId.value = null
-  }
-}
-
-async function setAsCover(item: OrganizationMediaItem) {
-  if (item.isCover) return
-  mediaBusyId.value = item.id
-  try {
-    const updated = await updateOrganizationMedia(item.id, { isCover: true })
-    media.value = media.value.map((row) => ({
-      ...row,
-      isCover: row.id === updated.id,
-    }))
-    success('Cover photo updated.')
-  } catch (err) {
-    error(err, { fallback: 'Unable to set cover photo.' })
   } finally {
     mediaBusyId.value = null
   }
@@ -365,26 +356,12 @@ onMounted(() => {
           </FormItem>
         </FormField>
 
-        <div class="grid gap-4 md:grid-cols-2">
-          <FormField v-slot="{ componentField, errorMessage: fieldError }" name="address">
-            <FormItem>
-              <FormLabel for="orgPublicAddress">Address</FormLabel>
-              <FormControl>
-                <Input id="orgPublicAddress" v-bind="componentField" />
-              </FormControl>
-              <FormMessage :message="fieldError || errors.address" />
-            </FormItem>
-          </FormField>
-
-          <FormField v-slot="{ componentField, errorMessage: fieldError }" name="city">
-            <FormItem>
-              <FormLabel for="orgPublicCity">City</FormLabel>
-              <FormControl>
-                <Input id="orgPublicCity" v-bind="componentField" />
-              </FormControl>
-              <FormMessage :message="fieldError || errors.city" />
-            </FormItem>
-          </FormField>
+        <div class="rounded-xl border border-border bg-background px-4 py-3">
+          <p class="text-sm font-medium text-foreground">Location</p>
+          <p class="mt-1 text-sm text-muted-foreground">
+            {{ registeredLocation || 'Your registered Cavite address will appear here.' }}
+          </p>
+          <p class="mt-1 text-xs text-muted-foreground">This uses the address saved with your organization registration.</p>
         </div>
 
         <div class="grid gap-4 md:grid-cols-2">
@@ -433,10 +410,26 @@ onMounted(() => {
       </form>
 
       <div class="space-y-4 border-t border-border pt-5">
+        <div class="space-y-2">
+          <h5 class="text-sm font-semibold text-foreground">Profile photo</h5>
+          <p class="text-sm text-muted-foreground">
+            Job posts and your public profile use this picture as the cover. Change it from your account profile photo.
+          </p>
+          <div class="flex h-28 w-28 items-center justify-center overflow-hidden rounded-xl border border-border bg-muted">
+            <img
+              v-if="profilePhotoUrl"
+              :src="profilePhotoUrl"
+              alt="Company profile photo"
+              class="h-full w-full object-contain p-2"
+            />
+            <span v-else class="px-2 text-center text-xs text-muted-foreground">No profile photo</span>
+          </div>
+        </div>
+
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div class="space-y-1">
-            <h5 class="text-sm font-semibold text-foreground">Photos</h5>
-            <p class="text-sm text-muted-foreground">{{ usageLabel }}</p>
+            <h5 class="text-sm font-semibold text-foreground">Preview photos</h5>
+            <p class="text-sm text-muted-foreground">{{ usageLabel }}. Up to three appear beside your job posts.</p>
           </div>
           <div class="flex flex-wrap items-center gap-2">
             <input
@@ -466,7 +459,7 @@ onMounted(() => {
         </div>
 
         <div v-if="!media.length" class="rounded-lg border border-dashed border-border px-4 py-8 text-center">
-          <p class="text-sm text-muted-foreground">No photos yet. Upload a cover image so listing cards show your brand.</p>
+          <p class="text-sm text-muted-foreground">No preview photos yet. Your profile photo is still used as the job cover.</p>
         </div>
 
         <ul v-else class="space-y-3">
@@ -476,12 +469,11 @@ onMounted(() => {
             class="grid gap-3 rounded-xl border border-border bg-background p-3 md:grid-cols-[120px_minmax(0,1fr)_auto]"
           >
             <div class="overflow-hidden rounded-lg border border-border bg-muted">
-              <img :src="item.url" :alt="item.caption || 'Organization photo'" class="h-24 w-full object-cover" />
+              <img :key="`${item.organizationId}-${item.id}`" :src="item.url" :alt="item.caption || 'Organization photo'" class="h-24 w-full object-cover" />
             </div>
 
             <div class="space-y-2">
               <div class="flex flex-wrap items-center gap-2">
-                <Badge v-if="item.isCover" variant="default">Cover</Badge>
                 <span class="text-xs text-muted-foreground">Order {{ index + 1 }}</span>
               </div>
               <Input
@@ -494,15 +486,6 @@ onMounted(() => {
             </div>
 
             <div class="flex flex-wrap items-center gap-2 md:flex-col md:items-stretch">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                :disabled="item.isCover || mediaBusyId === item.id"
-                @click="setAsCover(item)"
-              >
-                Set as cover
-              </Button>
               <div class="flex gap-2">
                 <Button
                   type="button"

@@ -57,8 +57,8 @@ const errorMessage = computed(() => authStore.error)
 function getRoleDashboard(profile: { role: string | null; verificationStatus?: string | null }): string {
   const status = String(profile.verificationStatus || 'pending').toLowerCase()
   if (
-    (profile.role === 'school' || profile.role === 'company') &&
-    (status === 'pending' || status === 'rejected')
+    (profile.role === 'school' || profile.role === 'company' || profile.role === 'municipal_hall') &&
+    (status === 'pending' || status === 'under_review' || status === 'rejected')
   ) {
     return '/organization-verification'
   }
@@ -67,6 +67,7 @@ function getRoleDashboard(profile: { role: string | null; verificationStatus?: s
     case 'admin':
       return '/admin/overview'
     case 'company':
+    case 'municipal_hall':
       return '/dashboard'
     case 'school':
       return '/school'

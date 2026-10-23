@@ -113,7 +113,8 @@ class User extends Authenticatable
     public function organizationCompany(): ?Company
     {
         $organization = $this->activeOrganization();
-        if (! $organization || $organization->type !== 'company') {
+        // Company and Municipal Hall both use the companies host profile for placements/DTR.
+        if (! $organization || ! \App\Support\OrganizationTypes::isHostType($organization->type)) {
             return null;
         }
 
@@ -151,7 +152,11 @@ class User extends Authenticatable
             return 'school';
         }
 
-        if ($membership?->organization?->type === 'company') {
+        // Municipal Hall reuses the company workspace (dashboard, DTR host stage, jobs).
+        $hostAppRole = \App\Support\OrganizationTypes::appRoleForOrganizationType(
+            $membership?->organization?->type
+        );
+        if ($hostAppRole === 'company') {
             return 'company';
         }
 

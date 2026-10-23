@@ -102,7 +102,7 @@ class ContractController extends Controller
             'contract_type_label' => ['nullable', 'string', 'max:255'],
             'agreement_type_label' => ['nullable', 'string', 'max:255'],
             'moaReferenceNo' => ['nullable', 'string', 'max:255'],
-            'purpose' => ['nullable', 'string'],
+            'purpose' => ['required', 'string', 'min:1'],
             'startDate' => ['nullable', 'date'],
             'endDate' => ['nullable', 'date', 'after_or_equal:startDate'],
             'internshipSlots' => ['nullable', 'integer', 'min:1'],
@@ -139,7 +139,7 @@ class ContractController extends Controller
             $request->file('files', [])
         );
 
-        // Service rejects pending duplicates; a successful return is always a newly created agreement.
+        // Service rejects pending/active duplicates; a successful return is always a newly created agreement.
         $recipientId = $contract->requested_by_role === 'school'
             ? $contract->company_user_id
             : $contract->school_user_id;

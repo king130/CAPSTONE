@@ -5,6 +5,16 @@ export default {
   content: ['./index.html', './src/**/*.{vue,ts,tsx}'],
   theme: {
     extend: {
+      zIndex: {
+        base: 'var(--z-base)',
+        sticky: 'var(--z-sticky)',
+        header: 'var(--z-header)',
+        sidebar: 'var(--z-sidebar)',
+        dropdown: 'var(--z-dropdown)',
+        sheet: 'var(--z-sheet)',
+        modal: 'var(--z-modal)',
+        toast: 'var(--z-toast)',
+      },
       borderRadius: {
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',

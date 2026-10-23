@@ -18,12 +18,16 @@ export interface InternshipRecord {
   location: string
   type: string
   duration: string
+  /** Optional host-offered OJT hours (Phase D). Blank = no mismatch comparison. */
+  hostRequiredHours?: number | null
   slotsAvailable: number
   /** Remaining open slots when provided by API; falls back to slotsAvailable. */
   slotsRemaining?: number
+  /** Accepted applications occupying a slot. */
+  filledSlots?: number
   eligibleCourses?: string[]
   requirements?: string[]
-  allowance?: string
+  allowance?: string | null
   startDate?: string
   endDate?: string
   applicationDeadline?: string | null
@@ -33,12 +37,21 @@ export interface InternshipRecord {
   scheduleDays?: string[]
   timeIn?: string | null
   timeOut?: string | null
+  scheduleSlots?: Array<{ day: string; start: string; end: string }>
   timezone?: string | null
   isFlexible?: boolean
   /** On-site / Hybrid / Remote / Field Work when provided (else mirrors `type`). */
   workSetup?: string
   coverImage?: string | null
   perks?: string[]
+  /** Up to three company photos, excluding the logo cover. */
+  previewPhotos?: Array<{
+    id: string
+    url: string
+    caption?: string | null
+    sortOrder?: number
+    isCover?: boolean
+  }>
   /** Gallery from internship detail endpoint. */
   organizationMedia?: Array<{
     id: string
@@ -57,6 +70,7 @@ export interface InternshipRecord {
   requiredSkills?: string[]
   internGains?: string
   requiredDocuments?: string[]
+  requiresResume?: boolean
   applicationInstructions?: string
   contactInfo?: string
   approvalStatus?: 'pending' | 'approved' | 'declined'
@@ -125,24 +139,27 @@ export function normalizeInternshipRecord(raw: unknown): InternshipRecord {
   const row = asRecord(raw)
   const slotsAvailable = asNumber(row.slotsAvailable ?? row.slots_available, 0)
   const slotsRemainingRaw = row.slotsRemaining ?? row.slots_remaining
+  const filledSlotsRaw = row.filledSlots ?? row.filled_slots
   const workSetup = asOptionalString(row.workSetup ?? row.work_setup ?? row.type) ?? undefined
   const coverImage = asOptionalString(row.coverImage ?? row.cover_image)
   const partnered = asBoolean(row.partneredWithMySchool ?? row.partnered_with_my_school)
   const verified = asBoolean(row.verified ?? row.isVerified ?? row.is_verified)
 
-  const mediaRaw = row.organizationMedia ?? row.organization_media
-  const organizationMedia = Array.isArray(mediaRaw)
-    ? mediaRaw.map((item) => {
-        const media = asRecord(item)
-        return {
-          id: asString(media.id),
-          url: asString(media.url),
-          caption: asOptionalString(media.caption),
-          sortOrder: asNumber(media.sortOrder ?? media.sort_order, 0),
-          isCover: asBoolean(media.isCover ?? media.is_cover) ?? false,
-        }
-      }).filter((item) => item.id && item.url)
-    : undefined
+  const mapMedia = (mediaRaw: unknown) => {
+    if (!Array.isArray(mediaRaw)) return undefined
+    return mediaRaw.map((item) => {
+      const media = asRecord(item)
+      return {
+        id: asString(media.id),
+        url: asString(media.url),
+        caption: asOptionalString(media.caption),
+        sortOrder: asNumber(media.sortOrder ?? media.sort_order, 0),
+        isCover: asBoolean(media.isCover ?? media.is_cover) ?? false,
+      }
+    }).filter((item) => item.id && item.url)
+  }
+  const organizationMedia = mapMedia(row.organizationMedia ?? row.organization_media)
+  const previewPhotos = mapMedia(row.previewPhotos ?? row.preview_photos)
 
   return {
     id: asString(row.id),
@@ -160,8 +177,13 @@ export function normalizeInternshipRecord(raw: unknown): InternshipRecord {
     location: asString(row.location),
     type: asString(row.type || workSetup),
     duration: asString(row.duration),
+    hostRequiredHours:
+      row.hostRequiredHours == null && row.host_required_hours == null
+        ? null
+        : asNumber(row.hostRequiredHours ?? row.host_required_hours, 0) || null,
     slotsAvailable,
     slotsRemaining: slotsRemainingRaw == null ? slotsAvailable : asNumber(slotsRemainingRaw, slotsAvailable),
+    filledSlots: filledSlotsRaw == null ? undefined : asNumber(filledSlotsRaw, 0),
     eligibleCourses: asStringArray(row.eligibleCourses ?? row.eligible_courses),
     requirements: asStringArray(row.requirements),
     allowance: asOptionalString(row.allowance) ?? undefined,
@@ -171,6 +193,7 @@ export function normalizeInternshipRecord(raw: unknown): InternshipRecord {
     schedule: asOptionalString(row.schedule) ?? undefined,
     perks: asStringArray(row.perks),
     organizationMedia,
+    previewPhotos,
     scheduleType: asOptionalString(row.scheduleType ?? row.schedule_type),
     weeklyHours:
       row.weeklyHours == null && row.weekly_hours == null
@@ -179,6 +202,9 @@ export function normalizeInternshipRecord(raw: unknown): InternshipRecord {
     scheduleDays: asStringArray(row.scheduleDays ?? row.schedule_days),
     timeIn: asOptionalString(row.timeIn ?? row.time_in),
     timeOut: asOptionalString(row.timeOut ?? row.time_out),
+    scheduleSlots: Array.isArray(row.scheduleSlots ?? row.schedule_slots)
+      ? ((row.scheduleSlots ?? row.schedule_slots) as Array<{ day: string; start: string; end: string }>)
+      : [],
     timezone: asOptionalString(row.timezone),
     isFlexible: asBoolean(row.isFlexible ?? row.is_flexible) ?? false,
     workSetup,
@@ -318,6 +344,7 @@ export async function createInternship(payload: CreateInternshipPayload): Promis
       type: payload.type,
       industry: payload.industry,
       duration: payload.duration,
+      host_required_hours: payload.hostRequiredHours ?? null,
       slots_available: payload.slotsAvailable,
       status: payload.status || 'active',
       requirements: payload.requirements,
@@ -331,12 +358,14 @@ export async function createInternship(payload: CreateInternshipPayload): Promis
       schedule_days: payload.scheduleDays,
       time_in: payload.timeIn,
       time_out: payload.timeOut,
+      schedule_slots: payload.scheduleSlots,
       timezone: payload.timezone,
       is_flexible: payload.isFlexible,
       tasks: payload.tasks,
       required_skills: payload.requiredSkills,
       intern_gains: payload.internGains,
-      required_documents: payload.requiredDocuments,
+      required_documents: ['Endorsement'],
+      requires_resume: false,
       application_instructions: payload.applicationInstructions,
       contact_info: payload.contactInfo,
     }),
@@ -355,6 +384,8 @@ export async function updateInternship(internshipId: string, payload: Partial<In
       type: payload.type,
       industry: payload.industry,
       duration: payload.duration,
+      host_required_hours:
+        payload.hostRequiredHours === undefined ? undefined : payload.hostRequiredHours ?? null,
       slots_available: payload.slotsAvailable,
       status: payload.status,
       requirements: payload.requirements,
@@ -368,12 +399,14 @@ export async function updateInternship(internshipId: string, payload: Partial<In
       schedule_days: payload.scheduleDays,
       time_in: payload.timeIn,
       time_out: payload.timeOut,
+      schedule_slots: payload.scheduleSlots,
       timezone: payload.timezone,
       is_flexible: payload.isFlexible,
       tasks: payload.tasks,
       required_skills: payload.requiredSkills,
       intern_gains: payload.internGains,
-      required_documents: payload.requiredDocuments,
+      required_documents: ['Endorsement'],
+      requires_resume: false,
       application_instructions: payload.applicationInstructions,
       contact_info: payload.contactInfo,
     }),

@@ -1,6 +1,6 @@
 import apiClient from '@/services/apiClient'
 
-export type VerificationStatus = 'pending' | 'approved' | 'rejected'
+export type VerificationStatus = 'pending' | 'under_review' | 'approved' | 'rejected'
 
 export interface AdminUserRecord {
   uid: string
@@ -30,8 +30,16 @@ export interface AdminUserRecord {
     name?: string | null
     industry?: string | null
     address?: string | null
+    cityMunicipality?: string | null
+    lguType?: string | null
+    organizationType?: 'company' | 'municipal_hall' | string | null
     verificationStatus?: VerificationStatus | null
     verificationRejectionReason?: string | null
+  } | null
+  organization?: {
+    id?: string
+    name?: string | null
+    type?: string | null
   } | null
 }
 

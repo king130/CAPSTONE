@@ -11,6 +11,7 @@ import {
 
 import { getPricingForRole } from '@/services/subscriptionPricing'
 import { useAuthStore } from '@/stores/auth'
+import { shouldClearSessionBeforeOrganizationRegister } from '@/utils/registerEntryGuard'
 
 type PlanName = 'Free' | 'Standard' | 'Premium'
 
@@ -18,14 +19,14 @@ const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 
-const selectedRole = ref<'school' | 'company' | null>(null)
+const selectedRole = ref<'school' | 'company' | 'municipal_hall' | null>(null)
 const selectedPlan = ref<PlanName | null>(null)
 const currentPlans = ref<Record<PlanName, { price: string; description: string; features: string[]; limits: Record<string, number> }> | null>(null)
 const loading = ref(false)
 
 onMounted(async () => {
   const routeRole = (route.params.role as string) || (route.query.role as string) || null
-  if (routeRole !== 'school' && routeRole !== 'company') {
+  if (routeRole !== 'school' && routeRole !== 'company' && routeRole !== 'municipal_hall') {
     void router.push('/guest')
     return
   }
@@ -44,7 +45,20 @@ const roleInfo = computed(() => {
       accent: 'from-sky-600 via-cyan-600 to-emerald-500',
       ring: 'ring-sky-200',
       button: 'bg-sky-600 hover:bg-sky-700',
-      soft: 'bg-sky-100 text-sky-700',
+      soft: 'bg-sky-100 text-sky-800 dark:bg-sky-950/50 dark:text-sky-200',
+    }
+  }
+
+  if (selectedRole.value === 'municipal_hall') {
+    return {
+      title: 'Municipal Hall Plans',
+      subtitle: 'Choose a subscription for LGU OJT hosting, applicant review, and DTR workflows.',
+      icon: BuildingOfficeIcon,
+      badge: 'Municipal Hall Setup',
+      accent: 'from-emerald-700 via-teal-600 to-cyan-500',
+      ring: 'ring-emerald-200',
+      button: 'bg-emerald-700 hover:bg-emerald-800',
+      soft: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200',
     }
   }
 
@@ -56,7 +70,7 @@ const roleInfo = computed(() => {
     accent: 'from-emerald-600 via-teal-600 to-cyan-500',
     ring: 'ring-emerald-200',
     button: 'bg-emerald-600 hover:bg-emerald-700',
-    soft: 'bg-emerald-100 text-emerald-700',
+    soft: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200',
   }
 })
 
@@ -104,8 +118,16 @@ function planAmountValue(price: string): string {
   return price.replace(/^PHP\s*/, '')
 }
 
-function registerPathForRole(role: 'school' | 'company') {
-  return role === 'school' ? '/register/school' : '/register/company'
+function registerPathForRole(role: 'school' | 'company' | 'municipal_hall') {
+  if (role === 'school') return '/register/school'
+  if (role === 'municipal_hall') return '/register/municipal-hall'
+  return '/register/company'
+}
+
+function roleLabel(role: 'school' | 'company' | 'municipal_hall' | null) {
+  if (role === 'school') return 'School'
+  if (role === 'municipal_hall') return 'Municipal Hall'
+  return 'Company'
 }
 
 async function selectPlan(planName: PlanName, price: string) {
@@ -118,7 +140,7 @@ async function selectPlan(planName: PlanName, price: string) {
       <div style="text-align:left">
         <p><strong>Plan:</strong> ${planName}</p>
         <p><strong>Price:</strong> ${price}${price === 'PHP 0' ? '' : '/month'}</p>
-        <p><strong>Role:</strong> ${selectedRole.value === 'school' ? 'School' : 'Company'}</p>
+        <p><strong>Role:</strong> ${roleLabel(selectedRole.value)}</p>
         <br />
         <p>Continue to account setup with this subscription?</p>
       </div>
@@ -140,7 +162,13 @@ async function selectPlan(planName: PlanName, price: string) {
     return
   }
 
-  void router.push({
+  // Guest sessions must be cleared before public org registration (same as RoleSelection).
+  // RegisterSimple also allows guests, but clearing avoids a stale Guest session during signup.
+  if (shouldClearSessionBeforeOrganizationRegister(authStore.user?.role)) {
+    await authStore.logout()
+  }
+
+  await router.push({
     path: registerPathForRole(role),
     query: {
       plan: planName.toLowerCase(),
@@ -152,14 +180,14 @@ async function selectPlan(planName: PlanName, price: string) {
 </script>
 
 <template>
-  <div class="min-h-screen bg-[linear-gradient(180deg,#f8fbff_0%,#eef6ff_42%,#f8fafc_100%)]">
+  <div class="min-h-screen bg-background text-foreground">
     <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <header class="rounded-[2rem] border border-white/70 bg-white/90 p-5 shadow-[0_24px_60px_-28px_rgba(15,23,42,0.28)] backdrop-blur">
+      <header class="rounded-[2rem] border border-border bg-card/90 p-5 shadow-[0_24px_60px_-28px_rgba(15,23,42,0.28)] backdrop-blur">
         <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div class="flex items-center gap-3">
             <button
               type="button"
-              class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+              class="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 text-sm font-medium text-muted-foreground transition hover:border-border hover:bg-muted"
               @click="goBack"
             >
               <ArrowLeftIcon class="h-4 w-4" />
@@ -171,13 +199,13 @@ async function selectPlan(planName: PlanName, price: string) {
           </div>
 
           <div class="text-left lg:text-right">
-            <h1 class="text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">Choose Your Plan</h1>
-            <p class="mt-1 text-sm text-slate-600">Welcome, {{ welcomeName }}. Pick a plan before account setup.</p>
+            <h1 class="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">Choose Your Plan</h1>
+            <p class="mt-1 text-sm text-muted-foreground">Welcome, {{ welcomeName }}. Pick a plan before account setup.</p>
           </div>
         </div>
       </header>
 
-      <section class="mt-6 overflow-hidden rounded-[2rem] border border-slate-200 bg-slate-950 text-white shadow-[0_30px_80px_-38px_rgba(15,23,42,0.45)]">
+      <section class="mt-6 overflow-hidden rounded-[2rem] border border-border bg-slate-950 text-white shadow-[0_30px_80px_-38px_rgba(15,23,42,0.45)]">
         <div class="grid gap-0 xl:grid-cols-[1.45fr_0.85fr]">
           <div class="relative overflow-hidden px-6 py-8 sm:px-8">
             <div class="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.28),_transparent_44%),radial-gradient(circle_at_bottom_right,_rgba(16,185,129,0.24),_transparent_40%)]" />
@@ -188,7 +216,7 @@ async function selectPlan(planName: PlanName, price: string) {
                 </div>
                 <div>
                   <p class="text-sm font-semibold uppercase tracking-[0.22em] text-slate-300">{{ roleInfo.title }}</p>
-                  <p class="text-sm text-slate-400">Subscription setup flow</p>
+                  <p class="text-sm text-slate-300">Subscription setup flow</p>
                 </div>
               </div>
 
@@ -197,7 +225,7 @@ async function selectPlan(planName: PlanName, price: string) {
                   A cleaner plan picker that matches the platform you’re building.
                 </h2>
                 <p class="max-w-2xl text-sm leading-7 text-slate-200/90">
-                  Choose a subscription before finishing account setup. You can start small with the free plan or move to a paid plan when you need more coordinators, users, internship posts, and reporting power.
+                  Choose a paid plan before finishing account setup. Every new organization starts with a time-limited trial; after the trial you need a paid plan to keep full write access.
                 </p>
               </div>
 
@@ -218,24 +246,24 @@ async function selectPlan(planName: PlanName, price: string) {
             </div>
           </div>
 
-          <div class="space-y-4 bg-white px-6 py-8 text-slate-900 sm:px-8">
-            <div class="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-              <p class="text-sm font-semibold text-slate-950">What you’re choosing now</p>
-              <p class="mt-2 text-sm leading-6 text-slate-600">
+          <div class="space-y-4 bg-card px-6 py-8 text-foreground sm:px-8">
+            <div class="rounded-2xl border border-border bg-muted p-5">
+              <p class="text-sm font-semibold text-foreground">What you’re choosing now</p>
+              <p class="mt-2 text-sm leading-6 text-muted-foreground">
                 This step sets the default subscription plan that the rest of your registration flow will use.
               </p>
             </div>
 
-            <div class="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-              <p class="text-sm font-semibold text-slate-950">Recommended rollout</p>
-              <p class="mt-2 text-sm leading-6 text-slate-600">
-                Start with <span class="font-semibold text-slate-900">Standard</span> if you want the most balanced setup for real onboarding, placement tracking, and daily operations.
+            <div class="rounded-2xl border border-border bg-muted p-5">
+              <p class="text-sm font-semibold text-foreground">Recommended rollout</p>
+              <p class="mt-2 text-sm leading-6 text-muted-foreground">
+                Start with <span class="font-semibold text-foreground">Standard</span> if you want the most balanced setup for real onboarding, placement tracking, and daily operations.
               </p>
             </div>
 
-            <div class="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-              <p class="text-sm font-semibold text-slate-950">Flexible later on</p>
-              <p class="mt-2 text-sm leading-6 text-slate-600">
+            <div class="rounded-2xl border border-border bg-muted p-5">
+              <p class="text-sm font-semibold text-foreground">Flexible later on</p>
+              <p class="mt-2 text-sm leading-6 text-muted-foreground">
                 You can still revisit billing later inside the workspace if the organization grows beyond its initial limits.
               </p>
             </div>
@@ -248,15 +276,15 @@ async function selectPlan(planName: PlanName, price: string) {
           <div
             v-for="index in 3"
             :key="index"
-            class="rounded-[1.75rem] border border-slate-200 bg-white p-6 shadow-sm"
+            class="rounded-[1.75rem] border border-border bg-card p-6 shadow-sm"
           >
             <div class="space-y-4">
-              <div class="h-4 w-24 animate-pulse rounded bg-slate-200" />
-              <div class="h-10 w-36 animate-pulse rounded bg-slate-200" />
+              <div class="h-4 w-24 animate-pulse rounded bg-muted" />
+              <div class="h-10 w-36 animate-pulse rounded bg-muted" />
               <div class="space-y-2">
-                <div class="h-3 animate-pulse rounded bg-slate-200" />
-                <div class="h-3 animate-pulse rounded bg-slate-200" />
-                <div class="h-3 w-5/6 animate-pulse rounded bg-slate-200" />
+                <div class="h-3 animate-pulse rounded bg-muted" />
+                <div class="h-3 animate-pulse rounded bg-muted" />
+                <div class="h-3 w-5/6 animate-pulse rounded bg-muted" />
               </div>
             </div>
           </div>
@@ -266,47 +294,47 @@ async function selectPlan(planName: PlanName, price: string) {
           <article
             v-for="plan in plansArray"
             :key="plan.name"
-            class="overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white shadow-sm transition duration-200 hover:-translate-y-1 hover:shadow-[0_22px_55px_-28px_rgba(15,23,42,0.35)]"
+            class="overflow-hidden rounded-[1.75rem] border border-border bg-card shadow-sm transition duration-200 hover:-translate-y-1 hover:shadow-[0_22px_55px_-28px_rgba(15,23,42,0.35)]"
             :class="[
               plan.name === 'Standard' ? `ring-2 ${roleInfo.ring}` : '',
-              selectedPlan === plan.name ? 'border-emerald-200 ring-2 ring-emerald-200' : '',
+              selectedPlan === plan.name ? 'border-emerald-300 ring-2 ring-emerald-300 dark:border-emerald-700 dark:ring-emerald-700' : '',
             ]"
           >
             <div :class="['h-1.5 bg-gradient-to-r', roleInfo.accent]" />
             <div class="space-y-5 p-6">
               <div class="flex items-start justify-between gap-3">
                 <div>
-                  <p class="text-lg font-semibold text-slate-950">{{ plan.name }}</p>
-                  <p class="mt-1 text-sm text-slate-600">{{ plan.description }}</p>
+                  <p class="text-lg font-semibold text-foreground">{{ plan.name }}</p>
+                  <p class="mt-1 text-sm text-muted-foreground">{{ plan.description }}</p>
                 </div>
                 <span
                   v-if="plan.name === 'Standard' || selectedPlan === plan.name"
                   class="inline-flex rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em]"
-                  :class="selectedPlan === plan.name ? 'bg-emerald-100 text-emerald-700' : roleInfo.soft"
+                  :class="selectedPlan === plan.name ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200' : roleInfo.soft"
                 >
                   {{ selectedPlan === plan.name ? 'Selected' : 'Recommended' }}
                 </span>
               </div>
 
               <div>
-                <p v-if="plan.price === 'PHP 0'" class="text-4xl font-semibold tracking-tight text-slate-950">
+                <p v-if="plan.price === 'PHP 0'" class="text-4xl font-semibold tracking-tight text-foreground">
                   {{ plan.price }}
                 </p>
                 <div v-else class="flex flex-wrap items-end gap-x-2 gap-y-1">
-                  <span class="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">PHP</span>
-                  <p class="text-[2.45rem] font-semibold leading-none tracking-tight text-slate-950 sm:text-[2.7rem]">
+                  <span class="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">PHP</span>
+                  <p class="text-[2.45rem] font-semibold leading-none tracking-tight text-foreground sm:text-[2.7rem]">
                     {{ planAmountValue(plan.price) }}
                   </p>
-                  <span class="pb-1 text-sm text-slate-500">/month</span>
+                  <span class="pb-1 text-sm text-muted-foreground">/month</span>
                 </div>
-                <p class="mt-1 text-sm text-slate-500">
+                <p class="mt-1 text-sm text-muted-foreground">
                   {{ plan.price === 'PHP 0' ? 'No monthly charge' : 'Billed monthly' }}
                 </p>
               </div>
 
-              <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Plan Limits</p>
-                <div class="mt-3 space-y-2 text-sm text-slate-700">
+              <div class="rounded-2xl border border-border bg-muted p-4">
+                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Plan Limits</p>
+                <div class="mt-3 space-y-2 text-sm text-muted-foreground">
                   <p v-if="selectedRole === 'school'">
                     {{ formatLimit('Coordinators', plan.limits.coordinators) }}
                   </p>
@@ -326,9 +354,9 @@ async function selectPlan(planName: PlanName, price: string) {
                 <li
                   v-for="feature in plan.features"
                   :key="feature"
-                  class="flex items-start gap-3 text-sm leading-6 text-slate-700"
+                  class="flex items-start gap-3 text-sm leading-6 text-muted-foreground"
                 >
-                  <span class="mt-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+                  <span class="mt-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200">
                     <CheckIcon class="h-3.5 w-3.5" />
                   </span>
                   <span>{{ feature }}</span>

@@ -13,7 +13,7 @@ const props = withDefaults(
 )
 
 const cardClass = computed(() =>
-  cn('rounded-xl border border-border bg-card text-card-foreground shadow-sm', props.class),
+  cn('isolate rounded-xl border border-border bg-card text-card-foreground shadow-sm', props.class),
 )
 </script>
 

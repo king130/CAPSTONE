@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Application;
 use App\Models\Notification;
+use App\Models\OjtDtrSubmission;
 use App\Models\OjtLog;
 use App\Models\Organization;
 use App\Models\Student;
@@ -270,15 +271,17 @@ class OjtLogController extends Controller
         $user = $request->user();
         $appRole = $user->effectiveAppRole();
 
-        if (! in_array($appRole, ['school', 'company'], true)) {
+        if ($appRole !== 'school') {
             return response()->json([
-                'message' => 'Only schools and companies manage OJT required hours.',
+                'message' => 'OJT required hours are managed by the school organization.',
             ], Response::HTTP_FORBIDDEN);
         }
 
         $organization = $user->activeOrganization();
-        if (! $organization) {
-            return response()->json(['message' => 'No active organization context found.'], Response::HTTP_UNPROCESSABLE_ENTITY);
+        if (! $organization || $organization->type !== 'school') {
+            return response()->json([
+                'message' => 'OJT required hours are managed by the school organization.',
+            ], Response::HTTP_FORBIDDEN);
         }
 
         return response()->json([
@@ -293,19 +296,21 @@ class OjtLogController extends Controller
         $user = $request->user();
         $appRole = $user->effectiveAppRole();
 
-        if (! in_array($appRole, ['school', 'company'], true)) {
+        if ($appRole !== 'school') {
             return response()->json([
-                'message' => 'Only schools and companies manage OJT required hours.',
+                'message' => 'OJT required hours are managed by the school organization.',
             ], Response::HTTP_FORBIDDEN);
         }
 
-        if (! $this->permissions->userCanAny($user, ['org.manage_profile', 'manage_profile', 'org.approve_ojt_logs'])) {
+        if (! $this->permissions->userCan($user, 'org.approve_ojt_logs')) {
             return response()->json(['message' => 'Missing permission to update OJT required hours.'], Response::HTTP_FORBIDDEN);
         }
 
         $organization = $user->activeOrganization();
-        if (! $organization) {
-            return response()->json(['message' => 'No active organization context found.'], Response::HTTP_UNPROCESSABLE_ENTITY);
+        if (! $organization || $organization->type !== 'school') {
+            return response()->json([
+                'message' => 'OJT required hours are managed by the school organization.',
+            ], Response::HTTP_FORBIDDEN);
         }
 
         $data = $request->validate([
@@ -360,8 +365,12 @@ class OjtLogController extends Controller
 
         $summaries = $studentsQuery->get()->map(function (Student $student) use ($requiredHours) {
             $logs = OjtLog::query()->where('student_id', $student->id)->get();
-            $approved = (float) $logs->where('status', 'approved')->sum('hours');
-            $totalLogged = (float) $logs->sum('hours');
+            $approved = (float) $logs->where('status', 'approved')->sum('hours')
+                + OjtDtrSubmission::hoursForStudent((int) $student->id, 'approved');
+            $totalLogged = (float) $logs->sum('hours')
+                + OjtDtrSubmission::hoursForStudent((int) $student->id, 'pending')
+                + OjtDtrSubmission::hoursForStudent((int) $student->id, 'approved')
+                + OjtDtrSubmission::hoursForStudent((int) $student->id, 'rejected');
             $percent = $requiredHours > 0 ? ($approved / $requiredHours) * 100 : 0;
             $status = $approved >= $requiredHours && $requiredHours > 0
                 ? 'completed'
@@ -401,10 +410,17 @@ class OjtLogController extends Controller
                 : null
         );
 
-        $totalLogged = (float) $logs->sum('hours');
-        $totalApproved = (float) $logs->where('status', 'approved')->sum('hours');
-        $totalPending = (float) $logs->where('status', 'pending')->sum('hours');
-        $totalRejected = (float) $logs->where('status', 'rejected')->sum('hours');
+        $studentId = (int) $student->id;
+        $totalLogged = (float) $logs->sum('hours')
+            + OjtDtrSubmission::hoursForStudent($studentId, 'pending')
+            + OjtDtrSubmission::hoursForStudent($studentId, 'approved')
+            + OjtDtrSubmission::hoursForStudent($studentId, 'rejected');
+        $totalApproved = (float) $logs->where('status', 'approved')->sum('hours')
+            + OjtDtrSubmission::hoursForStudent($studentId, 'approved');
+        $totalPending = (float) $logs->where('status', 'pending')->sum('hours')
+            + OjtDtrSubmission::hoursForStudent($studentId, 'pending');
+        $totalRejected = (float) $logs->where('status', 'rejected')->sum('hours')
+            + OjtDtrSubmission::hoursForStudent($studentId, 'rejected');
 
         return [
             'totalLogged' => round($totalLogged, 2),

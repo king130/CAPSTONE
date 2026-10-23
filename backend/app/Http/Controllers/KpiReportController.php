@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Application;
 use App\Models\ApplicationAssessment;
 use App\Models\Contract;
+use App\Models\OjtDtrSubmission;
 use App\Models\OjtLog;
 use App\Models\Student;
 use App\Services\PermissionGate;

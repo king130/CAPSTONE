@@ -12,6 +12,8 @@ export interface TenantPermission {
   id: string
   key: string
   description?: string | null
+  /** Stored keys that mean the same capability, including this key. */
+  aliases?: string[]
 }
 
 export interface TenantRole {
@@ -57,12 +59,18 @@ export async function listManageableTenants(): Promise<TenantSummary[]> {
 }
 
 export async function createManagedAccount(payload: {
-  type: 'company' | 'school'
+  type: 'company' | 'school' | 'municipal_hall'
   name: string
   adminName: string
   email: string
   plan?: string
   billingCycle?: string
+  lguType?: string
+  locationArea?: string
+  cityMunicipality?: string
+  barangay?: string
+  representativePosition?: string
+  contactNumber?: string
 }): Promise<{ account: TenantSummary; temporaryPassword: string }> {
   return apiFetch<{ account: TenantSummary; temporaryPassword: string }>('/rbac/tenants', {
     method: 'POST',

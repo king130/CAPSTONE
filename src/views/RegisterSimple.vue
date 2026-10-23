@@ -5,6 +5,7 @@ import {
   BriefcaseBusiness,
   CheckCircle2,
   GraduationCap,
+  Landmark,
   LoaderCircle,
   School,
 } from 'lucide-vue-next'
@@ -29,8 +30,15 @@ import { useToast } from '@/composables/useToast'
 import AuthLayout from '@/layouts/AuthLayout.vue'
 import { setToken } from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
+import { resolveAuthenticatedRegisterRedirect } from '@/utils/registerEntryGuard'
 
-type RegisterRole = 'school' | 'company'
+type RegisterRole = 'school' | 'company' | 'municipal_hall'
+
+const lguTypeOptions = [
+  { value: 'municipality', label: 'Municipality' },
+  { value: 'city', label: 'City' },
+  { value: 'other_office', label: 'Other office' },
+] as const
 
 const industryOptions = [
   'Technology',
@@ -70,7 +78,15 @@ interface CompanyRegisterForm extends CommonRegisterFields {
   industry: string
 }
 
-type RegisterForm = SchoolRegisterForm | CompanyRegisterForm
+interface MunicipalHallRegisterForm extends CommonRegisterFields {
+  role: 'municipal_hall'
+  officialName: string
+  lguType: string
+  representativeName: string
+  representativePosition: string
+}
+
+type RegisterForm = SchoolRegisterForm | CompanyRegisterForm | MunicipalHallRegisterForm
 
 const router = useRouter()
 const route = useRoute()
@@ -82,7 +98,8 @@ let successRedirectTimer: number | null = null
 
 const selectedPlanQuery = computed(() => {
   const raw = String(route.query.plan || '').trim().toLowerCase()
-  if (['free', 'standard', 'premium'].includes(raw)) {
+  // Free is legacy and not selectable for new organizations (Phase H).
+  if (['standard', 'premium'].includes(raw)) {
     return raw
   }
   return null
@@ -128,8 +145,19 @@ const companySchema = z.object({
   industry: z.string().min(1, 'Select an industry.'),
 })
 
+const municipalHallSchema = z.object({
+  role: z.literal('municipal_hall'),
+  ...commonSchemaFields,
+  officialName: z.string().trim().min(2, 'Official municipal / LGU office name is required.'),
+  lguType: z.enum(['municipality', 'city', 'other_office'], {
+    required_error: 'Select the LGU type.',
+  }),
+  representativeName: z.string().trim().min(2, 'Authorized representative name is required.'),
+  representativePosition: z.string().trim().min(2, 'Representative position is required.'),
+})
+
 const registerSchema = toTypedSchema(
-  z.discriminatedUnion('role', [schoolSchema, companySchema]).superRefine((data, ctx) => {
+  z.discriminatedUnion('role', [schoolSchema, companySchema, municipalHallSchema]).superRefine((data, ctx) => {
     if (data.password !== data.confirmPassword) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -165,36 +193,53 @@ const barangayOptions = computed(() => caviteBarangaysByLocation[values.location
 const routeRole = computed<RegisterRole | null>(() => {
   if (route.name === 'register-school') return 'school'
   if (route.name === 'register-company') return 'company'
+  if (route.name === 'register-municipal-hall') return 'municipal_hall'
   return null
 })
 
-const roleIntro = computed(() =>
-  selectedRole.value === 'school'
-    ? {
-        eyebrow: 'School Setup',
-        title: 'Create a school account built for coordinators and student-managed onboarding.',
-        description:
-          'Schools create student accounts, review endorsement requests, and track placements from one workspace.',
-      }
-    : {
-        eyebrow: 'Company Setup',
-        title: 'Create a company account ready for internship posting and school coordination.',
-        description:
-          'Companies register once to post internship roles, review endorsed students, and manage applicant decisions.',
-      },
-)
+const roleIntro = computed(() => {
+  if (selectedRole.value === 'school') {
+    return {
+      eyebrow: 'School Setup',
+      title: 'Create a school account built for coordinators and student-managed onboarding.',
+      description:
+        'Schools create student accounts, review endorsement requests, and track placements from one workspace.',
+    }
+  }
+  if (selectedRole.value === 'municipal_hall') {
+    return {
+      eyebrow: 'Municipal Hall Setup',
+      title: 'Register a Cavite LGU office that hosts OJT students.',
+      description:
+        'Municipal halls post opportunities, review endorsed students, and approve DTRs like company hosts — with LGU verification documents.',
+    }
+  }
+  return {
+    eyebrow: 'Company Setup',
+    title: 'Create a company account ready for internship posting and school coordination.',
+    description:
+      'Companies register once to post internship roles, review endorsed students, and manage applicant decisions.',
+  }
+})
 
-const roleHighlights = computed(() =>
-  selectedRole.value === 'school'
-    ? [
-        'Create student accounts and manage intern access',
-        'Review endorsement requests before students are placed',
-      ]
-    : [
-        'Publish internship roles and accept endorsed students',
-        'Coordinate requirements, agreements, and applicant decisions',
-      ],
-)
+const roleHighlights = computed(() => {
+  if (selectedRole.value === 'school') {
+    return [
+      'Create student accounts and manage intern access',
+      'Review endorsement requests before students are placed',
+    ]
+  }
+  if (selectedRole.value === 'municipal_hall') {
+    return [
+      'Publish OJT openings for your LGU office',
+      'Approve DTRs and track assigned students after verification',
+    ]
+  }
+  return [
+    'Publish internship roles and accept endorsed students',
+    'Coordinate requirements, agreements, and applicant decisions',
+  ]
+})
 
 watch(
   () => values.locationArea,
@@ -211,6 +256,11 @@ watch(
     if (role === 'company') {
       if (!(values as CompanyRegisterForm).companyName) setFieldValue('companyName', '')
       if (!(values as CompanyRegisterForm).industry) setFieldValue('industry', '')
+    } else if (role === 'municipal_hall') {
+      if (!(values as MunicipalHallRegisterForm).officialName) setFieldValue('officialName', '')
+      if (!(values as MunicipalHallRegisterForm).lguType) setFieldValue('lguType', '')
+      if (!(values as MunicipalHallRegisterForm).representativeName) setFieldValue('representativeName', '')
+      if (!(values as MunicipalHallRegisterForm).representativePosition) setFieldValue('representativePosition', '')
     } else {
       if (!(values as SchoolRegisterForm).schoolName) setFieldValue('schoolName', '')
       if (!(values as SchoolRegisterForm).contactPerson) setFieldValue('contactPerson', '')
@@ -234,37 +284,10 @@ onMounted(() => {
     setFieldValue('role', routeRole.value)
   }
 
-  if (authStore.user) {
-    if (authStore.user.mustChangePassword) {
-      router.replace('/change-password')
-      return
-    }
-
-    const role = authStore.user?.role
-    if (role && role !== 'guest' && role !== null) {
-      const status = String(authStore.user?.verificationStatus || 'pending').toLowerCase()
-      if (
-        (role === 'school' || role === 'company') &&
-        (status === 'pending' || status === 'rejected')
-      ) {
-        router.replace('/organization-verification')
-        return
-      }
-
-      const dash =
-        role === 'admin'
-          ? '/admin/overview'
-          : role === 'company'
-            ? '/dashboard'
-            : role === 'school'
-              ? '/school'
-              : role === 'student'
-                ? '/intern'
-                : '/opportunities'
-      router.replace(dash)
-    } else {
-      router.replace('/opportunities')
-    }
+  // Guests may complete organization registration. Other authenticated roles are redirected.
+  const redirectTo = resolveAuthenticatedRegisterRedirect(authStore.user)
+  if (redirectTo) {
+    void router.replace(redirectTo)
   }
 })
 
@@ -281,41 +304,68 @@ const onSubmit = handleSubmit(async (formValues) => {
   const phone = normalizePhone(formValues.contactPhone)
 
   try {
-    const payload: Parameters<typeof authStore.register>[0] =
-      formValues.role === 'school'
-        ? {
-            fullName: formValues.fullName,
-            email: formValues.email,
-            password: formValues.password,
-            role: 'school',
-            profile: {
-              institutionName: formValues.schoolName,
-              schoolAddress: address,
-              contactPersonName: formValues.contactPerson,
-              position: formValues.contactPerson,
-              contactNumber: phone,
-              locationArea: formValues.locationArea,
-              barangay: formValues.barangay,
-            },
-            subscriptionPlan: selectedPlanQuery.value ?? undefined,
-            billingCycle: billingCycleQuery.value,
-          }
-        : {
-            fullName: formValues.fullName,
-            email: formValues.email,
-            password: formValues.password,
-            role: 'company',
-            profile: {
-              companyName: formValues.companyName,
-              industryType: formValues.industry,
-              companyAddress: address,
-              contactNumber: phone,
-              locationArea: formValues.locationArea,
-              barangay: formValues.barangay,
-            },
-            subscriptionPlan: selectedPlanQuery.value ?? undefined,
-            billingCycle: billingCycleQuery.value,
-          }
+    let payload: Parameters<typeof authStore.register>[0]
+    if (formValues.role === 'school') {
+      payload = {
+        fullName: formValues.fullName,
+        email: formValues.email,
+        password: formValues.password,
+        role: 'school',
+        profile: {
+          institutionName: formValues.schoolName,
+          schoolAddress: address,
+          contactPersonName: formValues.contactPerson,
+          position: formValues.contactPerson,
+          contactNumber: phone,
+          locationArea: formValues.locationArea,
+          barangay: formValues.barangay,
+        },
+        subscriptionPlan: selectedPlanQuery.value ?? undefined,
+        billingCycle: billingCycleQuery.value,
+      }
+    } else if (formValues.role === 'municipal_hall') {
+      payload = {
+        fullName: formValues.fullName,
+        email: formValues.email,
+        password: formValues.password,
+        role: 'municipal_hall',
+        profile: {
+          officialName: formValues.officialName,
+          companyName: formValues.officialName,
+          lguType: formValues.lguType,
+          representativeName: formValues.representativeName,
+          representativePosition: formValues.representativePosition,
+          contactPersonName: formValues.representativeName,
+          contactPersonTitle: formValues.representativePosition,
+          companyAddress: address,
+          officialAddress: address,
+          contactNumber: phone,
+          officialEmail: formValues.email,
+          locationArea: formValues.locationArea,
+          cityMunicipality: formValues.locationArea,
+          barangay: formValues.barangay,
+        },
+        subscriptionPlan: selectedPlanQuery.value ?? undefined,
+        billingCycle: billingCycleQuery.value,
+      }
+    } else {
+      payload = {
+        fullName: formValues.fullName,
+        email: formValues.email,
+        password: formValues.password,
+        role: 'company',
+        profile: {
+          companyName: formValues.companyName,
+          industryType: formValues.industry,
+          companyAddress: address,
+          contactNumber: phone,
+          locationArea: formValues.locationArea,
+          barangay: formValues.barangay,
+        },
+        subscriptionPlan: selectedPlanQuery.value ?? undefined,
+        billingCycle: billingCycleQuery.value,
+      }
+    }
 
     await authStore.register(payload)
     authStore.setUserProfile(null)
@@ -343,26 +393,26 @@ const onSubmit = handleSubmit(async (formValues) => {
       {{
         routeRole
           ? roleIntro.title
-          : 'Create a school or company account with the right structure from the start.'
+          : 'Create a school, company, or municipal hall account with the right structure from the start.'
       }}
     </template>
     <template #left-description>
       {{
         routeRole
           ? roleIntro.description
-          : 'Schools manage student credentials, while companies create their own account to post roles and review applicants.'
+          : 'Schools manage student credentials. Companies and municipal halls register to host OJT students, post openings, and review applicants.'
       }}
     </template>
     <template #left-highlights>
       <div class="mb-2 grid gap-3 sm:grid-cols-2">
-        <div class="rounded-2xl border border-white/60 bg-white/65 p-4 backdrop-blur">
-          <p class="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">School Setup</p>
-          <p class="mt-2 text-lg font-semibold text-slate-900">Control student access</p>
-          <p class="mt-2 text-sm leading-5 text-slate-600">
+        <div class="rounded-2xl border border-border bg-card/65 p-4 backdrop-blur">
+          <p class="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">School Setup</p>
+          <p class="mt-2 text-lg font-semibold text-foreground">Control student access</p>
+          <p class="mt-2 text-sm leading-5 text-muted-foreground">
             Keep student records aligned by creating and managing their credentials inside the school workflow.
           </p>
         </div>
-        <div class="rounded-2xl border border-white/60 bg-slate-900/90 p-4 text-white shadow-lg shadow-slate-900/10">
+        <div class="rounded-2xl border border-border bg-slate-900/90 p-4 text-white shadow-lg shadow-slate-900/10">
           <p class="text-xs font-medium uppercase tracking-[0.18em] text-sky-100">Company Setup</p>
           <p class="mt-2 text-lg font-semibold">Publish and coordinate</p>
           <p class="mt-2 text-sm leading-5 text-sky-100/90">
@@ -370,8 +420,8 @@ const onSubmit = handleSubmit(async (formValues) => {
           </p>
         </div>
       </div>
-      <div v-if="routeRole" class="rounded-2xl border border-white/60 bg-white/70 p-4 text-sm text-slate-700 backdrop-blur">
-        <p class="font-semibold text-slate-900">{{ roleIntro.eyebrow }}</p>
+      <div v-if="routeRole" class="rounded-2xl border border-border bg-card/70 p-4 text-sm text-muted-foreground backdrop-blur">
+        <p class="font-semibold text-foreground">{{ roleIntro.eyebrow }}</p>
         <ul class="mt-3 space-y-2">
           <li v-for="item in roleHighlights" :key="item" class="flex items-start gap-2">
             <CheckCircle2 class="mt-0.5 h-4 w-4 shrink-0 text-sky-700" />
@@ -382,38 +432,38 @@ const onSubmit = handleSubmit(async (formValues) => {
     </template>
     <template #left-form>
       <div class="space-y-4">
-        <div class="rounded-2xl bg-white/85 p-4">
-          <p class="text-sm font-medium text-slate-500">Account Basics</p>
-          <p class="mt-2 text-xl font-semibold text-slate-900">Set up the essentials</p>
-          <p class="mt-2 text-sm text-slate-600">
+        <div class="rounded-2xl bg-card/85 p-4">
+          <p class="text-sm font-medium text-muted-foreground">Account Basics</p>
+          <p class="mt-2 text-xl font-semibold text-foreground">Set up the essentials</p>
+          <p class="mt-2 text-sm text-muted-foreground">
             Choose your organization type and enter the main account details here first.
           </p>
         </div>
 
         <FormField v-slot="{ errorMessage: fieldError }" name="role">
           <FormItem>
-            <FormLabel class="text-slate-700">Choose account type</FormLabel>
+            <FormLabel class="text-muted-foreground">Choose account type</FormLabel>
             <FormControl>
-              <div class="grid gap-2.5 sm:grid-cols-2" role="group" aria-label="Account type">
+              <div class="grid gap-2.5 sm:grid-cols-3" role="group" aria-label="Account type">
                 <button
                   type="button"
                   class="rounded-2xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
                   :class="
                     selectedRole === 'school'
-                      ? 'border-sky-500 bg-sky-50 shadow-[0_12px_30px_rgba(14,116,144,0.12)]'
-                      : 'border-slate-200 bg-white/80 hover:border-slate-300 hover:bg-white'
+                      ? 'border-sky-500 bg-accent shadow-[0_12px_30px_rgba(14,116,144,0.12)]'
+                      : 'border-border bg-card/80 hover:border-border hover:bg-accent'
                   "
                   :aria-pressed="selectedRole === 'school'"
-                  :disabled="routeRole === 'company' || submitting || !!successMessage"
+                  :disabled="routeRole === 'company' || routeRole === 'municipal_hall' || submitting || !!successMessage"
                   @click="setFieldValue('role', 'school')"
                 >
                   <div class="flex items-center gap-3">
-                    <div class="rounded-xl bg-sky-100 p-2 text-sky-700">
+                    <div class="rounded-xl bg-sky-100 p-2 text-sky-700 dark:bg-sky-950 dark:text-sky-200">
                       <School class="h-5 w-5" />
                     </div>
                     <div>
-                      <p class="font-semibold text-slate-950">School</p>
-                      <p class="text-[11px] text-slate-600">Manage student access</p>
+                      <p class="font-semibold text-foreground">School</p>
+                      <p class="text-[11px] text-muted-foreground">Manage student access</p>
                     </div>
                   </div>
                 </button>
@@ -424,25 +474,65 @@ const onSubmit = handleSubmit(async (formValues) => {
                   :class="
                     selectedRole === 'company'
                       ? 'border-slate-900 bg-slate-900 text-white shadow-[0_12px_30px_rgba(15,23,42,0.18)]'
-                      : 'border-slate-200 bg-white/80 hover:border-slate-300 hover:bg-white'
+                      : 'border-border bg-card/80 hover:border-border hover:bg-accent'
                   "
                   :aria-pressed="selectedRole === 'company'"
-                  :disabled="routeRole === 'school' || submitting || !!successMessage"
+                  :disabled="routeRole === 'school' || routeRole === 'municipal_hall' || submitting || !!successMessage"
                   @click="setFieldValue('role', 'company')"
                 >
                   <div class="flex items-center gap-3">
                     <div
                       class="rounded-xl p-2"
-                      :class="selectedRole === 'company' ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-700'"
+                      :class="selectedRole === 'company' ? 'bg-white/15 text-white' : 'bg-muted text-muted-foreground'"
                     >
                       <BriefcaseBusiness class="h-5 w-5" />
                     </div>
                     <div>
-                      <p class="font-semibold" :class="selectedRole === 'company' ? 'text-white' : 'text-slate-950'">
+                      <p class="font-semibold" :class="selectedRole === 'company' ? 'text-white' : 'text-foreground'">
                         Company
                       </p>
-                      <p class="text-[11px]" :class="selectedRole === 'company' ? 'text-slate-200' : 'text-slate-600'">
+                      <p class="text-[11px]" :class="selectedRole === 'company' ? 'text-slate-200' : 'text-muted-foreground'">
                         Post and coordinate
+                      </p>
+                    </div>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  class="rounded-2xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 sm:col-span-1"
+                  :class="
+                    selectedRole === 'municipal_hall'
+                      ? 'border-emerald-700 bg-emerald-800 text-white shadow-[0_12px_30px_rgba(6,95,70,0.2)]'
+                      : 'border-border bg-card/80 hover:border-border hover:bg-accent'
+                  "
+                  :aria-pressed="selectedRole === 'municipal_hall'"
+                  :disabled="routeRole === 'school' || routeRole === 'company' || submitting || !!successMessage"
+                  @click="setFieldValue('role', 'municipal_hall')"
+                >
+                  <div class="flex items-center gap-3">
+                    <div
+                      class="rounded-xl p-2"
+                      :class="
+                        selectedRole === 'municipal_hall'
+                          ? 'bg-white/15 text-white'
+                          : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200'
+                      "
+                    >
+                      <Landmark class="h-5 w-5" />
+                    </div>
+                    <div>
+                      <p
+                        class="font-semibold"
+                        :class="selectedRole === 'municipal_hall' ? 'text-white' : 'text-foreground'"
+                      >
+                        Municipal Hall
+                      </p>
+                      <p
+                        class="text-[11px]"
+                        :class="selectedRole === 'municipal_hall' ? 'text-emerald-100' : 'text-muted-foreground'"
+                      >
+                        Cavite LGU host
                       </p>
                     </div>
                   </div>
@@ -453,7 +543,7 @@ const onSubmit = handleSubmit(async (formValues) => {
           </FormItem>
         </FormField>
 
-        <div class="grid gap-3 rounded-2xl border border-white/60 bg-white/70 p-4 backdrop-blur">
+        <div class="grid gap-3 rounded-2xl border border-border bg-card/70 p-4 backdrop-blur">
           <FormField v-slot="{ componentField, errorMessage: fieldError }" name="fullName">
             <FormItem>
               <FormLabel for="fullName">
@@ -541,12 +631,74 @@ const onSubmit = handleSubmit(async (formValues) => {
     </template>
     <template #title>Register Your Organization</template>
     <template #description>
-      Create an account for a school or company in Cavite. Student accounts are created and managed by schools.
+      Create an account for a school, company, or municipal hall in Cavite. Student accounts are created and managed by
+      schools.
     </template>
 
-    <Card class="border-slate-200/80 bg-white/95 shadow-lg shadow-slate-200/70">
+    <Card class="border-border bg-card/95 shadow-lg shadow-sm">
       <CardContent class="space-y-4 p-4 sm:p-5">
-        <Alert v-if="successMessage" class="flex items-start gap-3 border-emerald-200 bg-emerald-50 text-emerald-700">
+        <!-- AuthLayout hides the left chooser below xl; keep role selection reachable on mobile. -->
+        <div v-if="!routeRole" class="space-y-2 xl:hidden" role="group" aria-label="Account type">
+          <p class="text-sm font-medium text-foreground">Choose account type</p>
+          <div class="grid gap-2">
+            <button
+              type="button"
+              class="rounded-xl border p-3 text-left transition"
+              :class="
+                selectedRole === 'school'
+                  ? 'border-sky-500 bg-accent'
+                  : 'border-border bg-background hover:bg-accent'
+              "
+              :aria-pressed="selectedRole === 'school'"
+              :disabled="submitting || !!successMessage"
+              @click="setFieldValue('role', 'school')"
+            >
+              <p class="font-semibold text-foreground">School</p>
+              <p class="text-xs text-muted-foreground">Manage student access</p>
+            </button>
+            <button
+              type="button"
+              class="rounded-xl border p-3 text-left transition"
+              :class="
+                selectedRole === 'company'
+                  ? 'border-slate-900 bg-slate-900 text-white'
+                  : 'border-border bg-background hover:bg-accent'
+              "
+              :aria-pressed="selectedRole === 'company'"
+              :disabled="submitting || !!successMessage"
+              @click="setFieldValue('role', 'company')"
+            >
+              <p class="font-semibold" :class="selectedRole === 'company' ? 'text-white' : 'text-foreground'">Company</p>
+              <p class="text-xs" :class="selectedRole === 'company' ? 'text-slate-200' : 'text-muted-foreground'">
+                Post and coordinate
+              </p>
+            </button>
+            <button
+              type="button"
+              class="rounded-xl border p-3 text-left transition"
+              :class="
+                selectedRole === 'municipal_hall'
+                  ? 'border-emerald-700 bg-emerald-800 text-white'
+                  : 'border-border bg-background hover:bg-accent'
+              "
+              :aria-pressed="selectedRole === 'municipal_hall'"
+              :disabled="submitting || !!successMessage"
+              @click="setFieldValue('role', 'municipal_hall')"
+            >
+              <p class="font-semibold" :class="selectedRole === 'municipal_hall' ? 'text-white' : 'text-foreground'">
+                Municipal Hall
+              </p>
+              <p
+                class="text-xs"
+                :class="selectedRole === 'municipal_hall' ? 'text-emerald-100' : 'text-muted-foreground'"
+              >
+                Cavite LGU host
+              </p>
+            </button>
+          </div>
+        </div>
+
+        <Alert v-if="successMessage" class="flex items-start gap-3 border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
           <CheckCircle2 class="mt-0.5 h-4 w-4 shrink-0" />
           <div>{{ successMessage }}</div>
         </Alert>
@@ -558,7 +710,7 @@ const onSubmit = handleSubmit(async (formValues) => {
 
         <Alert
           v-if="cameFromSubscription && selectedPlanQuery"
-          class="flex items-start gap-3 border-sky-200 bg-sky-50 text-sky-800"
+          class="flex items-start gap-3 border-sky-200 bg-accent text-sky-800"
         >
           <CheckCircle2 class="mt-0.5 h-4 w-4 shrink-0" />
           <div>
@@ -568,7 +720,7 @@ const onSubmit = handleSubmit(async (formValues) => {
         </Alert>
 
         <form :id="registerFormId" class="space-y-4" novalidate @submit="onSubmit">
-          <div class="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950">
+          <div class="rounded-2xl border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 px-3 py-2.5 text-sm text-amber-950">
             <div class="flex items-center gap-2 font-semibold">
               <GraduationCap class="h-4 w-4" />
               <span>Student accounts are not created here</span>
@@ -578,15 +730,23 @@ const onSubmit = handleSubmit(async (formValues) => {
             </p>
           </div>
 
-          <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-3.5">
-            <p class="text-sm font-semibold text-slate-900">
-              {{ selectedRole === 'school' ? 'School details' : 'Company details' }}
+          <div class="rounded-2xl border border-border bg-muted/80 p-3.5">
+            <p class="text-sm font-semibold text-foreground">
+              {{
+                selectedRole === 'school'
+                  ? 'School details'
+                  : selectedRole === 'municipal_hall'
+                    ? 'Municipal Hall details'
+                    : 'Company details'
+              }}
             </p>
-            <p class="mt-1 text-[11px] leading-4 text-slate-600">
+            <p class="mt-1 text-[11px] leading-4 text-muted-foreground">
               {{
                 selectedRole === 'school'
                   ? 'Official school information used for student management and endorsements.'
-                  : 'Business details that applicants and partner schools will use for coordination.'
+                  : selectedRole === 'municipal_hall'
+                    ? 'Official LGU information. After registration, upload authorization, ID, and office proof for verification.'
+                    : 'Business details that applicants and partner schools will use for coordination.'
               }}
             </p>
 
@@ -621,6 +781,76 @@ const onSubmit = handleSubmit(async (formValues) => {
                       />
                     </FormControl>
                     <FormMessage :message="fieldError || errors.contactPerson" />
+                  </FormItem>
+                </FormField>
+              </template>
+
+              <template v-else-if="selectedRole === 'municipal_hall'">
+                <FormField v-slot="{ componentField, errorMessage: fieldError }" name="officialName">
+                  <FormItem class="sm:col-span-2">
+                    <FormLabel for="officialName">Official name of the municipality / LGU office</FormLabel>
+                    <FormControl>
+                      <Input
+                        id="officialName"
+                        placeholder="e.g. Municipality of Naic — Municipal Hall"
+                        :disabled="submitting || !!successMessage"
+                        v-bind="componentField"
+                        @update:modelValue="setFieldValue('officialName', $event)"
+                      />
+                    </FormControl>
+                    <FormMessage :message="fieldError || errors.officialName" />
+                  </FormItem>
+                </FormField>
+
+                <FormField v-slot="{ errorMessage: fieldError }" name="lguType">
+                  <FormItem>
+                    <FormLabel for="lguType">LGU type</FormLabel>
+                    <FormControl>
+                      <Select
+                        id="lguType"
+                        :model-value="values.role === 'municipal_hall' ? values.lguType : ''"
+                        :disabled="submitting || !!successMessage"
+                        @update:modelValue="setFieldValue('lguType', String($event))"
+                      >
+                        <option value="" disabled>Select LGU type</option>
+                        <option v-for="option in lguTypeOptions" :key="option.value" :value="option.value">
+                          {{ option.label }}
+                        </option>
+                      </Select>
+                    </FormControl>
+                    <FormMessage :message="fieldError || errors.lguType" />
+                  </FormItem>
+                </FormField>
+
+                <FormField v-slot="{ componentField, errorMessage: fieldError }" name="representativeName">
+                  <FormItem>
+                    <FormLabel for="representativeName">Authorized representative</FormLabel>
+                    <FormControl>
+                      <Input
+                        id="representativeName"
+                        placeholder="Full name"
+                        :disabled="submitting || !!successMessage"
+                        v-bind="componentField"
+                        @update:modelValue="setFieldValue('representativeName', $event)"
+                      />
+                    </FormControl>
+                    <FormMessage :message="fieldError || errors.representativeName" />
+                  </FormItem>
+                </FormField>
+
+                <FormField v-slot="{ componentField, errorMessage: fieldError }" name="representativePosition">
+                  <FormItem class="sm:col-span-2">
+                    <FormLabel for="representativePosition">Representative position</FormLabel>
+                    <FormControl>
+                      <Input
+                        id="representativePosition"
+                        placeholder="e.g. Municipal Administrator, HR Officer"
+                        :disabled="submitting || !!successMessage"
+                        v-bind="componentField"
+                        @update:modelValue="setFieldValue('representativePosition', $event)"
+                      />
+                    </FormControl>
+                    <FormMessage :message="fieldError || errors.representativePosition" />
                   </FormItem>
                 </FormField>
               </template>
@@ -756,14 +986,16 @@ const onSubmit = handleSubmit(async (formValues) => {
                   ? 'Creating account…'
                   : selectedRole === 'school'
                     ? 'Create School Account'
-                    : 'Create Company Account'
+                    : selectedRole === 'municipal_hall'
+                      ? 'Create Municipal Hall Account'
+                      : 'Create Company Account'
               }}
             </span>
           </Button>
 
-          <p class="text-center text-sm text-slate-600">
+          <p class="text-center text-sm text-muted-foreground">
             Already have an account?
-            <RouterLink to="/login" class="font-semibold text-slate-950 hover:text-slate-700"> Login </RouterLink>
+            <RouterLink to="/login" class="font-semibold text-foreground hover:text-muted-foreground"> Login </RouterLink>
           </p>
         </form>
       </CardContent>

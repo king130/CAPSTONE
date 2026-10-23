@@ -1,27 +1,46 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { AlertTriangle, Clock3, LogOut, RefreshCw } from 'lucide-vue-next'
+import { AlertTriangle, Clock3, LogOut, RefreshCw, ShieldCheck } from 'lucide-vue-next'
 
+import OrganizationVerificationDocumentsPanel from '@/components/OrganizationVerificationDocumentsPanel.vue'
+import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
 import Card from '@/components/ui/card/Card.vue'
 import CardContent from '@/components/ui/card/CardContent.vue'
 import { useToast } from '@/composables/useToast'
 import MainLayout from '@/layouts/MainLayout.vue'
-import type { LayoutNavItem } from '@/layouts/navigation'
+import { pendingOrganizationNavItems, type LayoutRole } from '@/layouts/navigation'
+import {
+  organizationTypeLabel,
+  verificationStatusLabel,
+  type OrganizationVerificationMeta,
+} from '@/services/organizationVerification'
 import { useAuthStore } from '@/stores/auth'
 
 const authStore = useAuthStore()
 const router = useRouter()
 const { success, error } = useToast()
 
-const role = computed(() => (authStore.user?.role === 'company' ? 'company' : 'school'))
+const organizationType = computed(() =>
+  String(authStore.user?.activeOrganization?.type || authStore.user?.profile?.organizationType || '').toLowerCase(),
+)
+const isMunicipalHall = computed(() => organizationType.value === 'municipal_hall')
+const isHost = computed(() => organizationType.value === 'company' || isMunicipalHall.value)
+const role = computed<LayoutRole>(() => (isHost.value ? 'company' : 'school'))
 const status = computed(() => String(authStore.user?.verificationStatus || 'pending').toLowerCase())
 const isRejected = computed(() => status.value === 'rejected')
+const isVerified = computed(() => status.value === 'approved')
+const isUnderReview = computed(() => status.value === 'under_review')
 const orgName = computed(() => {
   const profile = authStore.user?.profile || {}
   if (role.value === 'school') {
     return String(profile.institutionName || authStore.user?.activeOrganization?.name || 'Your school')
+  }
+  if (isMunicipalHall.value) {
+    return String(
+      profile.officialName || profile.companyName || authStore.user?.activeOrganization?.name || 'Your municipal hall',
+    )
   }
   return String(profile.companyName || authStore.user?.activeOrganization?.name || 'Your company')
 })
@@ -35,68 +54,106 @@ const rejectionReason = computed(() => {
   )
 })
 
-const navItems = computed<LayoutNavItem[]>(() => [
-  { key: 'verification', label: 'Verification', icon: 'clock', to: { name: 'organization-verification' } },
-  { key: 'notifications', label: 'Notifications', icon: 'file-text', to: { name: 'notifications' } },
-  { key: 'settings', label: 'Settings', icon: 'settings', to: { name: 'settings' } },
-])
+const panelRef = ref<{ reload: () => Promise<void> } | null>(null)
+
+const statusBadgeVariant = computed(() => {
+  if (isVerified.value) return 'success' as const
+  if (isRejected.value) return 'destructive' as const
+  return 'warning' as const
+})
+
+async function onDocsRefreshed(meta: OrganizationVerificationMeta) {
+  if (meta.verificationStatus && meta.verificationStatus !== status.value) {
+    await authStore.refreshUser()
+  }
+}
 
 async function refreshStatus() {
   try {
     const profile = await authStore.refreshUser()
     const next = String(profile?.verificationStatus || '').toLowerCase()
     if (next === 'approved') {
-      success('Organization approved.', {
+      success('Organization verified.', {
         description: 'You can now use organization features.',
       })
-      await router.replace(role.value === 'company' ? '/dashboard' : '/school')
+      await router.replace(isHost.value ? '/dashboard' : '/school')
       return
     }
+    await panelRef.value?.reload()
     success('Status refreshed.')
   } catch (caughtError) {
     error(caughtError, { fallback: 'Unable to refresh verification status.' })
   }
 }
 
+/** Stale sessions keep pending after admin approve until profile is re-fetched. */
+onMounted(async () => {
+  try {
+    const profile = await authStore.refreshUser()
+    const next = String(profile?.verificationStatus || '').toLowerCase()
+    if (next === 'approved') {
+      await router.replace(isHost.value ? '/dashboard' : '/school')
+    }
+  } catch {
+    /* keep verification page if refresh fails */
+  }
+})
+
 async function logout() {
   await authStore.logout()
   await router.replace('/login')
 }
-
-onMounted(() => {
-  void refreshStatus()
-})
 </script>
 
 <template>
-  <MainLayout :role="role" title="Organization Verification" active-item="verification" :nav-items="navItems">
+  <MainLayout
+    :role="role"
+    title="Organization Verification"
+    active-item="verification"
+    :nav-items="pendingOrganizationNavItems"
+  >
     <div class="mx-auto flex min-h-[70vh] max-w-3xl items-center justify-center px-4 py-10">
       <Card class="w-full border-border/80 shadow-sm">
-        <CardContent class="space-y-6 p-8">
+        <CardContent class="space-y-6 p-6 sm:p-8">
           <div class="flex items-start gap-4">
             <div
-              class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl"
-              :class="isRejected ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'"
+              class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-muted text-foreground"
             >
-              <AlertTriangle v-if="isRejected" class="h-6 w-6" />
+              <ShieldCheck v-if="isVerified" class="h-6 w-6" />
+              <AlertTriangle v-else-if="isRejected" class="h-6 w-6" />
               <Clock3 v-else class="h-6 w-6" />
             </div>
             <div class="space-y-2">
-              <p class="text-sm font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                {{ isRejected ? 'Verification rejected' : 'Verification pending' }}
-              </p>
+              <div class="flex flex-wrap items-center gap-2">
+                <p class="text-sm font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+                  {{ organizationTypeLabel(organizationType) }} verification
+                </p>
+                <Badge :variant="statusBadgeVariant">{{ verificationStatusLabel(status) }}</Badge>
+              </div>
               <h1 class="text-2xl font-semibold text-foreground">
-                {{ isRejected ? `${orgName} was not approved` : `${orgName} is awaiting admin verification` }}
+                <template v-if="isVerified">{{ orgName }} is verified</template>
+                <template v-else-if="isRejected">{{ orgName }} was not approved</template>
+                <template v-else-if="isUnderReview">{{ orgName }} is under review</template>
+                <template v-else>{{ orgName }} needs verification documents</template>
               </h1>
               <p class="text-sm leading-6 text-muted-foreground">
                 <template v-if="isRejected">
-                  Your organization cannot access protected organization features while verification remains rejected.
-                  You can still manage your account settings, review notifications, and contact the platform administrator.
+                  Review the reason below, fix or replace the documents that need attention, then submit again for
+                  review.
+                </template>
+                <template v-else-if="isUnderReview">
+                  An administrator is reviewing your uploaded documents. You can still manage account settings and
+                  notifications while you wait.
+                </template>
+                <template v-else-if="isVerified">
+                  Your {{ organizationTypeLabel(organizationType).toLowerCase() }} can use protected features. You may
+                  optionally upload any missing documents below.
                 </template>
                 <template v-else>
-                  An administrator still needs to review your organization before you can manage internships, students,
-                  agreements, and other organization tools. You can still update your profile, change your password, and
-                  check notifications while you wait.
+                  Upload the required documents for your
+                  {{ organizationTypeLabel(organizationType).toLowerCase() }} before an administrator can verify the
+                  account. Verification is granted only by an administrator — not automatically when documents are
+                  uploaded.
                 </template>
               </p>
             </div>
@@ -104,21 +161,27 @@ onMounted(() => {
 
           <div
             v-if="isRejected"
-            class="rounded-2xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-800"
+            class="rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-4 text-sm text-foreground"
           >
-            <p class="font-semibold">Rejection reason</p>
-            <p class="mt-1 leading-6">
-              {{ rejectionReason || 'No rejection reason was provided. Contact the platform administrator for details.' }}
+            <p class="font-semibold">Rejection / fix reason</p>
+            <p class="mt-1 leading-6 text-muted-foreground">
+              {{ rejectionReason || 'No reason was provided. Contact the platform administrator for details.' }}
             </p>
           </div>
 
+          <OrganizationVerificationDocumentsPanel
+            ref="panelRef"
+            :show-approved-notice="true"
+            @refreshed="onDocsRefreshed"
+          />
+
           <div class="rounded-2xl border border-border bg-muted px-4 py-4 text-sm text-foreground">
             <p class="font-semibold text-foreground">What you can do now</p>
-            <ul class="mt-2 list-disc space-y-1 pl-5 leading-6">
+            <ul class="mt-2 list-disc space-y-1 pl-5 leading-6 text-muted-foreground">
+              <li>Upload or replace supporting documents for verification</li>
               <li>Open Settings to review your account details</li>
               <li>Check Notifications for verification updates</li>
               <li>Use Refresh status after an administrator reviews your organization</li>
-              <li v-if="isRejected">Contact the platform administrator if you need the decision revisited</li>
             </ul>
           </div>
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import Swal from '@/services/swal'
 import { BriefcaseBusiness, Building2, CheckCircle2, FilePlus2, Layers3, LoaderCircle, Paperclip, RefreshCcw } from 'lucide-vue-next'
 
@@ -14,7 +14,7 @@ import Select from '@/components/ui/select/Select.vue'
 import Textarea from '@/components/ui/textarea/Textarea.vue'
 import { useToast } from '@/composables/useToast'
 import { useDynamicContractForm } from '@/composables/useDynamicContractForm'
-import type { PublicProfile } from '@/services/profilesPublic'
+import { isAgreementPartnerSelectable, type PublicProfile } from '@/services/profilesPublic'
 import type { ContractFieldSchema } from '@/services/dynamicContracts'
 import { useAuthStore } from '@/stores/auth'
 
@@ -63,6 +63,8 @@ const selectedPartnerProfile = computed(() => {
   return props.partners.find((partner) => partner.uid === partnerUserId.value) ?? null
 })
 const selectedTypeLocked = computed(() => Boolean(props.lockContractType && props.initialContractTypeName))
+const subjectError = ref('')
+const purposeError = ref('')
 const canSubmit = computed(() => !loadingTypes.value && !submitting.value && Boolean(selectedTypeId.value))
 const referencePreview = computed(() => `CTR-${new Date().getFullYear()}-######`)
 const selectedFilesLabel = computed(() => {
@@ -183,7 +185,18 @@ function onFileChange(event: Event) {
   files.value = Array.from(input.files ?? [])
 }
 
+function validateAgreementFields() {
+  subjectError.value = subject.value.trim() ? '' : 'Subject is required.'
+  purposeError.value = purpose.value.trim() ? '' : 'Purpose is required.'
+  return !subjectError.value && !purposeError.value
+}
+
+watch([subject, purpose], () => {
+  if (subjectError.value || purposeError.value) validateAgreementFields()
+})
+
 async function onSubmit() {
+  if (!validateAgreementFields()) return
   const confirmation = await Swal.fire({
     icon: 'question',
     title: 'Send this contract request?',
@@ -224,7 +237,7 @@ async function onSubmit() {
 </script>
 
 <template>
-  <form class="space-y-6" @submit.prevent="onSubmit">
+  <form class="space-y-6" novalidate @submit.prevent="onSubmit">
     <Card class="overflow-hidden border-primary/20 bg-gradient-to-br from-sky-50 via-white to-slate-50 shadow-none">
       <CardContent class="grid gap-5 p-5 lg:grid-cols-[minmax(0,1.45fr)_minmax(280px,1fr)]">
         <div class="space-y-3">
@@ -232,14 +245,14 @@ async function onSubmit() {
             Dynamic Contract Builder
           </div>
           <div class="space-y-2">
-            <h3 class="text-2xl font-semibold tracking-tight text-slate-950">Build a polished contract request</h3>
-            <p class="max-w-2xl text-sm leading-6 text-slate-600">
+            <h3 class="text-2xl font-semibold tracking-tight text-foreground">Build a polished contract request</h3>
+            <p class="max-w-2xl text-sm leading-6 text-muted-foreground">
               Pick a {{ partnerLabel.toLowerCase() }}, load the matching contract template, and complete only the fields required for that agreement.
             </p>
           </div>
         </div>
 
-        <Card class="border-border/70 bg-white/90 shadow-none">
+        <Card class="border-border/70 bg-card/90 shadow-none">
           <CardContent class="space-y-4 p-4">
             <div v-if="lockPartner && selectedPartnerProfile" class="space-y-3">
               <div class="flex items-start gap-3">
@@ -248,9 +261,9 @@ async function onSubmit() {
                   <BriefcaseBusiness v-else class="h-5 w-5" />
                 </div>
                 <div class="min-w-0 space-y-1">
-                  <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Selected {{ partnerLabel }}</p>
-                  <p class="text-base font-semibold text-slate-950">{{ selectedPartnerProfile.orgName || selectedPartnerProfile.displayName }}</p>
-                  <p class="text-sm text-slate-600">{{ selectedPartnerProfile.email || 'Directory profile' }}</p>
+                  <p class="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Selected {{ partnerLabel }}</p>
+                  <p class="text-base font-semibold text-foreground">{{ selectedPartnerProfile.orgName || selectedPartnerProfile.displayName }}</p>
+                  <p class="text-sm text-muted-foreground">{{ selectedPartnerProfile.email || 'Directory profile' }}</p>
                 </div>
               </div>
               <Button type="button" variant="outline" class="w-full sm:w-auto" @click="emit('changePartner')">
@@ -264,8 +277,22 @@ async function onSubmit() {
               <FormControl>
                 <Select v-model="partnerUserId" @update:modelValue="onPartnerChange">
                   <option value="">Select {{ partnerLabel.toLowerCase() }}</option>
-                  <option v-for="partner in partners" :key="partner.uid" :value="partner.uid">
-                    {{ partner.orgName || partner.displayName }}
+                  <option
+                    v-for="partner in partners"
+                    :key="partner.uid"
+                    :value="partner.uid"
+                    :disabled="!isAgreementPartnerSelectable(partner)"
+                  >
+                    {{ partner.orgName || partner.displayName
+                    }}{{
+                      partner.agreementStatusLabel
+                        ? ` — ${partner.agreementStatusLabel}`
+                        : partner.agreementStatus === 'active'
+                          ? ' — Agreement already active'
+                          : partner.agreementStatus === 'pending'
+                            ? ' — Agreement request pending'
+                            : ''
+                    }}
                   </option>
                 </Select>
               </FormControl>
@@ -283,7 +310,7 @@ async function onSubmit() {
             {{ referencePreview }}
           </div>
         </FormControl>
-        <p class="text-xs text-slate-500">
+        <p class="text-xs text-muted-foreground">
           Assigned automatically when the contract is submitted.
         </p>
       </FormItem>
@@ -296,7 +323,7 @@ async function onSubmit() {
           </div>
           <div
             v-else
-            class="grid gap-3 rounded-2xl border border-border/80 bg-slate-50/70 p-4 md:grid-cols-2 xl:grid-cols-3"
+            class="grid gap-3 rounded-2xl border border-border/80 bg-muted/70 p-4 md:grid-cols-2 xl:grid-cols-3"
           >
             <button
               v-for="type in contractTypeCards"
@@ -305,8 +332,8 @@ async function onSubmit() {
               class="rounded-2xl border p-4 text-left transition-all"
               :class="
                 selectedTypeId === type.id
-                  ? 'border-sky-400 bg-white shadow-[0_18px_45px_rgba(14,116,144,0.12)]'
-                  : 'border-slate-200 bg-white/90 hover:border-slate-300 hover:bg-white'
+                  ? 'border-sky-400 bg-card shadow-[0_18px_45px_rgba(14,116,144,0.12)]'
+                  : 'border-border bg-card/90 hover:border-border hover:bg-accent'
               "
               @click="selectedTypeId = type.id"
             >
@@ -316,22 +343,22 @@ async function onSubmit() {
                 </div>
                 <span
                   class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em]"
-                  :class="type.scope === 'organization' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'"
+                  :class="type.scope === 'organization' ? 'bg-slate-900 text-white' : 'bg-muted text-muted-foreground'"
                 >
                   <CheckCircle2 v-if="selectedTypeId === type.id" class="h-3.5 w-3.5" />
                   {{ type.scope === 'organization' ? 'Custom' : 'Standard' }}
                 </span>
               </div>
-              <p class="mt-4 text-base font-semibold text-slate-950">{{ type.name }}</p>
-              <p class="mt-2 text-sm leading-6 text-slate-600">{{ type.description || 'Complete the required fields for this agreement type.' }}</p>
-              <div class="mt-4 flex items-center justify-between text-xs text-slate-500">
+              <p class="mt-4 text-base font-semibold text-foreground">{{ type.name }}</p>
+              <p class="mt-2 text-sm leading-6 text-muted-foreground">{{ type.description || 'Complete the required fields for this agreement type.' }}</p>
+              <div class="mt-4 flex items-center justify-between text-xs text-muted-foreground">
                 <span>{{ type.fieldsSchema.length }} field{{ type.fieldsSchema.length === 1 ? '' : 's' }}</span>
                 <span v-if="type.fieldsSchema.some((field) => isCourseField(field)) && alignedCourseOptions.length">Uses aligned courses</span>
               </div>
             </button>
             <div
               v-if="!contractTypeCards.length && !loadingTypes"
-              class="rounded-2xl border border-dashed border-slate-200 bg-white/80 px-4 py-8 text-center text-sm text-slate-500 md:col-span-2 xl:col-span-3"
+              class="rounded-2xl border border-dashed border-border bg-card/80 px-4 py-8 text-center text-sm text-muted-foreground md:col-span-2 xl:col-span-3"
             >
               No contract types are available for this partner yet.
             </div>
@@ -340,17 +367,19 @@ async function onSubmit() {
       </FormItem>
 
       <FormItem>
-        <FormLabel>Subject</FormLabel>
+        <FormLabel>Subject <span class="text-red-500">*</span></FormLabel>
         <FormControl>
-          <Input v-model="subject" type="text" placeholder="Memorandum of Agreement for Internship Placement" />
+          <Input v-model="subject" type="text" placeholder="Memorandum of Agreement for Internship Placement" @blur="validateAgreementFields" />
         </FormControl>
+        <p v-if="subjectError" class="text-sm text-destructive">{{ subjectError }}</p>
       </FormItem>
 
       <FormItem class="md:col-span-2">
-        <FormLabel>Purpose</FormLabel>
+        <FormLabel>Purpose <span class="text-red-500">*</span></FormLabel>
         <FormControl>
-          <Textarea v-model="purpose" :rows="4" placeholder="Explain the purpose of this contract request" />
+          <Textarea v-model="purpose" :rows="4" placeholder="Explain the purpose of this contract request" @blur="validateAgreementFields" />
         </FormControl>
+        <p v-if="purposeError" class="text-sm text-destructive">{{ purposeError }}</p>
       </FormItem>
 
       <FormItem>
@@ -372,12 +401,12 @@ async function onSubmit() {
       <CardContent class="space-y-5 p-5">
         <div class="space-y-2">
           <div class="flex items-center gap-3">
-            <div class="rounded-2xl bg-slate-100 p-3 text-slate-700">
+            <div class="rounded-2xl bg-muted p-3 text-muted-foreground">
               <FilePlus2 class="h-5 w-5" />
             </div>
             <div>
-              <h4 class="text-lg font-semibold text-slate-950">{{ selectedTypeCard.name }}</h4>
-              <p class="text-sm text-slate-600">{{ selectedTypeCard.description }}</p>
+              <h4 class="text-lg font-semibold text-foreground">{{ selectedTypeCard.name }}</h4>
+              <p class="text-sm text-muted-foreground">{{ selectedTypeCard.description }}</p>
             </div>
           </div>
         </div>
@@ -418,41 +447,37 @@ async function onSubmit() {
 
                 <div
                   v-else-if="field.type === 'multiselect'"
-                  class="space-y-3 rounded-2xl border border-border/80 bg-slate-50/80 p-4"
+                  class="space-y-3 rounded-2xl border border-border/80 bg-muted/80 p-4"
                 >
-                  <p class="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">
-                    Select one or more options
+                  <p class="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
+                    {{ isCourseField(field) ? 'Courses this school added' : 'Choose from the list' }}
                   </p>
-                  <p v-if="isCourseField(field)" class="text-xs text-slate-500">
-                    Showing only courses shared by both organizations.
+                  <p v-if="isCourseField(field)" class="text-xs text-muted-foreground">
+                    Only courses already added by this school and accepted by the partner.
                   </p>
-                  <div class="flex flex-wrap gap-2">
-                    <button
-                      v-for="option in field.options || []"
+                  <Select
+                    :model-value="''"
+                    @update:modelValue="(value) => value && !selectedMultiValues(field.key).includes(String(value)) && toggleMultiSelectValue(field.key, String(value))"
+                  >
+                    <option value="">Select a course</option>
+                    <option
+                      v-for="option in (field.options || []).filter((item) => !selectedMultiValues(field.key).includes(item))"
                       :key="option"
-                      type="button"
-                      class="inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium transition-all"
-                      :class="
-                        selectedMultiValues(field.key).includes(option)
-                          ? 'border-primary bg-primary text-primary-foreground shadow-sm'
-                          : 'border-slate-200 bg-white text-slate-700 hover:border-primary/40 hover:bg-primary/5'
-                      "
-                      @click="toggleMultiSelectValue(field.key, option)"
+                      :value="option"
+                    >{{ option }}</option>
+                  </Select>
+                  <div v-if="selectedMultiValues(field.key).length" class="flex flex-wrap gap-2">
+                    <span
+                      v-for="option in selectedMultiValues(field.key)"
+                      :key="option"
+                      class="inline-flex items-center gap-2 rounded-full border border-primary bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground"
                     >
-                      <span
-                        class="flex h-4 w-4 items-center justify-center rounded-full border text-[10px]"
-                        :class="
-                          selectedMultiValues(field.key).includes(option)
-                            ? 'border-primary-foreground/50 bg-primary-foreground/15 text-primary-foreground'
-                            : 'border-slate-300 text-transparent'
-                        "
-                      >
-                        ✓
-                      </span>
                       {{ option }}
-                    </button>
+                      <button type="button" class="text-xs" @click="toggleMultiSelectValue(field.key, option)">x</button>
+                    </span>
                   </div>
-                  <p v-if="field.required && !selectedMultiValues(field.key).length" class="text-xs text-slate-500">
+                  <p v-else class="text-xs text-muted-foreground">No courses selected yet.</p>
+                  <p v-if="field.required && !selectedMultiValues(field.key).length" class="text-xs text-destructive">
                     Choose at least one option before submitting.
                   </p>
                 </div>
@@ -475,13 +500,13 @@ async function onSubmit() {
         <FormLabel>Attachments</FormLabel>
         <FormControl>
           <label class="flex cursor-pointer flex-col gap-3 rounded-xl border border-dashed border-border bg-muted/30 p-4 transition hover:border-primary/40 hover:bg-primary/5">
-            <div class="flex items-center gap-3 text-sm text-slate-700">
+            <div class="flex items-center gap-3 text-sm text-muted-foreground">
               <div class="rounded-xl bg-primary/10 p-2 text-primary">
                 <Paperclip class="h-4 w-4" />
               </div>
               <div>
                 <p class="font-medium">Upload supporting documents</p>
-                <p class="text-slate-500">{{ selectedFilesLabel }}</p>
+                <p class="text-muted-foreground">{{ selectedFilesLabel }}</p>
               </div>
             </div>
             <input type="file" class="hidden" multiple @change="onFileChange" />
@@ -490,7 +515,7 @@ async function onSubmit() {
       </FormItem>
     </div>
 
-    <div v-if="error" class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+    <div v-if="error" class="rounded-xl border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40 px-4 py-3 text-sm text-red-700">
       {{ error }}
     </div>
 

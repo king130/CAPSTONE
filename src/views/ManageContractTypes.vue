@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { FilePlus2, Layers3, Pencil, Plus, Search, Trash2 } from 'lucide-vue-next'
+import { Copy, FilePlus2, Layers3, Pencil, Plus, Search, Trash2 } from 'lucide-vue-next'
 
 import AlertDialog from '@/components/ui/alert-dialog/AlertDialog.vue'
 import Button from '@/components/ui/button/Button.vue'
@@ -106,12 +106,36 @@ function hydrateForm(type?: DynamicContractType | null) {
     description: type.description || '',
     baseContractTypeId: type.baseContractTypeId || '',
     isActive: type.isActive !== false,
-    fields: (type.fieldsSchema || []).map((field) => ({
-      ...field,
-      optionsText: (field.options || []).join(', '),
-    })),
+    fields: mapSchemaToEditableFields(type.fieldsSchema),
   }
 }
+
+watch(
+  () => form.value.baseContractTypeId,
+  (baseId, previousId) => {
+    if (!editorOpen.value || form.value.id) return
+    if (!baseId || baseId === previousId) return
+    const base = globalTypes.value.find((type) => type.id === baseId)
+    if (!base) return
+    // Only auto-fill when the builder is empty / single blank field.
+    const firstField = form.value.fields[0]
+    const onlyBlank =
+      form.value.fields.length === 1 &&
+      !!firstField &&
+      !firstField.key.trim() &&
+      !firstField.label.trim()
+    if (!onlyBlank && form.value.fields.some((field) => field.key.trim() || field.label.trim())) {
+      return
+    }
+    if (!form.value.name.trim()) {
+      form.value.name = `${base.name} (Custom)`
+    }
+    if (!form.value.description.trim() && base.description) {
+      form.value.description = base.description
+    }
+    form.value.fields = mapSchemaToEditableFields(base.fieldsSchema)
+  },
+)
 
 async function loadTypes() {
   loading.value = true
@@ -128,6 +152,14 @@ async function loadTypes() {
   }
 }
 
+function mapSchemaToEditableFields(schema: ContractFieldSchema[] = []): EditableField[] {
+  if (!schema.length) return [defaultField()]
+  return schema.map((field) => ({
+    ...field,
+    optionsText: (field.options || []).join(', '),
+  }))
+}
+
 function openCreateDialog() {
   hydrateForm()
   editorOpen.value = true
@@ -135,6 +167,19 @@ function openCreateDialog() {
 
 function openEditDialog(type: DynamicContractType) {
   hydrateForm(type)
+  editorOpen.value = true
+}
+
+/** Clone a standard library type into a new editable custom template. */
+function useAsTemplate(type: DynamicContractType) {
+  form.value = {
+    id: null,
+    name: `${type.name} (Custom)`,
+    description: type.description || '',
+    baseContractTypeId: type.id,
+    isActive: true,
+    fields: mapSchemaToEditableFields(type.fieldsSchema),
+  }
   editorOpen.value = true
 }
 
@@ -276,7 +321,7 @@ onMounted(() => {
                     </div>
                     <p class="text-sm leading-6 text-muted-foreground">{{ type.description || 'No description added yet.' }}</p>
                   </div>
-                  <span class="rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]" :class="type.isActive === false ? 'bg-muted text-muted-foreground' : 'bg-emerald-100 text-emerald-700'">
+                  <span class="rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]" :class="type.isActive === false ? 'bg-muted text-muted-foreground' : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200'">
                     {{ type.isActive === false ? 'Inactive' : 'Active' }}
                   </span>
                 </div>
@@ -331,6 +376,10 @@ onMounted(() => {
                 </div>
               </div>
               <p class="text-sm leading-6 text-muted-foreground">{{ type.description || 'Standard agreement template.' }}</p>
+              <Button variant="outline" size="sm" @click="useAsTemplate(type)">
+                <Copy class="h-4 w-4" />
+                Use as template
+              </Button>
             </CardContent>
           </Card>
         </CardContent>

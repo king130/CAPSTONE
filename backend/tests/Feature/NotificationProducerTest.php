@@ -41,6 +41,8 @@ class NotificationProducerTest extends TestCase
     {
         foreach ([
             'org.approve_applications',
+            'org.manage_applications',
+            'org.manage_assessments',
             'org.manage_agreements',
             'org.approve_agreements',
             'org.approve_ojt_logs',
@@ -79,6 +81,8 @@ class NotificationProducerTest extends TestCase
         $schoolRole->permissions()->sync(
             Permission::query()->whereIn('key', [
                 'org.approve_applications',
+                'org.manage_applications',
+                'org.manage_assessments',
                 'org.manage_agreements',
                 'org.approve_agreements',
                 'org.approve_ojt_logs',
@@ -131,6 +135,8 @@ class NotificationProducerTest extends TestCase
         $companyRole->permissions()->sync(
             Permission::query()->whereIn('key', [
                 'org.approve_applications',
+                'org.manage_applications',
+                'org.manage_assessments',
                 'org.manage_agreements',
                 'org.approve_agreements',
                 'org.approve_ojt_logs',
@@ -156,6 +162,7 @@ class NotificationProducerTest extends TestCase
         $internship = Internship::query()->create([
             'company_id' => $company->id,
             'host_type' => 'company',
+            'requires_resume' => false,
             'title' => 'Producer Internship',
             'status' => 'active',
         ]);
@@ -205,9 +212,7 @@ class NotificationProducerTest extends TestCase
         $ctx = $this->createApplicationContext();
         Sanctum::actingAs($ctx['studentUser']);
 
-        $response = $this->postJson('/api/applications', [
-            'internship_id' => $ctx['internship']->id,
-        ]);
+        $response = $this->postApplication($ctx['internship']->id);
 
         $response->assertCreated();
         $this->assertSame(1, Notification::query()->where('user_id', $ctx['schoolUser']->id)->count());
@@ -274,6 +279,7 @@ class NotificationProducerTest extends TestCase
             'student_id' => $ctx['student']->id,
             'company_id' => $ctx['company']->id,
             'status' => 'endorsed',
+            'tracker_stage' => 'assessed',
             'internship_title' => 'Producer Internship',
             'student_name' => $ctx['studentUser']->name,
             'student_email' => $ctx['studentUser']->email,
@@ -295,6 +301,7 @@ class NotificationProducerTest extends TestCase
             'student_id' => $ctx['student']->id,
             'company_id' => $ctx['company']->id,
             'status' => 'endorsed',
+            'tracker_stage' => 'assessed',
             'internship_title' => 'Producer Internship',
             'student_name' => $ctx['studentUser']->name,
             'student_email' => $ctx['studentUser']->email,
@@ -303,6 +310,7 @@ class NotificationProducerTest extends TestCase
         Sanctum::actingAs($ctx['companyUser']);
         $this->patchJson('/api/applications/'.$application->id.'/status', [
             'status' => 'rejected',
+            'reason' => 'Not selected',
         ])->assertOk();
 
         $this->assertSame(1, Notification::query()->where('user_id', $ctx['studentUser']->id)->count());
@@ -311,6 +319,14 @@ class NotificationProducerTest extends TestCase
     public function test_new_agreement_notifies_counterparty_and_duplicate_pending_does_not(): void
     {
         $ctx = $this->createApplicationContext();
+
+        // Context seeds an active MOA for application eligibility; clear it so a fresh pending request can be created.
+        Contract::query()
+            ->where('school_user_id', $ctx['schoolUser']->id)
+            ->where('company_user_id', $ctx['companyUser']->id)
+            ->where('status', 'active')
+            ->update(['status' => 'cancelled']);
+
         Sanctum::actingAs($ctx['schoolUser']);
 
         $first = $this->postJson('/api/agreements', [

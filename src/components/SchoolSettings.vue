@@ -8,6 +8,7 @@ import { buildProfileAvatarUrl, uploadProfileAvatar } from '@/services/profileMe
 import { ensurePublicProfile } from '@/services/profilesPublic'
 import Swal from '@/services/swal'
 import { BellIcon } from '@heroicons/vue/24/outline'
+import Select from '@/components/ui/select/Select.vue'
 
 const authStore = useAuthStore()
 

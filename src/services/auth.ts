@@ -2,7 +2,7 @@ import axios from 'axios'
 import apiClient from './apiClient'
 import { apiFetch, setToken, getToken } from './http'
 
-export type UserRole = 'student' | 'company' | 'school' | 'admin' | 'guest' | null
+export type UserRole = 'student' | 'company' | 'school' | 'municipal_hall' | 'admin' | 'guest' | null
 export type AccessScope = 'platform' | 'organization' | 'personal'
 
 export interface MembershipSummary {
@@ -10,7 +10,7 @@ export interface MembershipSummary {
   organization: {
     id: string
     name: string
-    type: 'school' | 'company'
+    type: 'school' | 'company' | 'municipal_hall'
     isActive?: boolean
   }
   role: {
@@ -58,14 +58,18 @@ export interface UserProfile {
   activeOrganization?: {
     id: string
     name: string
-    type: 'school' | 'company'
+    type: 'school' | 'company' | 'municipal_hall'
     subscriptionId?: string | null
   } | null
   subscription?: {
     plan: string
     billingCycle: string
-    status: 'active' | 'pending' | 'inactive'
+    status: 'active' | 'pending' | 'inactive' | 'trialing' | string
     subscriptionCode?: string
+    trialStartedAt?: string | null
+    trialEndsAt?: string | null
+    graceEndsAt?: string | null
+    endsAt?: string | null
     limits?: {
       school?: { coordinators: number; students: number }
       company?: { accounts: number; internships: number }
@@ -83,6 +87,12 @@ export interface UserProfile {
         message: string
       }>
     } | null
+    seatHolds?: Array<{
+      key: string
+      label: string
+      paused: number
+      limit: number
+    }>
     pendingChange?: {
       requestId: string
       targetPlan: string
@@ -101,6 +111,21 @@ export interface UserProfile {
       }
     } | null
   }
+  subscriptionAccess?: {
+    status: 'trial' | 'active' | 'grace' | 'expired' | string
+    canWrite: boolean
+    canReviewDtr: boolean
+    plan?: string | null
+    trialEndsAt?: string | null
+    graceEndsAt?: string | null
+    paidEndsAt?: string | null
+    daysRemaining?: number | null
+    message?: string
+    code?: string
+    trialDays?: number
+    graceDays?: number
+  } | null
+  paymentConnected?: boolean
   createdAt?: unknown
   updatedAt?: unknown
 }
@@ -197,6 +222,8 @@ export function mapApiUserToProfile(raw: Record<string, unknown>): UserProfile {
     memberships: (raw.memberships as MembershipSummary[] | undefined) ?? [],
     activeOrganization: (raw.activeOrganization as UserProfile['activeOrganization']) ?? null,
     subscription: raw.subscription as UserProfile['subscription'],
+    subscriptionAccess: (raw.subscriptionAccess as UserProfile['subscriptionAccess']) ?? null,
+    paymentConnected: Boolean(raw.paymentConnected),
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
   }

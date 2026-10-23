@@ -7,6 +7,7 @@ use App\Models\OrganizationMedia;
 use App\Models\User;
 use App\Services\PermissionGate;
 use App\Services\SubscriptionPlanService;
+use App\Support\CaviteAddress;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Str;
@@ -25,7 +26,7 @@ class OrganizationProfileController extends Controller
         $user = $request->user();
         $organization = $user->activeOrganization();
 
-        if (! $organization || ! in_array($organization->type, ['school', 'company'], true)) {
+        if (! $organization || ! in_array($organization->type, ['school', 'company', 'municipal_hall'], true)) {
             return response()->json(['message' => 'No active organization context found.'], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
@@ -43,7 +44,7 @@ class OrganizationProfileController extends Controller
         $user = $request->user();
         $organization = $user->activeOrganization();
 
-        if (! $organization || ! in_array($organization->type, ['school', 'company'], true)) {
+        if (! $organization || ! in_array($organization->type, ['school', 'company', 'municipal_hall'], true)) {
             return response()->json(['message' => 'No active organization context found.'], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
@@ -178,8 +179,12 @@ class OrganizationProfileController extends Controller
     {
         $organization->loadMissing('subscription');
         $plan = $this->subscriptionPlans->getPlanForOrganization($organization);
-        $photoCount = OrganizationMedia::query()->where('organization_id', $organization->id)->count();
+        $photoCount = OrganizationMedia::query()
+            ->where('organization_id', $organization->id)
+            ->where('path', 'like', 'organization-media/'.$organization->id.'/%')
+            ->count();
         $photoLimit = (int) ($plan?->organization_photos_limit ?? 3);
+        $location = CaviteAddress::displayFor($organization);
 
         return [
             'id' => (string) $organization->id,
@@ -187,8 +192,8 @@ class OrganizationProfileController extends Controller
             'type' => $organization->type,
             'tagline' => $organization->tagline,
             'description' => $organization->description,
-            'address' => $organization->address,
-            'city' => $organization->city,
+            'address' => $location['address'],
+            'city' => $location['city'],
             'website' => $organization->website,
             'industry' => $organization->industry,
             'perks' => array_values($organization->perks ?? []),

@@ -398,7 +398,7 @@ class OjtLogIntegrityTest extends TestCase
         $this->assertSame(1, OjtLog::query()->where('application_id', $newer->id)->count());
     }
 
-    public function test_school_and_company_can_manage_required_hours_but_admin_cannot(): void
+    public function test_school_can_manage_required_hours_but_company_and_admin_cannot(): void
     {
         $ctx = $this->createContext();
 
@@ -412,9 +412,9 @@ class OjtLogIntegrityTest extends TestCase
         $this->assertSame(480, (int) ($ctx['schoolUser']->fresh()->activeOrganization()?->settings['required_ojt_hours'] ?? 0));
 
         Sanctum::actingAs($ctx['companyUser']);
-        $this->patchJson('/api/ojt-logs/required-hours', ['requiredHours' => 320])
-            ->assertOk()
-            ->assertJsonPath('data.requiredHours', 320);
+        $this->getJson('/api/ojt-logs/required-hours')->assertForbidden();
+        $this->patchJson('/api/ojt-logs/required-hours', ['requiredHours' => 320])->assertForbidden();
+        $this->assertNotSame(320, (int) ($ctx['companyUser']->fresh()->activeOrganization()?->settings['required_ojt_hours'] ?? 0));
 
         $admin = User::factory()->create([
             'role' => 'admin',
@@ -424,5 +424,146 @@ class OjtLogIntegrityTest extends TestCase
         Sanctum::actingAs($admin);
         $this->getJson('/api/ojt-logs/required-hours')->assertForbidden();
         $this->patchJson('/api/ojt-logs/required-hours', ['requiredHours' => 100])->assertForbidden();
+    }
+
+    public function test_student_can_list_and_download_own_issued_certificate(): void
+    {
+        $ctx = $this->createContext();
+        $application = $this->makeApplication($ctx, 'accepted');
+
+        OjtLog::query()->create([
+            'student_id' => $ctx['student']->id,
+            'application_id' => $application->id,
+            'internship_id' => $ctx['internship']->id,
+            'organization_id' => $ctx['companyOrg']->id,
+            'log_date' => now()->subDay()->toDateString(),
+            'time_in' => '08:00',
+            'time_out' => '18:00',
+            'hours' => 10,
+            'tasks' => 'Completed required hours',
+            'status' => 'approved',
+        ]);
+
+        Sanctum::actingAs($ctx['schoolUser']);
+        $issue = $this->postJson('/api/certificates/generate', [
+            'application_id' => $application->id,
+        ]);
+        $issue->assertCreated();
+        $certificateId = (string) $issue->json('data.id');
+
+        Sanctum::actingAs($ctx['studentUser']);
+        $this->getJson('/api/certificates')
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $certificateId)
+            ->assertJsonPath('data.0.applicationId', (string) $application->id);
+
+        $download = $this->get('/api/certificates/'.$certificateId.'/download');
+        $download->assertOk();
+        $download->assertHeader('Content-Type', 'text/html; charset=UTF-8');
+        $this->assertStringContainsString('Certificate of Completion', $download->getContent());
+        $this->assertStringContainsString((string) $issue->json('data.certificateNumber'), $download->getContent());
+    }
+
+    public function test_student_cannot_download_another_students_certificate(): void
+    {
+        $ctx = $this->createContext();
+        $application = $this->makeApplication($ctx, 'accepted');
+
+        OjtLog::query()->create([
+            'student_id' => $ctx['student']->id,
+            'application_id' => $application->id,
+            'internship_id' => $ctx['internship']->id,
+            'organization_id' => $ctx['companyOrg']->id,
+            'log_date' => now()->subDay()->toDateString(),
+            'time_in' => '08:00',
+            'time_out' => '18:00',
+            'hours' => 10,
+            'tasks' => 'Completed required hours',
+            'status' => 'approved',
+        ]);
+
+        Sanctum::actingAs($ctx['schoolUser']);
+        $issue = $this->postJson('/api/certificates/generate', [
+            'application_id' => $application->id,
+        ]);
+        $issue->assertCreated();
+        $certificateId = (string) $issue->json('data.id');
+
+        $otherUser = User::factory()->create([
+            'role' => 'student',
+            'email' => 'other-cert.'.uniqid('', true).'@example.com',
+            'is_active' => true,
+        ]);
+        Student::query()->create([
+            'user_id' => $otherUser->id,
+            'school_id' => $ctx['school']->id,
+            'organization_id' => $ctx['school']->organization_id,
+            'school_name' => $ctx['school']->institution_name,
+            'school_subscription_code' => $ctx['school']->subscription_code,
+            'course' => 'BSCS',
+        ]);
+
+        Sanctum::actingAs($otherUser);
+        $this->getJson('/api/certificates')->assertOk()->assertJsonPath('data', []);
+        $this->get('/api/certificates/'.$certificateId.'/download')->assertForbidden();
+    }
+
+    public function test_school_can_download_certificate_it_issued(): void
+    {
+        $ctx = $this->createContext();
+        $application = $this->makeApplication($ctx, 'accepted');
+
+        OjtLog::query()->create([
+            'student_id' => $ctx['student']->id,
+            'application_id' => $application->id,
+            'internship_id' => $ctx['internship']->id,
+            'organization_id' => $ctx['companyOrg']->id,
+            'log_date' => now()->subDay()->toDateString(),
+            'time_in' => '08:00',
+            'time_out' => '18:00',
+            'hours' => 10,
+            'tasks' => 'Completed required hours',
+            'status' => 'approved',
+        ]);
+
+        Sanctum::actingAs($ctx['schoolUser']);
+        $issue = $this->postJson('/api/certificates/generate', [
+            'application_id' => $application->id,
+        ]);
+        $issue->assertCreated();
+        $certificateId = (string) $issue->json('data.id');
+
+        $download = $this->get('/api/certificates/'.$certificateId.'/download');
+        $download->assertOk();
+        $this->assertStringContainsString('Certificate of Completion', $download->getContent());
+    }
+
+    public function test_unauthenticated_user_cannot_download_certificate(): void
+    {
+        $ctx = $this->createContext();
+        $application = $this->makeApplication($ctx, 'accepted');
+
+        OjtLog::query()->create([
+            'student_id' => $ctx['student']->id,
+            'application_id' => $application->id,
+            'internship_id' => $ctx['internship']->id,
+            'organization_id' => $ctx['companyOrg']->id,
+            'log_date' => now()->subDay()->toDateString(),
+            'time_in' => '08:00',
+            'time_out' => '18:00',
+            'hours' => 10,
+            'tasks' => 'Completed required hours',
+            'status' => 'approved',
+        ]);
+
+        Sanctum::actingAs($ctx['schoolUser']);
+        $issue = $this->postJson('/api/certificates/generate', [
+            'application_id' => $application->id,
+        ]);
+        $issue->assertCreated();
+        $certificateId = (string) $issue->json('data.id');
+
+        $this->app['auth']->forgetGuards();
+        $this->get('/api/certificates/'.$certificateId.'/download')->assertUnauthorized();
     }
 }

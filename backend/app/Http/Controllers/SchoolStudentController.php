@@ -10,7 +10,9 @@ use App\Models\Role;
 use App\Models\School;
 use App\Models\Student;
 use App\Models\User;
+use App\Services\CourseYearLevelGate;
 use App\Services\SubscriptionPlanService;
+use App\Support\StudentYearLevel;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
@@ -19,8 +21,10 @@ use Illuminate\Support\Str;
 
 class SchoolStudentController extends Controller
 {
-    public function __construct(private readonly SubscriptionPlanService $subscriptionPlans)
-    {
+    public function __construct(
+        private readonly SubscriptionPlanService $subscriptionPlans,
+        private readonly CourseYearLevelGate $courseYearLevels,
+    ) {
     }
 
     public function index(Request $request)
@@ -63,8 +67,21 @@ class SchoolStudentController extends Controller
             'studentName' => ['nullable', 'string', 'max:255'],
             'studentNumber' => ['nullable', 'string', 'max:255'],
             'course' => ['nullable', 'string', 'max:255'],
-            'yearLevel' => ['nullable', 'string', 'max:255'],
+            'yearLevel' => StudentYearLevel::validationRule(),
         ]);
+
+        $yearCheck = $this->courseYearLevels->validateYearForCourse(
+            (int) $school->id,
+            $data['course'] ?? null,
+            $data['yearLevel'] ?? null
+        );
+        if (! $yearCheck['ok']) {
+            return response()->json([
+                'message' => $yearCheck['message'],
+                'errors' => ['yearLevel' => [$yearCheck['message']]],
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+        $data['yearLevel'] = $yearCheck['normalized'];
 
         $email = strtolower(trim($data['email']));
         if (User::query()->where('email', $email)->exists()) {
@@ -168,7 +185,7 @@ class SchoolStudentController extends Controller
             'studentName' => ['sometimes', 'nullable', 'string', 'max:255'],
             'studentNumber' => ['sometimes', 'nullable', 'string', 'max:255'],
             'course' => ['sometimes', 'nullable', 'string', 'max:255'],
-            'yearLevel' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'yearLevel' => array_merge(['sometimes'], \App\Support\StudentYearLevel::validationRule()),
             'status' => ['sometimes', 'nullable', 'string', 'max:255'],
         ]);
 
@@ -178,8 +195,23 @@ class SchoolStudentController extends Controller
         if (array_key_exists('course', $data)) {
             $student->course = $data['course'];
         }
-        if (array_key_exists('yearLevel', $data)) {
-            $student->year_level = $data['yearLevel'];
+        if (array_key_exists('yearLevel', $data) || array_key_exists('course', $data)) {
+            $courseForCheck = array_key_exists('course', $data) ? $data['course'] : $student->course;
+            $yearForCheck = array_key_exists('yearLevel', $data) ? $data['yearLevel'] : $student->year_level;
+            $yearCheck = $this->courseYearLevels->validateYearForCourse(
+                (int) $school->id,
+                $courseForCheck,
+                $yearForCheck
+            );
+            if (! $yearCheck['ok']) {
+                return response()->json([
+                    'message' => $yearCheck['message'],
+                    'errors' => ['yearLevel' => [$yearCheck['message']]],
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+            if (array_key_exists('yearLevel', $data)) {
+                $student->year_level = $yearCheck['normalized'];
+            }
         }
         $student->save();
 
@@ -441,6 +473,8 @@ class SchoolStudentController extends Controller
         $schoolSenderEmail = $this->resolveSchoolSenderEmail($school, $invitedBy);
         $schoolSenderName = $school->institution_name ?: $invitedBy->name;
 
+        // Gmail SMTP authenticates as MAIL_FROM (ojtpath@gmail.com). Always send From that
+        // address to the student's email; school/inviter is Reply-To only.
         try {
             Mail::to($user->email)->send(new StudentAccountSetupMail(
                 studentName: $user->name,
@@ -448,7 +482,7 @@ class SchoolStudentController extends Controller
                 setupUrl: $setupUrl,
                 senderEmail: $schoolSenderEmail,
                 senderName: $schoolSenderName,
-                useSenderAsFrom: true,
+                useSenderAsFrom: false,
             ));
 
             return [
@@ -457,24 +491,6 @@ class SchoolStudentController extends Controller
             ];
         } catch (\Throwable $exception) {
             report($exception);
-
-            try {
-                Mail::to($user->email)->send(new StudentAccountSetupMail(
-                    studentName: $user->name,
-                    schoolName: $school->institution_name,
-                    setupUrl: $setupUrl,
-                    senderEmail: $schoolSenderEmail,
-                    senderName: $schoolSenderName,
-                    useSenderAsFrom: false,
-                ));
-
-                return [
-                    'sent' => true,
-                    'expiresAt' => $expiresAt->toIso8601String(),
-                ];
-            } catch (\Throwable $fallbackException) {
-                report($fallbackException);
-            }
 
             return [
                 'sent' => false,

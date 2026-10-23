@@ -36,7 +36,8 @@ export function createSharedPollingResource<T>({
       try {
         currentValue = await load()
       } catch {
-        currentValue = initialValue
+        // Keep the last successful snapshot on transient fetch errors
+        // (e.g. endorsements /applications 403/5xx) instead of wiping the UI empty.
       } finally {
         emit()
         inflight = null

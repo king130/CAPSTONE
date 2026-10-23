@@ -52,15 +52,17 @@ export function setToken(token: string | null): void {
 }
 
 export function apiBase(): string {
-  const explicit = normalizeApiBase(import.meta.env.VITE_API_BASE_URL)
-  if (explicit) return explicit
-
+  // Local Vite: use same-origin `/api` proxy. Crossing to :8000 causes browser
+  // "Failed to fetch" when Origin is localhost but CORS only allows 127.0.0.1 (or vice versa).
   if (import.meta.env.DEV && typeof window !== 'undefined') {
     const hostname = window.location.hostname
     if (hostname === '127.0.0.1' || hostname === 'localhost') {
-      return 'http://127.0.0.1:8000/api'
+      return ''
     }
   }
+
+  const explicit = normalizeApiBase(import.meta.env.VITE_API_BASE_URL)
+  if (explicit) return explicit
 
   return ''
 }
@@ -81,7 +83,13 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     headers.set('Authorization', `Bearer ${token}`)
   }
 
-  const res = await fetch(url, { ...init, headers })
+  let res: Response
+  try {
+    res = await fetch(url, { ...init, headers })
+  } catch (networkError) {
+    const detail = networkError instanceof Error ? networkError.message : 'network error'
+    throw new Error(`Failed to reach API at ${url} (${detail})`)
+  }
   if (res.status === 204) {
     return undefined as T
   }

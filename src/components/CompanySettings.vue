@@ -8,6 +8,7 @@ import { buildProfileAvatarUrl, uploadProfileAvatar } from '@/services/profileMe
 import { ensurePublicProfile } from '@/services/profilesPublic'
 import Swal from '@/services/swal'
 import { BellIcon } from '@heroicons/vue/24/outline'
+import Select from '@/components/ui/select/Select.vue'
 
 const authStore = useAuthStore()
 
@@ -510,17 +511,14 @@ function handleImageError(event: Event) {
 
               <div class="form-group">
                 <label class="form-label">Company Type</label>
-                <select 
-                  v-model="companyInfo.companyType"
-                  class="form-input"
-                >
+                <Select v-model="companyInfo.companyType">
                   <option value="">Select type</option>
                   <option value="Corporation">Corporation</option>
                   <option value="Partnership">Partnership</option>
                   <option value="Sole Proprietorship">Sole Proprietorship</option>
                   <option value="LLC">Limited Liability Company (LLC)</option>
                   <option value="Cooperative">Cooperative</option>
-                </select>
+                </Select>
               </div>
 
               <div class="form-group">
@@ -628,19 +626,19 @@ function handleImageError(event: Event) {
               <div class="form-row">
                 <div class="form-group">
                   <label class="form-label">City/Municipality in Cavite</label>
-                  <select v-model="addressInfo.city" class="form-input">
+                  <Select v-model="addressInfo.city">
                     <option value="">Select a city or municipality</option>
                     <optgroup v-for="group in caviteLocationGroups" :key="group.label" :label="group.label">
                       <option v-for="option in group.options" :key="option" :value="option">{{ option }}</option>
                     </optgroup>
-                  </select>
+                  </Select>
                 </div>
                 <div class="form-group">
                   <label class="form-label">Barangay</label>
-                  <select v-model="addressInfo.barangay" class="form-input" :disabled="!addressInfo.city">
+                  <Select v-model="addressInfo.barangay" :disabled="!addressInfo.city">
                     <option value="">{{ availableBarangays.length ? 'Select a barangay' : 'Select a city or municipality first' }}</option>
                     <option v-for="option in availableBarangays" :key="option" :value="option">{{ option }}</option>
-                  </select>
+                  </Select>
                 </div>
               </div>
               <div class="form-row">
@@ -667,12 +665,12 @@ function handleImageError(event: Event) {
               <div class="form-group">
                 <label class="form-label">Add Accepted Course</label>
                 <div class="course-entry">
-                  <select v-model="selectedCourse" class="form-input">
+                  <Select v-model="selectedCourse">
                     <option value="">Select a course or program</option>
                     <optgroup v-for="group in courseGroups" :key="group.label" :label="group.label">
                       <option v-for="option in group.options" :key="option" :value="option">{{ option }}</option>
                     </optgroup>
-                  </select>
+                  </Select>
                   <button type="button" class="course-add-btn" @click="addCourse(selectedCourse)">Add</button>
                 </div>
                 <div class="course-entry" style="margin-top: 10px;">
@@ -1210,6 +1208,11 @@ function handleImageError(event: Event) {
   display: flex;
   gap: 10px;
   align-items: center;
+}
+
+.course-entry > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .course-add-btn {

@@ -1,10 +1,20 @@
+import type { AssessmentRecord } from '@/services/assessments'
 import type { InterviewRecord } from '@/services/interviews'
 import type { OJTLog } from '@/services/ojtService'
 
 export type ApplicationStepperTone = 'pending' | 'active' | 'complete' | 'error' | 'warning'
 
+export type ApplicationStepperKey =
+  | 'applied'
+  | 'school'
+  | 'interview'
+  | 'company'
+  | 'assessment'
+  | 'ojt'
+  | 'completed'
+
 export interface ApplicationStepperStep {
-  key: 'submitted' | 'school_endorsed' | 'company_accepted' | 'interview' | 'ojt'
+  key: ApplicationStepperKey
   label: string
   tone: ApplicationStepperTone
   complete: boolean
@@ -19,6 +29,20 @@ export interface ApplicationStepperResult {
   nextActionTo?: string
 }
 
+export interface ApplicationStepperInput {
+  status?: string | null
+  /** Preferred when present — legacy status stays "endorsed" through interview/assessment. */
+  trackerStage?: string | null
+  interviews?: InterviewRecord[]
+  assessments?: AssessmentRecord[]
+  ojtLogs?: OJTLog[]
+  requiredHours?: number | null
+  dtrApproved?: number | null
+  dtrPending?: number | null
+  certificateIssued?: boolean
+  audience?: 'intern' | 'school' | 'company'
+}
+
 function normalizeStatus(status?: string | null): string {
   const raw = String(status || '').trim().toLowerCase()
   if (raw === 'pending') return 'submitted'
@@ -27,165 +51,293 @@ function normalizeStatus(status?: string | null): string {
   return raw
 }
 
-function pickInterview(interviews: InterviewRecord[]): InterviewRecord | null {
-  if (!interviews.length) return null
-  const ranked = [...interviews].sort((a, b) => {
-    const rank = (status: InterviewRecord['status']) => {
-      if (status === 'confirmed' || status === 'completed') return 3
-      if (status === 'proposed') return 2
-      if (status === 'cancelled') return 1
-      return 0
-    }
-    return rank(b.status) - rank(a.status) || String(b.scheduledAt).localeCompare(String(a.scheduledAt))
-  })
-  return ranked[0] ?? null
+function interviewRank(status: InterviewRecord['status']): number {
+  if (status === 'completed') return 4
+  if (status === 'confirmed') return 3
+  if (status === 'proposed') return 2
+  if (status === 'cancelled') return 1
+  return 0
 }
 
-export function deriveApplicationStepper(input: {
-  status?: string | null
-  interviews?: InterviewRecord[]
-  ojtLogs?: OJTLog[]
-}): ApplicationStepperResult {
+function pickInterview(interviews: InterviewRecord[]): InterviewRecord | null {
+  if (!interviews.length) return null
+  return [...interviews].sort(
+    (a, b) => interviewRank(b.status) - interviewRank(a.status) || String(b.scheduledAt).localeCompare(String(a.scheduledAt)),
+  )[0] ?? null
+}
+
+function formatWhen(value?: string | null): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+function stageLabel(stage?: string | null): string {
+  const raw = String(stage || '').trim().toLowerCase()
+  if (raw === 'pre_screen') return 'Pre-screen'
+  if (raw === 'interview') return 'Interview'
+  if (raw === 'final') return 'Final'
+  return raw ? raw.split('_').join(' ') : 'Assessment'
+}
+
+function latestAssessment(assessments: AssessmentRecord[]): AssessmentRecord | null {
+  if (!assessments.length) return null
+  return [...assessments].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0] ?? null
+}
+
+function approvedHours(logs: OJTLog[]): number {
+  return logs.reduce((sum, log) => {
+    if (log.status !== 'approved') return sum
+    const hours = Number(log.hoursRendered)
+    return sum + (Number.isFinite(hours) ? hours : 0)
+  }, 0)
+}
+
+function step(
+  key: ApplicationStepperKey,
+  label: string,
+  tone: ApplicationStepperTone,
+  message: string,
+): ApplicationStepperStep {
+  return {
+    key,
+    label,
+    tone,
+    complete: tone === 'complete',
+    current: false,
+    message,
+  }
+}
+
+export function deriveApplicationStepper(input: ApplicationStepperInput): ApplicationStepperResult {
   const status = normalizeStatus(input.status)
+  const trackerStage = String(input.trackerStage || '').trim().toLowerCase()
   const interview = pickInterview(input.interviews ?? [])
+  const assessment = latestAssessment(input.assessments ?? [])
   const logs = input.ojtLogs ?? []
-  const hasApprovedHours = logs.some((log) => log.status === 'approved' && Number(log.hoursRendered) > 0)
-  const hasProgress = hasApprovedHours || logs.some((log) => Number(log.hoursRendered) > 0)
+  const hours = approvedHours(logs)
+  const required = input.requiredHours != null && Number.isFinite(Number(input.requiredHours))
+    ? Number(input.requiredHours)
+    : null
+  const certificateIssued = input.certificateIssued === true
 
-  const schoolRejected = status === 'school_rejected'
-  const companyRejected = status === 'rejected'
-  const endorsedOrBeyond = ['endorsed', 'accepted', 'rejected'].includes(status) || schoolRejected
-  const accepted = status === 'accepted'
-  const pastSchool = ['endorsed', 'accepted', 'rejected'].includes(status)
+  const schoolRejected = status === 'school_rejected' || trackerStage === 'school_rejected'
+  const companyRejected = status === 'rejected' || trackerStage === 'rejected'
+  const endorsed = ['endorsed', 'accepted', 'rejected'].includes(status)
+    || ['endorsed', 'interview_scheduled', 'interviewed', 'assessed', 'accepted', 'rejected'].includes(trackerStage)
+  const accepted = status === 'accepted' || trackerStage === 'accepted'
+  const submitted = (status === 'submitted' || status === '') && (!trackerStage || trackerStage === 'applied')
 
-  const interviewComplete = interview?.status === 'confirmed' || interview?.status === 'completed'
-  const interviewCancelled = interview?.status === 'cancelled'
-  const interviewProposed = interview?.status === 'proposed'
+  const interviewCompleted = interview?.status === 'completed'
+    || trackerStage === 'interviewed'
+    || trackerStage === 'assessed'
+    || accepted
+  const interviewConfirmed = interview?.status === 'confirmed' || interviewCompleted
+  const interviewScheduled = interview?.status === 'proposed' || interviewConfirmed
+    || trackerStage === 'interview_scheduled'
+  const interviewCancelled = interview?.status === 'cancelled' && !interviewScheduled
+  const when = formatWhen(interview?.scheduledAt)
+  const hasAssessment = Boolean(assessment) || trackerStage === 'assessed'
+  const readyForHostDecision = (trackerStage === 'assessed' || hasAssessment)
+    && !accepted
+    && !companyRejected
+
+  const schoolTone: ApplicationStepperTone = schoolRejected ? 'error' : endorsed ? 'complete' : 'active'
+  const interviewTone: ApplicationStepperTone = interviewCancelled
+    ? 'warning'
+    : interviewConfirmed
+      ? 'complete'
+      : interview?.status === 'proposed' || trackerStage === 'interview_scheduled'
+        ? 'active'
+        : status === 'endorsed' || trackerStage === 'endorsed'
+          ? 'active'
+          : 'pending'
+  const assessmentTone: ApplicationStepperTone = hasAssessment
+    ? 'complete'
+    : interviewCompleted || interviewConfirmed
+      ? 'active'
+      : accepted
+        ? 'active'
+        : 'pending'
+  const companyTone: ApplicationStepperTone = companyRejected
+    ? 'error'
+    : accepted
+      ? 'complete'
+      : readyForHostDecision
+        ? 'active'
+        : 'pending'
+
+  const ojtMessage = (() => {
+    if (!accepted && !certificateIssued) return 'OJT starts after the company accepts the application.'
+    const parts: string[] = []
+    if (required != null) {
+      const percent = required > 0 ? Math.round((hours / required) * 100) : 0
+      parts.push(`Approved hours ${hours} / ${required} (${percent}%)`)
+    } else if (logs.length) {
+      parts.push(`Approved hours ${hours}`)
+    }
+    if (input.dtrApproved != null || input.dtrPending != null) {
+      const approvedCount = input.dtrApproved ?? 0
+      const pendingCount = input.dtrPending ?? 0
+      parts.push(`DTRs ${approvedCount} approved${pendingCount ? `, ${pendingCount} pending` : ''}`)
+    }
+    return parts.join('. ') || 'Log hours to start OJT tracking.'
+  })()
 
   const steps: ApplicationStepperStep[] = [
-    {
-      key: 'submitted',
-      label: 'Submitted',
-      tone: 'complete',
-      complete: true,
-      current: status === 'submitted',
-      message: 'Application submitted.',
-    },
-    {
-      key: 'school_endorsed',
-      label: 'School endorsed',
-      tone: schoolRejected ? 'error' : pastSchool ? 'complete' : status === 'submitted' ? 'active' : 'pending',
-      complete: pastSchool,
-      current: status === 'submitted' || schoolRejected,
-      message: schoolRejected
+    step('applied', 'Applied', 'complete', 'Application submitted.'),
+    step(
+      'school',
+      schoolRejected ? 'School rejected' : 'School endorsement',
+      submitted ? 'active' : schoolTone,
+      schoolRejected
         ? 'Your school did not endorse this application.'
-        : pastSchool
-          ? 'Your school endorsed this application.'
-          : 'Waiting for your school to endorse.',
-    },
-    {
-      key: 'company_accepted',
-      label: 'Company accepted',
-      tone: schoolRejected
-        ? 'pending'
-        : companyRejected
-          ? 'error'
-          : accepted
-            ? 'complete'
-            : status === 'endorsed'
-              ? 'active'
-              : 'pending',
-      complete: accepted,
-      current: !schoolRejected && (status === 'endorsed' || companyRejected),
-      message: schoolRejected
-        ? 'Company review did not start.'
-        : companyRejected
-          ? 'The company did not accept this application.'
-          : accepted
-            ? 'The company accepted your application.'
-            : status === 'endorsed'
-              ? 'Waiting for the company decision.'
-              : 'Company review comes after school endorsement.',
-    },
-    {
-      key: 'interview',
-      label: 'Interview',
-      tone: schoolRejected || companyRejected
-        ? 'pending'
-        : interviewComplete
-          ? 'complete'
-          : interviewCancelled
-            ? 'warning'
-            : interviewProposed || accepted
-              ? 'active'
-              : 'pending',
-      complete: interviewComplete,
-      current: !schoolRejected && !companyRejected && (interviewProposed || interviewCancelled || (accepted && !interviewComplete && !hasProgress)),
-      message: interviewCancelled
-        ? 'Interview was cancelled. Wait for a new schedule or contact the host.'
-        : interviewComplete
-          ? 'Interview confirmed.'
-          : interviewProposed
-            ? 'Confirm your interview schedule.'
-            : accepted
-              ? 'Interview details will appear when scheduled.'
-              : 'Interview follows company acceptance.',
-    },
-    {
-      key: 'ojt',
-      label: 'OJT',
-      tone: schoolRejected || companyRejected
-        ? 'pending'
-        : hasApprovedHours || hasProgress
-          ? 'complete'
-          : accepted
-            ? 'active'
-            : 'pending',
-      complete: hasApprovedHours || hasProgress,
-      current: accepted && (hasProgress || (!interviewProposed && !interviewCancelled)),
-      message: hasApprovedHours || hasProgress
-        ? 'OJT hours are in progress.'
-        : accepted
-          ? 'Log your hours to start OJT tracking.'
-          : 'OJT starts after you are accepted.',
-    },
+        : endorsed
+          ? 'Your application was endorsed by the school.'
+          : 'Waiting for school endorsement.',
+    ),
   ]
 
-  // Keep only one "current" marker on the furthest relevant step.
-  let currentKey: ApplicationStepperStep['key'] | null = null
-  if (schoolRejected) currentKey = 'school_endorsed'
-  else if (companyRejected) currentKey = 'company_accepted'
-  else if (status === 'submitted') currentKey = 'submitted'
-  else if (status === 'endorsed') currentKey = 'company_accepted'
-  else if (interviewProposed || interviewCancelled) currentKey = 'interview'
-  else if (accepted && !hasProgress) currentKey = interviewComplete || !interview ? 'ojt' : 'interview'
-  else if (accepted && hasProgress) currentKey = 'ojt'
-  else currentKey = 'submitted'
+  if (!schoolRejected) {
+    steps.push(
+      step(
+        'interview',
+        interviewCompleted ? 'Interview completed' : interviewConfirmed ? 'Interview confirmed' : 'Interview',
+        !endorsed && !interview ? 'pending' : interviewTone,
+        interviewCancelled
+          ? 'Interview was cancelled. The host organization can propose a new time.'
+          : interviewCompleted
+            ? `Interview completed${when ? ` · ${when}` : ''}.`
+            : interviewConfirmed
+              ? `Interview confirmed${when ? ` · ${when}` : ''}.`
+                : interview?.status === 'proposed' || trackerStage === 'interview_scheduled'
+                ? `Interview scheduled${when ? ` · ${when}` : ''}.`
+                : status === 'endorsed' || trackerStage === 'endorsed'
+                  ? 'Waiting for the host organization to schedule an interview.'
+                  : accepted
+                    ? 'No interview was recorded.'
+                    : 'Interview is scheduled by the host organization after school endorsement.',
+      ),
+    )
 
-  for (const step of steps) {
-    step.current = step.key === currentKey
+    if (companyRejected) {
+      steps.push(
+        step(
+          'company',
+          'Host rejected',
+          'error',
+          'The host organization did not accept this application.',
+        ),
+      )
+    } else {
+      const score = assessment?.overallScore
+      steps.push(
+        step(
+          'assessment',
+          'Assessment',
+          assessmentTone,
+          hasAssessment
+            ? `Evaluated · ${stageLabel(assessment?.stage)}${score != null ? ` · score ${score}` : ''}.`
+            : accepted
+              ? 'Not started. An evaluator can record a score when ready.'
+              : interviewCompleted || interviewConfirmed
+                ? 'Host submits technical, communication, and attitude scores next.'
+                : 'Assessment opens after the interview is marked complete.',
+        ),
+      )
+      steps.push(
+        step(
+          'company',
+          'Host decision',
+          companyTone,
+          accepted
+            ? 'The host organization accepted this application.'
+            : readyForHostDecision
+              ? 'Accept or reject this application.'
+              : 'Accept/Reject unlock after the host submits an assessment.',
+        ),
+      )
+      steps.push(
+        step(
+          'ojt',
+          'OJT',
+          certificateIssued ? 'complete' : accepted ? 'active' : 'pending',
+          ojtMessage,
+        ),
+      )
+      steps.push(
+        step(
+          'completed',
+          'Completed',
+          certificateIssued ? 'complete' : 'pending',
+          certificateIssued
+            ? 'A certificate has been issued for this placement.'
+            : 'Completion follows the existing OJT and certificate rules.',
+        ),
+      )
+    }
   }
 
+  let currentKey: ApplicationStepperKey = 'applied'
+  if (schoolRejected) currentKey = 'school'
+  else if (companyRejected) currentKey = 'company'
+  else if (submitted || trackerStage === 'applied') currentKey = 'school'
+  else if (!interviewScheduled && (status === 'endorsed' || trackerStage === 'endorsed')) currentKey = 'interview'
+  else if (interviewScheduled && !interviewCompleted) currentKey = 'interview'
+  else if ((interviewCompleted || interviewConfirmed) && !hasAssessment && !accepted) currentKey = 'assessment'
+  else if (readyForHostDecision) currentKey = 'company'
+  else if (accepted && !hasAssessment) currentKey = 'assessment'
+  else if (accepted && !certificateIssued) currentKey = 'ojt'
+  else if (certificateIssued) currentKey = 'completed'
+  else currentKey = 'applied'
+
+  const currentIndex = steps.findIndex((item) => item.key === currentKey)
+  for (const [index, item] of steps.entries()) {
+    item.current = item.key === currentKey
+    if (item.current && item.tone === 'pending') item.tone = 'active'
+    if (!item.current && item.tone === 'active' && index !== currentIndex) item.tone = 'pending'
+  }
+
+  const audience = input.audience ?? 'intern'
   let nextAction = 'Keep an eye on updates for this application.'
   let nextActionTo: string | undefined
-
-  if (schoolRejected) {
-    nextAction = 'This application stopped after school review. Browse other opportunities.'
-    nextActionTo = '/intern/opportunities'
-  } else if (companyRejected) {
-    nextAction = 'This application was not selected. Browse other opportunities.'
-    nextActionTo = '/intern/opportunities'
-  } else if (status === 'submitted') {
-    nextAction = 'Waiting for your school to endorse'
-  } else if (status === 'endorsed') {
-    nextAction = 'Waiting for the company to accept'
-  } else if (interviewProposed) {
-    nextAction = 'Confirm your interview'
-  } else if (interviewCancelled) {
-    nextAction = 'Interview cancelled — watch for a new schedule'
-  } else if (accepted) {
-    nextAction = 'Log your hours'
-    nextActionTo = '/ojt-hours'
+  if (schoolRejected || companyRejected) {
+    nextAction = audience === 'intern'
+      ? 'This application has stopped. Browse other opportunities.'
+      : 'This application has stopped.'
+    if (audience === 'intern') nextActionTo = '/intern/opportunities'
+  } else if (submitted) {
+    nextAction = audience === 'school' ? 'Endorse or reject this application.' : 'Waiting for school endorsement.'
+  } else if ((status === 'endorsed' || trackerStage === 'endorsed' || trackerStage === 'interview_scheduled') && interview?.status === 'proposed') {
+    nextAction = audience === 'intern' ? 'Confirm your interview.' : 'Interview is waiting for confirmation.'
+  } else if ((status === 'endorsed' || trackerStage === 'endorsed') && interviewCancelled) {
+    nextAction = audience === 'company'
+      ? 'Interview cancelled. Propose a new time.'
+      : 'Interview cancelled. Waiting for a new time.'
+  } else if (readyForHostDecision) {
+    nextAction = audience === 'company'
+      ? 'Accept or reject this application in the interview tracker.'
+      : 'Waiting for the host organization decision.'
+  } else if (interviewCompleted && !hasAssessment) {
+    nextAction = audience === 'company'
+      ? 'Submit the assessment, then Accept or Reject will appear.'
+      : 'Waiting for the host to submit an assessment.'
+  } else if (status === 'endorsed' || trackerStage === 'endorsed' || trackerStage === 'interview_scheduled') {
+    nextAction = audience === 'company'
+      ? 'Schedule the interview (Accept/Reject unlock after assessment).'
+      : 'Waiting for the host organization to schedule an interview.'
+  } else if (accepted && !certificateIssued) {
+    nextAction = audience === 'intern' ? 'Track your OJT hours.' : 'OJT is in progress.'
+    if (audience === 'intern') nextActionTo = '/ojt-hours'
+  } else if (certificateIssued) {
+    nextAction = 'A certificate has been issued for this placement.'
   }
 
   return {

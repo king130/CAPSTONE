@@ -182,6 +182,11 @@ class InternshipCatalogListingTest extends TestCase
             'is_cover' => true,
         ]);
         Storage::disk('public')->put('organization-media/'.$ctx['companyOrg']->id.'/cover.jpg', 'fake');
+        $avatarPath = 'avatars/'.$ctx['companyUser']->id.'/profile.jpg';
+        Storage::disk('public')->put($avatarPath, 'fake');
+        $ctx['companyUser']->forceFill([
+            'profile' => array_merge($ctx['companyUser']->profile ?? [], ['avatarPath' => $avatarPath]),
+        ])->save();
 
         $legacy = $this->getJson('/api/internships?status=active&city=Bacoor');
         $legacy->assertOk();

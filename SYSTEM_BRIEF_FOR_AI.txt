@@ -1,7 +1,7 @@
 ================================================================================
 CAPSTONE / OJT INTERN PATH — FULL SYSTEM BRIEF FOR AI ASSISTANTS
 ================================================================================
-Last updated: 2026-08-19
+Last updated: 2026-10-08
 Repo root: CAPSTONE (Windows paths like C:\Users\...\Codes\CAPSTONE)
 
 PURPOSE OF THIS FILE
@@ -52,6 +52,11 @@ Production-ish local (SPA served by Laravel):
   Then open http://127.0.0.1:8000 — if VITE_API_BASE_URL was empty at build time,
   API calls use same-origin /api (works). If set to absolute URL, that is baked in.
 
+Frontend checks:
+  npm run type-check
+  npm run build
+  npm test   (vitest; navigation permission tests live in src/layouts/navigation.test.ts)
+
 ================================================================================
 2. TECH STACK
 ================================================================================
@@ -74,89 +79,237 @@ BACKEND
   - SQLite or MySQL via .env
 
 ================================================================================
-3. USER ROLES (APP-LEVEL)
+3. TWO ROLE LAYERS (READ THIS BEFORE CHANGING ACCESS)
 ================================================================================
 
-User.role (app routing role) values:
-  admin | company | school | student | guest | null
+There are two different "role" concepts. Most access bugs come from treating
+them as one.
 
-Post-login dashboards:
-  admin   → /admin/overview
-  company → /dashboard
-  school  → /school
-  student → /intern   (product language: Intern)
-  guest   → /guest
+A) APP WORKSPACE ROLE
+  User.role / User::effectiveAppRole() is only:
+    admin | school | company | student | guest | null
+  This chooses the workspace shell and the route's requiresRole.
 
-Important naming caveat:
-  - API/DB role is often "student"
-  - UI routes say /intern and "Intern"
+  effectiveAppRole() (backend/app/Models/User.php):
+    - platform admin → admin
+    - school-org membership with slug intern or student_member → student
+    - school-org membership with no role slug, if the user has a student row → student
+    - EVERY other school-org membership → school
+      (School Admin, Department Head, Teacher, Registrar, custom subuser)
+    - any company-org membership → company
+    - otherwise users.role, with guest stored as null
 
-ORG-SCOPED RBAC ROLES (seeded in RbacSeeder / OrgPermissions):
-  Platform:
-    system_admin, platform_super_admin, platform_support_admin
-  School:
-    school_admin, school_department_head, student_member
-  Company:
-    company_admin, company_hr_manager
+  Post-login landing (src/router/index.ts getRoleDashboard):
+    admin   → /admin/overview
+    student → /intern   (product language: Intern; API/DB role is often "student")
+    guest   → /guest
+    school  → first school nav page the membership permissions allow, else /settings
+    company → first company nav page the membership permissions allow, else /settings
 
-Permission categories (canonical org.* keys):
+  There is no ojt_admin slug and no "OJT Office" role. "CvSU OJT Office" is the
+  display name of the primary school account (school@cvsu.edu.ph). Its membership
+  role is School Admin.
+
+B) ORGANIZATION MEMBERSHIP ROLE
+  organization_memberships.role_id points at a tenant role.
+  Effective permissions = role permission keys ∪ grants − denies.
+  GET /api/auth/me returns them on memberships[0].permissions.
+  The frontend reads memberships[0] only (same as hasPermission()).
+  After a permission save, the subuser must log out and back in so /auth/me
+  reloads that list.
+
+GLOBAL SEEDED SLUGS (RbacSeeder) vs TENANT DEFAULT SLUGS (TenantRoleService)
+  Platform: system_admin, platform_super_admin, platform_support_admin
+  School global: school_admin, school_department_head, student_member
+  Company global: company_admin, company_hr_manager
+
+  New school tenants also get (TenantRoleService::defaultDefinitionsForType):
+    school_admin, department_head, teacher, registrar, intern
+  New company tenants also get:
+    company_admin, manager, hr, finance
+
+  The demo department head uses the GLOBAL slug school_department_head,
+  not the tenant slug department_head. Do not merge or rename those slugs
+  unless a task explicitly says so.
+
+DEFAULT SCHOOL ROLE PACKS (OrgPermissions + TenantRoleService)
+  School Admin: full org catalog, including manage students, roles, subscription,
+    internships, agreements, applications, OJT, reports, export, certificates.
+  Department Head: view/approve applications, view students, view/approve OJT,
+    reports including export, agreements, certificates, assessments, profile.
+    No manage_students, no manage_roles, no manage_subscription.
+  Teacher: org.view_students, org.view_ojt_progress, org.view_applications,
+    org.view_reports, org.reports_view, view_reports, upload_files, manage_profile.
+    manage_profile does NOT grant course-hour management or org required-hours edits.
+  Registrar: view/manage students, reports, manage_users, upload_files.
+  Intern (membership slug intern): upload_files only, and effectiveAppRole is student.
+
+DEFAULT COMPANY ROLE PACKS
+  Company Admin: members, roles, subscription, internships, agreements,
+    applications, approve OJT logs, assessments, reports, export, certificates.
+    Does not include org.view_students (that is a school roster key).
+  HR: internships, agreements, applications, approve OJT, assessments, reports.
+    No roles, no subscription.
+  Manager: internships, applications, reports (narrower than HR).
+  Finance: agreements, reports, subscription.
+
+PERMISSION CATALOG (canonical org.* keys)
   View:     org.view_internships, org.view_agreements, org.view_applications,
             org.view_students, org.view_ojt_progress, org.view_reports
   Manage:   org.manage_internships, org.manage_agreements, org.manage_applications,
             org.manage_students, org.manage_assessments, org.manage_members,
-            org.manage_roles, ...
+            org.manage_roles, org.manage_subscription, org.manage_profile
   Reports:  org.reports_view, org.reports_export
   Approve:  org.approve_applications, org.approve_agreements, org.approve_ojt_logs,
             org.approve_certificates
-  Legacy aliases still exist (manage_contracts, review_applications, etc.)
-  Frontend aliases: src/services/permissions.ts
-  Backend gate: app/Services/PermissionGate.php
-  Catalog: app/Support/OrgPermissions.php
+  Legacy keys still exist and are separate toggles in the matrix:
+    manage_users, manage_roles, manage_permissions, view_reports, upload_files,
+    manage_subscription, manage_profile, manage_internships, manage_contracts,
+    review_applications, org.manage_contracts, org.review_applications, org.manage_members
 
-UI for tenant RBAC:
-  /access/roles       → TenantRbac.vue mode=roles
-  /access/permissions → TenantRbac.vue mode=permissions
-  Shared by school + company (+ admin can manage multiple tenants)
+  Catalog:  backend/app/Support/OrgPermissions.php
+  Gate:     backend/app/Services/PermissionGate.php
+  Frontend alias helper (in-page buttons): src/services/permissions.ts
+  UI:       /access/roles and /access/permissions → TenantRbac.vue
+            OrganizationAccessManager.vue exists but is unused. Do not wire it
+            unless asked.
 
 ================================================================================
-4. DEMO ACCOUNTS (DemoAccountsSeeder)
+4. NAVIGATION AND ROUTE PERMISSIONS (UPDATED 2026-10-08)
+================================================================================
+
+School and company sidebars used to be a hardcoded list for everyone with
+effectiveAppRole school or company. Limited subusers still saw and could open
+every page. That is fixed.
+
+Source of truth: src/layouts/navigation.ts
+  visibleNavItems(), assignedPermissionAllows(), firstAllowedOrgPath(),
+  routePermissionRequirements()
+Applied by:
+  src/layouts/MainLayout.vue   filters the sidebar
+  src/router/index.ts          blocks direct URLs for school/company users
+  src/views/school/School.vue and src/views/company/Company.vue
+                               hide dashboard shortcuts the user cannot open
+
+The frontend gate uses EXACT keys on memberships[0].permissions.
+It does NOT apply PermissionGate cross-feature aliases.
+A page stays visible if ANY key in its group is still assigned.
+Admin and student menus are not filtered this way.
+Pending or rejected organizations still only see Verification, Notifications,
+and Settings (pendingOrganizationNavItems). Settings itself is always available.
+
+PAGE → ANY OF THESE ASSIGNED KEYS
+  School dashboard
+      report keys, application keys, org.view_students, or internship keys
+  Student Accounts (/school/students)
+      org.manage_students, manage_users, org.manage_members
+  Role Management (/access/roles) and Permissions (/access/permissions)
+      org.manage_roles, manage_roles, manage_permissions
+  Interns List (/school/interns)
+      org.view_students
+  Opportunities (/school/opportunities) and Posted Jobs (/dashboard/jobs)
+      org.view_internships, org.manage_internships, manage_internships
+  Endorsements (/school/endorsements) and Applicants (/dashboard/applicants)
+      org.view_applications, org.manage_applications, org.approve_applications,
+      review_applications, org.review_applications
+  Placements (/school/placements)
+      application keys or org.view_students
+  Reports
+      org.view_reports, org.reports_view, view_reports
+  Subscription (/billing)
+      org.manage_subscription, manage_subscription
+  Agreements, /agreements/new, /agreements/types
+      org.view_agreements, org.manage_agreements, org.approve_agreements,
+      manage_contracts, org.manage_contracts
+  OJT Hours (/ojt-hours) for school and company
+      org.view_ojt_progress, org.approve_ojt_logs
+  Company dashboard (/dashboard)
+      internship keys or application keys
+
+Students and platform admins can still open /ojt-hours. The permission check
+runs only when the signed-in app role is school or company.
+
+If a school/company user has no allowed nav item, landing is /settings.
+Direct navigation to a disallowed named route redirects to the first allowed
+page. Verified with depthead@cvsu.edu.ph: Student Accounts, Role Management,
+Permissions, and Subscription are hidden; /school/students and /access/roles
+return to /school. School Admin still sees the full menu.
+
+BACKEND ALIASES STILL EXIST — do not delete them unless a task says so.
+PermissionGate::ALIASES can let an API succeed when a related key is still on,
+even if the checkbox the user thinks they turned off is off. Examples:
+  org.view_ojt_progress  also satisfied by view_reports, org.view_reports,
+                         org.view_students
+  org.view_students      also satisfied by manage_users, org.manage_members
+  application view/manage/approve also satisfied by review_applications
+  org.reports_export     aliases ONLY itself (bleed fix; keep it)
+  org.approve_certificates aliases ONLY itself (bleed fix; keep it)
+Turning off only one of the three report keys (org.view_reports,
+org.reports_view, view_reports) still leaves Reports visible.
+
+ALREADY FIXED AND SHOULD STAY FIXED
+  view_reports does not grant org.reports_export or org.approve_certificates.
+  manage_profile does not allow PATCH of organization-wide required OJT hours.
+  That setting requires org.approve_ojt_logs.
+  ReportExportController 403 returns JsonResponse (union type includes it;
+  a missing JsonResponse previously became a TypeError 500).
+
+================================================================================
+5. DEMO ACCOUNTS (DemoAccountsSeeder)
 ================================================================================
 
 Run: cd backend && php artisan db:seed --class=DemoAccountsSeeder
 (Also called from DatabaseSeeder with RbacSeeder + ContractTypeSeeder)
 
-  Email                      Password          Role
+  Email                      Password          What they are
   -------------------------  ----------------  --------------------------------
   admin@ojtpath.com          Admin@2026!       Platform admin
-  school@cvsu.edu.ph         School@2026!      School admin (CvSU)
-  depthead@cvsu.edu.ph       DeptHead@2026!    School department head
+  school@cvsu.edu.ph         School@2026!      School Admin. Display name
+                                               "CvSU OJT Office". Membership
+                                               school_admin.
+  depthead@cvsu.edu.ph       DeptHead@2026!    users.role school. Membership
+                                               slug school_department_head.
   company@techcorp.com       Company@2026!     Company admin (TechCorp)
-  student@cvsu.edu.ph        Student@2026!     Student / intern
+  student@cvsu.edu.ph        Student@2026!     Intern. Course BS Computer Science.
 
 School subscription code for students: CVSU-2026
 
 ================================================================================
-5. CORE DOMAIN FLOWS
+6. CORE DOMAIN FLOWS
 ================================================================================
 
-A) INTERNSHIP / APPLICATION PIPELINE
-  Company posts internship (flexible schedule fields supported).
-  Student applies.
-  School endorses or rejects (endorsements).
-  Company accepts/rejects endorsed applicants.
-  Statuses roughly: submitted/pending → endorsed → accepted | rejected | school_rejected
+A) INTERNSHIP / APPLICATION PIPELINE (implemented order)
+  Company creates the posting in the UI (eligible courses, skills, duration
+  text). School-hosted internships exist on the API; there is no school
+  "create posting" screen.
+  Student applies → status submitted.
+  School endorses or school-rejects. Endorsement is required BEFORE interview
+  and BEFORE company acceptance. API permission: org.approve_applications.
+  Interview is optional and a separate record. The proposer cannot confirm
+  their own proposal.
+  Company accepts or rejects only after endorsement → accepted | rejected.
+  OJT logs exist only after accepted.
+  Duplicate application guard and duplicate agreement guard are in place.
+  Statuses: submitted → endorsed | school_rejected → accepted | rejected.
+  School.vue endorsement confirm snapshots the decision locally before await.
+  AlertDialog emits action then close; reading pendingDecision after close
+  used to throw "Cannot read properties of null (reading 'action')".
 
 B) AGREEMENTS (formerly Contracts)
   School ↔ Company partnership documents / MOAs.
+  Either side can initiate; the other accepts or rejects.
   User-facing term: Agreement. Routes: /agreements (alias /contracts).
   API: /api/agreements (canonical) and /api/contracts (legacy aliases).
   DB: migration may rename contracts → agreements; models dual-table aware.
-  Amendment: PATCH .../amend → status pending_amendment; both sides re-approve pattern.
+  Amendment: PATCH .../amend → status pending_amendment; both sides re-approve.
   Types: agreement-types / contract-types.
+  Creating/managing agreement types requires org.manage_agreements.
 
 C) FLEXIBLE INTERNSHIP SCHEDULE
   Fields on internships: schedule_type, weekly_hours, schedule_days, time_in/out,
   timezone, is_flexible (+ legacy free-text schedule).
+  internships.duration is display text, not the course hour requirement.
+  Demo job "website development" duration is "486 hours", weekly_hours 5.
 
 D) INTERVIEWS
   ApplicationInterview model + InterviewController
@@ -164,47 +317,103 @@ D) INTERVIEWS
 
 E) OJT LOGS / HOURS
   Real API OjtLogController (not localStorage-only).
-  Student logs hours; company/school approve.
-  Dept head can monitor progress (org.view_ojt_progress).
-  UI: OJTHours.vue + school reports/progress panels.
+  Student submits logs. Company approves each pending log in the UI.
+  School OJT screen is monitoring. API permission org.approve_ojt_logs exists
+  for school admin and department head, but the school UI is read-only monitoring.
+  Required hours used by OJT math and certificates:
+    organization settings required_ojt_hours / requiredHours if set,
+    otherwise DEFAULT_REQUIRED_HOURS = 500.
+  Changing the org-wide number requires org.approve_ojt_logs, not manage_profile.
+  GET required hours is still school/company app role.
 
-F) ASSESSMENTS
+F) SCHOOL + COURSE REQUIRED HOURS (foundation + school-admin UI only)
+  Table school_course_requirements:
+    school_id, course_name, course_name_key (lowercase collapsed),
+    required_hours unsigned integer >= 1, unique (school_id, course_name_key).
+  applications.required_ojt_hours is a nullable unsigned snapshot.
+  Null is allowed. A non-null value below 1 is rejected on save.
+  Backfill (ApplicationRequiredOjtHoursBackfill) copies an explicit positive
+  school org setting only. It never invents 500. Live CvSU has no org-wide
+  hours configured, so the existing accepted application snapshot stays null.
+  Updating a course row does NOT rewrite existing application snapshots.
+  API (behind org.verified, permission org.manage_students):
+    GET/POST /api/school-course-requirements
+    PATCH /api/school-course-requirements/{schoolCourseRequirement}
+  Settings UI (SettingsPanel.vue) shows "Course OJT Requirements" only when
+  app role is school AND hasPermission('org.manage_students').
+  Teacher with only manage_profile is 403. The org-wide "OJT Required Hours"
+  block is still there.
+  NOT WIRED, and do not change unless a task explicitly asks:
+    job posting duration, application eligibility, acceptance blocking,
+    OJT hour calculations, certificate hour checks, DTR, interviews, assessments.
+  The settings empty state says application blocking is not active yet.
+
+G) ASSESSMENTS
   ApplicationAssessment — scored/stage assessments on applications.
   UI: ApplicationAssessmentPanel.vue
+  Wording should stay cautious; do not claim an AI decision.
 
-G) KPI / REPORTS / CERTIFICATES
-  GET /api/reports/kpi
-  GET /api/reports/export?type=placements|ojt|assessments
-  Certificates generate/download
-  Wired into School/Company dashboards and school reports view
+H) KPI / REPORTS / CERTIFICATES
+  GET /api/reports/kpi          requires org.reports_view or org.view_reports
+  GET /api/reports/export       requires org.reports_export only
+  Certificates:
+    Issuing requires org.approve_certificates only.
+    Index/download may still allow report-view permission to VIEW certificates.
+    The certificate is printable HTML from CertificateController::buildCertificateHtml
+    (Georgia, double #1e3a5f border, centered). It is not a generated PDF.
+    A local preview file may exist at backend/public/certificate-preview.html.
+    Do not treat that preview as the production download.
 
-H) SUBSCRIPTIONS / PAYMONGO
+I) SUBSCRIPTIONS / PAYMONGO
   Plans: free | standard | premium (SubscriptionPlanDefinition)
   Org billing page: /billing (OrganizationSubscription.vue + SubscriptionManager.vue)
   Paid upgrade: POST /subscriptions/checkout → PayMongo → return → POST /subscriptions/verify
   Pending checkout stored in organization.settings.pending_plan_change
-  Cancel pending supported in UI; stuck pending can be replaced on new checkout
+  Cancel pending (P0-03) and the pending-plan limit (P1-09) must stay as they are.
   Unpaid status=pending orgs get FREE limits until verify (SubscriptionPlanService)
-  Active orgs keep current plan during checkout (status not forced to pending if already active)
-  Requires PAYMONGO_SECRET_KEY in backend .env
+  Active orgs keep current plan during checkout.
+  If PAYMONGO_SECRET_KEY is empty, checkout and verify return HTTP 422
+  code paymongo_not_configured BEFORE any subscription mutation.
+  The UI shows an info dialog and refreshes. It does not fake success, skip
+  verify, or invent a mock provider. Do not add a fake payment path.
 
-I) SCHOOL STUDENT ACCOUNTS
-  /school/students — temporary student logins, roster, setup links
+J) SCHOOL STUDENT ACCOUNTS
+  /school/students — temporary student logins, roster, setup links.
+  Visible only with student-manage keys (see section 4).
+  Students are school-provisioned; they use the school subscription code.
+
+K) ORGANIZATION VERIFICATION
+  School and company users with verificationStatus pending, rejected, or null
+  are forced to /organization-verification until approved.
+  Sub-accounts (teachers, department heads, custom subusers) often have no
+  School or Company row of their own. formatUserProfile inherits verification
+  from organizationSchool() / organizationCompany() (the parent org).
+  Do not send them to "Awaiting organization verification" just because their
+  own school/company row is null. Middleware EnsureOrganizationVerified already
+  uses the parent org. Do not weaken verification.
+
+L) FORCED PASSWORD CHANGE
+  mustChangePassword still goes to Change Password, then
+  authStore.refreshUser(), then the role dashboard.
+  Do not skip that refresh (P0-01). The local dashboard helper does not decide
+  verification; the router guard does.
 
 ================================================================================
-6. FRONTEND STRUCTURE (KEY PATHS)
+7. FRONTEND STRUCTURE (KEY PATHS)
 ================================================================================
 
   src/main.ts                 Boot Pinia, auth init, router
   src/config/auth.ts          AUTH_DISABLED (currently false — auth ON)
   src/stores/auth.ts          Session user + login/logout/refresh
-  src/router/index.ts         All routes + guards
-  src/layouts/MainLayout.vue  Authenticated shell
-  src/layouts/navigation.ts   Nav items per role
+  src/router/index.ts         All routes + guards + permission redirect
+  src/layouts/MainLayout.vue  Authenticated shell; filters school/company nav
+  src/layouts/navigation.ts   Nav items, permission groups, route requirements
+  src/layouts/navigation.test.ts
   src/services/http.ts        apiBase(), apiFetch, token storage
   src/services/apiClient.ts   Axios with Bearer
-  src/services/auth.ts        login/register/me mapping
-  src/services/permissions.ts Client permission helpers
+  src/services/auth.ts        login/register/me mapping (memberships[].permissions)
+  src/services/permissions.ts Client hasPermission + ALIASES (in-page checks)
+  src/services/schoolPrograms.ts  Course requirement API client (errors throw)
   src/services/*.ts           Domain API clients
 
 Major views:
@@ -212,50 +421,63 @@ Major views:
   src/views/Login.vue
   src/views/RegisterSimple.vue          School/company signup (Cavite address UX)
   src/views/FindInternships.vue         Public opportunities
-  src/views/school/School.vue           School workspace (multi-section)
-  src/views/company/Company.vue         Company workspace (multi-section)
+  src/views/school/School.vue           School workspace (route name picks the section)
+  src/views/company/Company.vue         Company workspace (route name picks the section)
   src/views/intern/Intern.vue           Student/intern workspace
   src/views/admin/*                     Platform admin
   src/views/TenantRbac.vue              Roles + permission matrix
   src/views/OrganizationSubscription.vue
   src/components/SubscriptionManager.vue
+  src/components/layout/SettingsPanel.vue   Org hours + course OJT requirements
   src/views/Contracts.vue               Agreements UI
   src/views/OJTHours.vue
+  src/views/OrganizationVerification.vue
+  src/views/ChangePassword.vue
   src/components/ApplicationInterviewPanel.vue
   src/components/ApplicationAssessmentPanel.vue
   src/components/PublicSiteHeader.vue
+
+School.vue and Company.vue are one component per workspace. The route name
+selects the section (dashboard, interns, endorsements, and so on). Pushing a
+route the user cannot open is rejected by the router guard.
 
 Recent UX redesigns:
   - School dashboard: metrics, KPI, needs-attention, compact quick actions
   - Company dashboard: same pattern (emerald theme)
   - TenantRbac: cleaner roles layout; sticky permissions matrix with View/Manage/Reports/Approve groups
   - Billing UI cleaned; PayMongo kept
+  - Quick actions are filtered by the same permission groups as the sidebar
 
 ================================================================================
-7. BACKEND STRUCTURE (KEY PATHS)
+8. BACKEND STRUCTURE (KEY PATHS)
 ================================================================================
 
   backend/routes/api.php
-  backend/app/Http/Controllers/AuthController.php
+  backend/app/Http/Controllers/AuthController.php          formatUserProfile inherits parent verification
   backend/app/Http/Controllers/ContractController.php      (+ amend, agreements aliases)
   backend/app/Http/Controllers/InternshipController.php
-  backend/app/Http/Controllers/Application* / Interview / Assessment / OjtLog /
-                              Certificate / KpiReport / ReportExport /
-                              SubscriptionCheckout / TenantRbac / ...
-  backend/app/Models/*
-  backend/app/Support/OrgPermissions.php
+  backend/app/Http/Controllers/ApplicationController.php   index requires view/manage/approve applications
+  backend/app/Http/Controllers/SchoolCourseRequirementController.php
+  backend/app/Http/Controllers/OjtLogController.php
+  backend/app/Http/Controllers/CertificateController.php
+  backend/app/Http/Controllers/KpiReportController.php
+  backend/app/Http/Controllers/ReportExportController.php
+  backend/app/Http/Controllers/SubscriptionCheckoutController.php
+  backend/app/Models/SchoolCourseRequirement.php
+  backend/app/Models/Application.php                       required_ojt_hours snapshot
+  backend/app/Services/ApplicationRequiredOjtHoursBackfill.php
   backend/app/Services/PermissionGate.php
+  backend/app/Services/TenantRoleService.php
   backend/app/Services/SubscriptionPlanService.php
+  backend/app/Support/OrgPermissions.php
   backend/database/seeders/RbacSeeder.php
   backend/database/seeders/DemoAccountsSeeder.php
-  backend/database/seeders/DatabaseSeeder.php
-  backend/database/migrations/... including:
-    2026_08_01_000001_add_flexible_internship_schedule_fields.php
-    2026_08_01_000010_rename_contracts_to_agreements.php
-    2026_04_08_000001..000004 ojt_logs, assessments, certificates, interviews
+  backend/database/migrations/2026_10_08_000001_create_school_course_requirements_and_application_ojt_hours.php
+
+Most org APIs sit behind middleware org.verified.
 
 ================================================================================
-8. API SURFACE (SUMMARY)
+9. API SURFACE (SUMMARY)
 ================================================================================
 
 Public:
@@ -267,7 +489,7 @@ Public:
 
 Authenticated (auth:sanctum) highlights:
   POST /api/auth/logout
-  GET  /api/auth/me
+  GET  /api/auth/me          includes memberships[].permissions
   POST /api/auth/password
   PATCH /api/profile
   Internships CRUD, applications + status
@@ -278,7 +500,8 @@ Authenticated (auth:sanctum) highlights:
   /api/student-progress
   /api/reports/kpi, /api/reports/export
   /api/certificates*
-  /api/subscriptions/checkout, /api/subscriptions/verify
+  /api/subscriptions/checkout, /api/subscriptions/verify, free, cancel-pending
+  /api/school-course-requirements
   /api/rbac/tenants...
   /api/school-students*
   notifications, admin users, directory, etc.
@@ -287,17 +510,17 @@ Token: Authorization: Bearer <token>
 Stored client-side as localStorage key: capstone_auth_token
 
 ================================================================================
-9. AUTH FRONTEND FLAG
+10. AUTH FRONTEND FLAG
 ================================================================================
 
 src/config/auth.ts:
   export const AUTH_DISABLED = false
 
-When true: router skips guards (dev bypass). Leave false for real testing.
-Turning it on again will break realistic login/RBAC/billing QA.
+When true: router skips guards, including the new permission redirects.
+Leave false for real testing. Turning it on breaks login/RBAC/billing QA.
 
 ================================================================================
-10. FEATURE CHECKLIST (STAKEHOLDER REQUIREMENTS — STATUS)
+11. FEATURE CHECKLIST (STAKEHOLDER REQUIREMENTS — STATUS)
 ================================================================================
 
   [x] Flexible internship schedule
@@ -305,22 +528,31 @@ Turning it on again will break realistic login/RBAC/billing QA.
   [x] Agreement modification/customization (amend + pending_amendment)
   [x] Interview scheduling
   [x] RBAC View / Manage / Reports / Approve permissions
+  [x] School/company sidebar and direct routes follow membership permissions
   [x] Department head can monitor student progress
   [x] Assessment on OJT application
   [x] KPI
-  [x] Certificate of completion
+  [x] Certificate of completion (printable HTML, not a generated PDF)
   [x] Generation of reports
+  [x] School + course required-hours data model and School Admin settings UI
+  [ ] Course hours do NOT yet block applications or drive OJT/certificate math
 
 Caveats for another AI:
   - Some filenames still say Contract; prefer Agreement in user-facing copy
   - Dual API routes during transition are intentional
   - Company/School list pages (interns, endorsements tables) may still look older
-    than the redesigned dashboards — polish was prioritized for dashboards/RBAC/billing
+    than the redesigned dashboards
   - Guest signup / account-distribution flow has known orphaned edges; primary path
     is Landing → Subscription → Register
+  - Frontend nav gating and backend PermissionGate aliases are different.
+    A page can be hidden while a related API alias would still allow the call,
+    or the reverse if only a legacy duplicate key remains on.
+  - Endorsement buttons inside School.vue are not all individually hidden;
+    the API still requires org.approve_applications. The route itself requires
+    an application key, which includes view-only keys.
 
 ================================================================================
-11. HOW TO RUN / FIX COMMON ERRORS
+12. HOW TO RUN / FIX COMMON ERRORS
 ================================================================================
 
 FIRST TIME BACKEND:
@@ -350,29 +582,43 @@ UI changes not showing when using artisan-served SPA:
     npm run build && npm run deploy:backend-public
   Or use npm run dev for HMR.
 
+Limited subuser still sees a page after permissions were turned off:
+  1) Log out and back in so memberships[0].permissions refreshes.
+  2) Check whether a sibling key in the same nav group is still on
+     (section 4). Reports stay on if any of the three report keys remain.
+  3) Backend aliases (section 4) affect API checks, not the sidebar.
+
 PayMongo upgrades:
   Set PAYMONGO_SECRET_KEY in backend/.env
-  Use /billing while logged in as school or company admin
+  Use /billing while logged in as a school or company user who has
+  org.manage_subscription or manage_subscription.
+  Empty secret → 422 paymongo_not_configured. Do not fake a successful payment.
 
 ================================================================================
-12. DATA MODEL (SIMPLIFIED)
+13. DATA MODEL (SIMPLIFIED)
 ================================================================================
 
 User
   ├─ platformRole (optional, admin)
   ├─ organizationMemberships → Organization + Role + permissions
   ├─ school | company | student profile rows
+  └─ effectiveAppRole() is derived; it is not the membership role name
 
 Organization (type: school|company)
   ├─ subscription (plan, status, billing_cycle)
   ├─ settings.pending_plan_change (PayMongo pending)
+  ├─ settings.required_ojt_hours / requiredHours (org-wide; 500 fallback if absent)
+  ├─ verification status inherited by subusers who have no own school/company row
   ├─ roles, memberships
 
 School / Company
-  └─ owned by user + linked to organization
+  └─ owned by a user + linked to organization
+  School has many school_course_requirements
 
 Internship (company or school hosted)
+  └─ duration is display text
   └─ Applications
+       ├─ required_ojt_hours nullable snapshot (not yet used by OJT math)
        ├─ Interviews
        ├─ Assessments
        ├─ OjtLogs
@@ -382,7 +628,7 @@ Agreement (MOA between school & company orgs)
   └─ type, status (pending, active, pending_amendment, rejected, cancelled...), amend fields
 
 ================================================================================
-13. CONVENTIONS FOR FUTURE AI WORK
+14. CONVENTIONS FOR FUTURE AI WORK
 ================================================================================
 
 - Prefer additive changes; do not break working application/agreement flows
@@ -392,28 +638,50 @@ Agreement (MOA between school & company orgs)
 - Do NOT commit unless user asks
 - After UI changes for artisan-served mode: build + deploy:backend-public
 - Keep PayMongo as payment provider unless user explicitly changes it
+- Do not fake PayMongo success, skip verify, or add a mock provider
+- Do not change cancel-pending or the pending-plan limit unless asked
 - AUTH_DISABLED should stay false unless debugging
+- Do not rename or delete RBAC keys, and do not remove PermissionGate aliases,
+  unless a task explicitly asks. Nav gating intentionally ignores cross-feature aliases.
+- Do not give Teachers course-hour management just because they have manage_profile
+- Do not wire course required hours into eligibility, acceptance, OJT math,
+  or certificates unless a task explicitly asks
+- Do not invent an "OJT Office" or ojt_admin role
+- Forced password change must still refresh the user before routing
+- Subusers inherit parent organization verification
 - Ask before large design assumptions; match existing Tailwind/shadcn patterns
 - When serving via Laravel public/, remember Vite source ≠ live assets until rebuild
 
 ================================================================================
-14. QUICK FILE INDEX FOR HOTSPOTS
+15. QUICK FILE INDEX FOR HOTSPOTS
 ================================================================================
 
 Auth flag:           src/config/auth.ts
 API base:            src/services/http.ts , project root .env
 Router guards:       src/router/index.ts
+Nav permissions:     src/layouts/navigation.ts
+                     src/layouts/navigation.test.ts
+                     src/layouts/MainLayout.vue
 School UI:           src/views/school/School.vue
 Company UI:          src/views/company/Company.vue
 RBAC UI:             src/views/TenantRbac.vue
+Client permissions:  src/services/permissions.ts
 Billing UI:          src/views/OrganizationSubscription.vue
                      src/components/SubscriptionManager.vue
+Course hours UI:     src/components/layout/SettingsPanel.vue
+                     src/services/schoolPrograms.ts
 Agreements UI:       src/views/Contracts.vue
 API routes:          backend/routes/api.php
 Permissions catalog: backend/app/Support/OrgPermissions.php
+Permission aliases:  backend/app/Services/PermissionGate.php
+Tenant role packs:   backend/app/Services/TenantRoleService.php
+App role derivation: backend/app/Models/User.php  effectiveAppRole()
 Demo users:          backend/database/seeders/DemoAccountsSeeder.php
 PayMongo checkout:   backend/app/Http/Controllers/SubscriptionCheckoutController.php
 Plan limits:         backend/app/Services/SubscriptionPlanService.php
+Course hours API:    backend/app/Http/Controllers/SchoolCourseRequirementController.php
+OJT hours:           backend/app/Http/Controllers/OjtLogController.php
+Certificate HTML:    backend/app/Http/Controllers/CertificateController.php
 
 ================================================================================
 END OF SYSTEM BRIEF

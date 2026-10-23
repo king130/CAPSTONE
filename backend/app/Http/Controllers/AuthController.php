@@ -12,6 +12,8 @@ use App\Models\School;
 use App\Models\Student;
 use App\Models\User;
 use App\Services\OrganizationAccountProvisioner;
+use App\Support\CaviteAddress;
+use App\Services\SubscriptionAccessService;
 use App\Services\SubscriptionPlanService;
 use App\Services\TenantRoleService;
 use Illuminate\Database\QueryException;
@@ -29,6 +31,7 @@ class AuthController extends Controller
         private readonly SubscriptionPlanService $subscriptionPlans,
         private readonly TenantRoleService $tenantRoleService,
         private readonly OrganizationAccountProvisioner $organizationAccountProvisioner,
+        private readonly SubscriptionAccessService $subscriptionAccess,
     )
     {
     }
@@ -47,7 +50,7 @@ class AuthController extends Controller
                 'email' => ['required', 'email', 'max:255', 'unique:users,email'],
                 'password' => ['required', 'string', 'min:8', 'regex:/[A-Za-z]/', 'regex:/[0-9]/'],
                 'fullName' => ['required', 'string', 'max:255'],
-                'role' => ['nullable', Rule::in(['student', 'school', 'company', 'guest', null])],
+                'role' => ['nullable', Rule::in(['student', 'school', 'company', 'municipal_hall', 'guest', null])],
                 'profile' => ['nullable', 'array'],
                 'subscriptionPlan' => ['nullable', 'string'],
                 'billingCycle' => ['nullable', 'string'],
@@ -67,14 +70,21 @@ class AuthController extends Controller
                 ], Response::HTTP_UNPROCESSABLE_ENTITY);
             }
 
-            if ($role === 'school' || $role === 'company') {
+            if (in_array($role, ['school', 'company', 'municipal_hall'], true)) {
+                if ($addressError = CaviteAddress::registrationViolation($profile)) {
+                    return response()->json([
+                        'message' => $addressError,
+                        'errors' => ['profile.locationArea' => [$addressError]],
+                    ], Response::HTTP_UNPROCESSABLE_ENTITY);
+                }
+
                 $created = $this->organizationAccountProvisioner->create([
                     'fullName' => $data['fullName'],
                     'email' => $data['email'],
                     'password' => $data['password'],
                     'role' => $role,
                     'profile' => $profile,
-                    'subscriptionPlan' => $data['subscriptionPlan'] ?? 'free',
+                    'subscriptionPlan' => $data['subscriptionPlan'] ?? 'standard',
                     'billingCycle' => $data['billingCycle'] ?? 'monthly',
                 ]);
 
@@ -156,6 +166,12 @@ class AuthController extends Controller
                 return response()->json(['message' => 'Account Disabled'], Response::HTTP_FORBIDDEN);
             }
 
+            $this->enforcePlanSeats($user);
+            $user->refresh();
+            if (! $user->is_active) {
+                return response()->json(['message' => 'Account Disabled'], Response::HTTP_FORBIDDEN);
+            }
+
             $this->loadUserRelations($user);
             $token = $user->createToken('spa')->plainTextToken;
 
@@ -182,6 +198,14 @@ class AuthController extends Controller
     public function me(Request $request)
     {
         $user = $request->user();
+        $this->enforcePlanSeats($user);
+        $user->refresh();
+        if (! $user->is_active) {
+            $user->currentAccessToken()?->delete();
+
+            return response()->json(['message' => 'Account Disabled'], Response::HTTP_FORBIDDEN);
+        }
+
         $this->loadUserRelations($user);
 
         return response()->json($this->formatUserProfile($user));
@@ -310,12 +334,17 @@ class AuthController extends Controller
         if ($user->relationLoaded('company') && $user->company) {
             $c = $user->company;
             $profile['companyName'] = $c->company_name;
+            $profile['officialName'] = $c->company_name;
             $profile['companyType'] = $c->company_type;
+            $profile['lguType'] = $c->lgu_type;
             $profile['industryType'] = $c->industry_type;
             $profile['companyAddress'] = $c->company_address;
+            $profile['cityMunicipality'] = $c->city_municipality;
             $profile['companyEmail'] = $c->company_email;
             $profile['contactPersonName'] = $c->contact_person_name;
             $profile['contactPersonTitle'] = $c->contact_person_title;
+            $profile['representativeName'] = $c->contact_person_name;
+            $profile['representativePosition'] = $c->contact_person_title;
             $profile['contactPersonEmail'] = $c->contact_person_email;
             $profile['companyContactNumber'] = $c->company_contact_number;
             $verificationStatus = $c->verification_status;
@@ -331,6 +360,24 @@ class AuthController extends Controller
             $profile['schoolContactNumber'] = $sch->school_contact_number;
             $profile['schoolAddress'] = $sch->school_address;
             $verificationStatus = $sch->verification_status;
+        }
+
+        // Sub-accounts (teacher, department head, registrar, company/LGU staff, etc.) do not own a
+        // School/Company row. Inherit verification from the parent organization — same source of
+        // truth as EnsureOrganizationVerified — so they are not treated as independently pending.
+        if ($verificationStatus === null && $activeOrganization) {
+            if ($activeOrganization->type === 'school') {
+                $verificationStatus = $user->organizationSchool()?->verification_status;
+            } elseif (\App\Support\OrganizationTypes::isHostType($activeOrganization->type)) {
+                $host = $user->organizationCompany();
+                $verificationStatus = $host?->verification_status;
+                if ($host && empty($profile['companyName'])) {
+                    $profile['companyName'] = $host->company_name;
+                    $profile['officialName'] = $host->company_name;
+                    $profile['lguType'] = $host->lgu_type;
+                    $profile['cityMunicipality'] = $host->city_municipality;
+                }
+            }
         }
 
         if ($activeOrganization) {
@@ -404,17 +451,45 @@ class AuthController extends Controller
                 'subscriptionId' => $activeOrganization->subscription_id ? (string) $activeOrganization->subscription_id : null,
             ] : null,
             'subscription' => $subscription ? [
-                'plan' => $subscription->plan,
+                // Effective plan for limits/UI (may differ from a pending upgrade target).
+                'plan' => $planDefinition?->slug ?? $subscription->plan,
                 'billingCycle' => $subscription->billing_cycle,
                 'status' => $subscription->status,
                 'subscriptionCode' => $user->school?->subscription_code,
                 'pendingChange' => $activeOrganization?->settings['pending_plan_change'] ?? null,
                 'limits' => $planDefinition ? $this->subscriptionPlans->serializePlan($planDefinition)['limits'] : null,
                 'overages' => $overages,
+                'seatHolds' => array_values(is_array($activeOrganization?->settings['plan_seat_holds'] ?? null)
+                    ? $activeOrganization->settings['plan_seat_holds']
+                    : []),
+                'trialStartedAt' => $subscription->trial_started_at?->toIso8601String(),
+                'trialEndsAt' => $subscription->trial_ends_at?->toIso8601String(),
+                'graceEndsAt' => $subscription->grace_ends_at?->toIso8601String(),
+                'endsAt' => $subscription->ends_at?->toDateString(),
             ] : null,
+            'subscriptionAccess' => $activeOrganization
+                ? $this->subscriptionAccess->resolve($activeOrganization)
+                : null,
+            'paymentConnected' => trim((string) config('services.paymongo.secret_key', '')) !== '',
             'createdAt' => $user->created_at?->toIso8601String(),
             'updatedAt' => $user->updated_at?->toIso8601String(),
         ];
+    }
+
+    private function enforcePlanSeats(User $user): void
+    {
+        $membership = OrganizationMembership::query()
+            ->with('organization')
+            ->where('user_id', $user->id)
+            ->orderByRaw("case status when 'active' then 0 else 1 end")
+            ->first();
+
+        $organization = $membership?->organization;
+        if (! $organization || ! in_array($organization->type, ['school', 'company', 'municipal_hall'], true)) {
+            return;
+        }
+
+        $this->subscriptionPlans->syncOrganizationCompliance($organization);
     }
 
     private function loadUserRelations(User $user): void

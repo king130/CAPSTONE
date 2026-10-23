@@ -264,6 +264,21 @@ class InterviewWorkflowTest extends TestCase
         $this->assertSame('/intern/applications', $studentNotification->metadata['redirectTo'] ?? null);
     }
 
+    public function test_school_cannot_schedule_an_interview(): void
+    {
+        $ctx = $this->createContext();
+        $application = $this->makeApplication($ctx, 'endorsed');
+
+        Sanctum::actingAs($ctx['schoolUser']);
+        $before = ApplicationInterview::query()->count();
+
+        $response = $this->postJson('/api/interviews', $this->proposePayload($application));
+
+        $response->assertForbidden();
+        $response->assertJsonPath('message', 'Hosts schedule interviews after school endorsement.');
+        $this->assertSame($before, ApplicationInterview::query()->count());
+    }
+
     public function test_confirm_notifies_counterparties(): void
     {
         $ctx = $this->createContext();
@@ -380,5 +395,98 @@ class InterviewWorkflowTest extends TestCase
         $response->assertStatus(422);
         $this->assertSame('cancelled', $interview->fresh()->status);
         $this->assertSame($before, Notification::query()->count());
+    }
+
+    public function test_proposer_cannot_confirm_own_interview(): void
+    {
+        $ctx = $this->createContext();
+        $application = $this->makeApplication($ctx, 'endorsed');
+
+        Sanctum::actingAs($ctx['companyUser']);
+        $created = $this->postJson('/api/interviews', $this->proposePayload($application));
+        $created->assertCreated();
+        $interviewId = (string) $created->json('data.id');
+
+        $response = $this->patchJson('/api/interviews/'.$interviewId.'/confirm');
+
+        $response->assertStatus(422);
+        $response->assertJsonPath('message', 'You cannot confirm an interview that you proposed.');
+        $this->assertSame('proposed', ApplicationInterview::query()->find($interviewId)?->status);
+    }
+
+    public function test_school_can_confirm_company_proposed_interview(): void
+    {
+        $ctx = $this->createContext();
+        $application = $this->makeApplication($ctx, 'endorsed');
+        $interview = ApplicationInterview::query()->create([
+            'application_id' => $application->id,
+            'scheduled_at' => now()->addDays(2),
+            'duration_minutes' => 60,
+            'mode' => 'online',
+            'status' => 'proposed',
+            'created_by_user_id' => $ctx['companyUser']->id,
+        ]);
+
+        Sanctum::actingAs($ctx['schoolUser']);
+        $response = $this->patchJson('/api/interviews/'.$interview->id.'/confirm');
+
+        $response->assertOk();
+        $response->assertJsonPath('data.status', 'confirmed');
+        $this->assertSame('confirmed', $interview->fresh()->status);
+    }
+
+    public function test_unauthorized_user_cannot_confirm_interview(): void
+    {
+        $ctx = $this->createContext();
+        $application = $this->makeApplication($ctx, 'endorsed');
+        $interview = ApplicationInterview::query()->create([
+            'application_id' => $application->id,
+            'scheduled_at' => now()->addDays(2),
+            'duration_minutes' => 60,
+            'mode' => 'online',
+            'status' => 'proposed',
+            'created_by_user_id' => $ctx['companyUser']->id,
+        ]);
+
+        $outsider = User::factory()->create([
+            'role' => 'student',
+            'email' => 'outsider.'.uniqid('', true).'@example.com',
+            'is_active' => true,
+        ]);
+        Student::query()->create([
+            'user_id' => $outsider->id,
+            'school_id' => $ctx['school']->id,
+            'organization_id' => $ctx['school']->organization_id,
+            'school_name' => $ctx['school']->institution_name,
+            'school_subscription_code' => $ctx['school']->subscription_code,
+            'course' => 'BSCS',
+        ]);
+
+        Sanctum::actingAs($outsider);
+        $response = $this->patchJson('/api/interviews/'.$interview->id.'/confirm');
+
+        $response->assertForbidden();
+        $this->assertSame('proposed', $interview->fresh()->status);
+    }
+
+    public function test_non_proposed_interview_cannot_be_confirmed(): void
+    {
+        $ctx = $this->createContext();
+        $application = $this->makeApplication($ctx, 'endorsed');
+        $interview = ApplicationInterview::query()->create([
+            'application_id' => $application->id,
+            'scheduled_at' => now()->addDays(2),
+            'duration_minutes' => 60,
+            'mode' => 'online',
+            'status' => 'confirmed',
+            'created_by_user_id' => $ctx['companyUser']->id,
+        ]);
+
+        Sanctum::actingAs($ctx['studentUser']);
+        $response = $this->patchJson('/api/interviews/'.$interview->id.'/confirm');
+
+        $response->assertStatus(422);
+        $response->assertJsonPath('message', 'Only proposed interviews can be confirmed.');
+        $this->assertSame('confirmed', $interview->fresh()->status);
     }
 }

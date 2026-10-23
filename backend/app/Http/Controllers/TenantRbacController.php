@@ -8,6 +8,7 @@ use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
 use App\Services\OrganizationAccountProvisioner;
+use App\Services\SubscriptionPlanService;
 use App\Services\TenantRoleService;
 use App\Support\OrgPermissions;
 use Illuminate\Http\Request;
@@ -19,6 +20,7 @@ class TenantRbacController extends Controller
     public function __construct(
         private readonly TenantRoleService $tenantRoleService,
         private readonly OrganizationAccountProvisioner $organizationAccountProvisioner,
+        private readonly SubscriptionPlanService $subscriptionPlans,
     )
     {
     }
@@ -74,10 +76,14 @@ class TenantRbacController extends Controller
             ->orderBy('name')
             ->get();
 
+        $assignableKeys = OrgPermissions::assignableOrganizationPermissionKeys();
         $permissions = Permission::query()
             ->select(['id', 'key', 'description'])
+            ->whereIn('key', $assignableKeys)
             ->orderBy('key')
-            ->get();
+            ->get()
+            ->sortBy(fn (Permission $permission) => array_search($permission->key, $assignableKeys, true))
+            ->values();
 
         $members = $tenant->memberships()
             ->select(['id', 'organization_id', 'user_id', 'role_id', 'status', 'title'])
@@ -97,6 +103,7 @@ class TenantRbacController extends Controller
                 'id' => (string) $permission->id,
                 'key' => $permission->key,
                 'description' => $permission->description,
+                'aliases' => OrgPermissions::aliasGroupFor($permission->key),
             ])->values(),
             'canManageAllTenants' => $this->isSystemAdmin($user),
         ]);
@@ -112,28 +119,60 @@ class TenantRbacController extends Controller
         }
 
         $data = $request->validate([
-            'type' => ['required', 'in:company,school'],
+            'type' => ['required', 'in:company,school,municipal_hall'],
             'name' => ['required', 'string', 'max:255'],
             'adminName' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
             'plan' => ['nullable', 'string', 'max:255'],
             'billingCycle' => ['nullable', 'string', 'max:255'],
+            'lguType' => ['nullable', 'string', 'in:municipality,city,other_office'],
+            'locationArea' => ['nullable', 'string', 'max:120'],
+            'cityMunicipality' => ['nullable', 'string', 'max:120'],
+            'barangay' => ['nullable', 'string', 'max:120'],
+            'representativePosition' => ['nullable', 'string', 'max:120'],
+            'contactNumber' => ['nullable', 'string', 'max:40'],
         ]);
 
+        if ($data['type'] === 'municipal_hall' && empty($data['locationArea']) && empty($data['cityMunicipality'])) {
+            return response()->json([
+                'message' => 'A Cavite city or municipality is required for Municipal Hall accounts.',
+                'errors' => [
+                    'locationArea' => ['A Cavite city or municipality is required for Municipal Hall accounts.'],
+                ],
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
         $temporaryPassword = $this->organizationAccountProvisioner->generateTemporaryPassword();
-        $profile = $data['type'] === 'school'
-            ? [
+        $city = $data['locationArea'] ?? $data['cityMunicipality'] ?? null;
+        $profile = match ($data['type']) {
+            'school' => [
                 'institutionName' => $data['name'],
                 'contactPersonName' => $data['adminName'],
                 'position' => 'Primary Admin',
                 'officialSchoolEmail' => $data['email'],
-            ]
-            : [
+            ],
+            'municipal_hall' => [
+                'officialName' => $data['name'],
+                'companyName' => $data['name'],
+                'lguType' => $data['lguType'] ?? 'municipality',
+                'representativeName' => $data['adminName'],
+                'representativePosition' => $data['representativePosition'] ?? 'Primary Admin',
+                'contactPersonName' => $data['adminName'],
+                'contactPersonTitle' => $data['representativePosition'] ?? 'Primary Admin',
+                'officialEmail' => $data['email'],
+                'companyEmail' => $data['email'],
+                'locationArea' => $city,
+                'cityMunicipality' => $city,
+                'barangay' => $data['barangay'] ?? null,
+                'contactNumber' => $data['contactNumber'] ?? null,
+            ],
+            default => [
                 'companyName' => $data['name'],
                 'contactPersonName' => $data['adminName'],
                 'contactPersonTitle' => 'Primary Admin',
                 'companyEmail' => $data['email'],
-            ];
+            ],
+        };
 
         $created = $this->organizationAccountProvisioner->create([
             'fullName' => $data['adminName'],
@@ -197,6 +236,26 @@ class TenantRbacController extends Controller
 
         if (array_key_exists('status', $data)) {
             $membership->status = $data['status'];
+            $membership->loadMissing('user');
+            $nextStatus = $data['status'];
+            $consumesSeat = $this->membershipConsumesAccountSeat($tenant, $role);
+            $currentlyConsumesSeat = $membership->status === 'active'
+                && $membership->user?->is_active
+                && $membership->user?->role === $tenant->type;
+
+            if ($nextStatus === 'active' && $consumesSeat && ! $currentlyConsumesSeat && $this->subscriptionPlans->wouldExceedAfterIncrement($tenant, $this->seatResourceKey($tenant))) {
+                return response()->json([
+                    'message' => 'Your organization has reached the account limit for the current plan.',
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+
+            $override = is_array($membership->permissions_override) ? $membership->permissions_override : [];
+            if ($nextStatus !== 'active') {
+                unset($override['planLimitHold']);
+                $membership->permissions_override = $override;
+            }
+
+            $membership->status = $nextStatus;
         }
 
         $membership->save();
@@ -236,10 +295,22 @@ class TenantRbacController extends Controller
             return response()->json(['message' => 'The selected role is not valid for this account.'], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
+        if ($this->membershipConsumesAccountSeat($tenant, $role)) {
+            $resourceKey = $this->seatResourceKey($tenant);
+            if ($this->subscriptionPlans->wouldExceedAfterIncrement($tenant, $resourceKey)) {
+                return response()->json([
+                    'message' => 'Your organization has reached the account limit for the current plan. Upgrade the subscription before adding another account.',
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+        }
+
         $temporaryPassword = 'Temp@'.strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
         $legacyRole = $tenant->type;
         if ($tenant->type === 'school') {
             $legacyRole = in_array($role->slug, ['intern', 'student_member'], true) ? 'student' : 'school';
+        } elseif (\App\Support\OrganizationTypes::isHostType($tenant->type)) {
+            // Staff use the company app workspace; organization.type remains municipal_hall when applicable.
+            $legacyRole = 'company';
         }
 
         $profile = $tenant->type === 'school'
@@ -248,10 +319,19 @@ class TenantRbacController extends Controller
                 'schoolName' => $tenant->name,
                 'position' => $data['title'] ?? $role->name,
             ]
-            : [
-                'companyName' => $tenant->name,
-                'contactPersonTitle' => $data['title'] ?? $role->name,
-            ];
+            : (
+                $tenant->type === 'municipal_hall'
+                    ? [
+                        'officialName' => $tenant->name,
+                        'companyName' => $tenant->name,
+                        'contactPersonTitle' => $data['title'] ?? $role->name,
+                        'representativePosition' => $data['title'] ?? $role->name,
+                    ]
+                    : [
+                        'companyName' => $tenant->name,
+                        'contactPersonTitle' => $data['title'] ?? $role->name,
+                    ]
+            );
 
         $newUser = User::query()->create([
             'name' => trim($data['name']),
@@ -426,6 +506,24 @@ class TenantRbacController extends Controller
         return in_array('manage_users', $permissions, true)
             || in_array('org.manage_members', $permissions, true)
             || in_array('org.manage_roles', $permissions, true);
+    }
+
+    private function membershipConsumesAccountSeat(Organization $tenant, Role $role): bool
+    {
+        if (! in_array($tenant->type, ['school', 'company', 'municipal_hall'], true)) {
+            return false;
+        }
+
+        if ($tenant->type === 'school' && in_array($role->slug, ['intern', 'student_member'], true)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function seatResourceKey(Organization $tenant): string
+    {
+        return $tenant->type === 'school' ? 'school.coordinators' : 'company.accounts';
     }
 
     private function isSystemAdmin(User $user): bool

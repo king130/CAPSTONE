@@ -3,8 +3,10 @@ import { BadgeCheck, Building2, ExternalLink, MapPin } from 'lucide-vue-next'
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
-import MediaGallery from '@/components/media/MediaGallery.vue'
+import ApplicationCapacity from '@/components/internships/ApplicationCapacity.vue'
 import PublicSiteHeader from '@/components/PublicSiteHeader.vue'
+import MainLayout from '@/layouts/MainLayout.vue'
+import type { LayoutRole } from '@/layouts/navigation'
 import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
 import Card from '@/components/ui/card/Card.vue'
@@ -16,8 +18,30 @@ import {
   fetchPublicOrganization,
   type PublicOrganizationProfile,
 } from '@/services/organizationsPublic'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
+const authStore = useAuthStore()
+
+const appRole = computed((): LayoutRole | null => {
+  const role = authStore.user?.role
+  if (role === 'student' || role === 'school' || role === 'company') return role
+  return null
+})
+
+const backTo = computed(() => {
+  if (appRole.value === 'school') return '/school/opportunities'
+  if (appRole.value === 'company') return '/dashboard/schools'
+  if (appRole.value === 'student') return '/intern/opportunities'
+  return '/find-internships'
+})
+
+const pageShell = computed(() => (appRole.value ? MainLayout : 'div'))
+const pageShellProps = computed(() =>
+  appRole.value
+    ? { role: appRole.value, title: appRole.value === 'student' ? 'Companies' : 'Browse', activeItem: 'opportunities' }
+    : { class: 'min-h-screen bg-background text-foreground' },
+)
 
 const loading = ref(true)
 const notFound = ref(false)
@@ -26,7 +50,20 @@ const organization = ref<PublicOrganizationProfile | null>(null)
 const gallery = ref<Array<{ id: string; url: string; caption?: string | null }>>([])
 
 const internships = computed<InternshipRecord[]>(() => organization.value?.internships ?? [])
-const isCompany = computed(() => organization.value?.type === 'company')
+const isCompany = computed(() => {
+  const type = organization.value?.type
+  return type === 'company' || type === 'municipal_hall'
+})
+const hostNoun = computed(() =>
+  organization.value?.type === 'municipal_hall' ? 'Municipal Hall' : 'Company',
+)
+const locationLabel = computed(() => {
+  const address = organization.value?.address?.trim() ?? ''
+  const city = organization.value?.city?.trim() ?? ''
+  if (address) return address
+  if (city) return `${city}, Cavite, Philippines`
+  return ''
+})
 
 async function loadProfile() {
   const id = String(route.params.id || '')
@@ -46,11 +83,7 @@ async function loadProfile() {
       fetchOrganizationGallery(id).catch(() => []),
     ])
     organization.value = profile
-    gallery.value = media.length
-      ? media.map((item) => ({ id: item.id, url: item.url, caption: item.caption }))
-      : profile.coverImage
-        ? [{ id: 'cover', url: profile.coverImage, caption: profile.name }]
-        : []
+    gallery.value = media.slice(0, 3).map((item) => ({ id: item.id, url: item.url, caption: item.caption }))
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unable to load organization.'
     if (/not found/i.test(message) || /404/.test(message)) {
@@ -63,11 +96,6 @@ async function loadProfile() {
   } finally {
     loading.value = false
   }
-}
-
-function slotsLeft(item: InternshipRecord): number {
-  const value = item.slotsRemaining ?? item.slotsAvailable
-  return Number.isFinite(value) ? Math.max(0, Number(value)) : 0
 }
 
 watch(
@@ -83,10 +111,10 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-background text-foreground">
-    <PublicSiteHeader />
+  <component :is="pageShell" v-bind="pageShellProps">
+    <PublicSiteHeader v-if="!appRole" />
 
-    <main class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <div :class="appRole ? '' : 'mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8'">
       <div v-if="loading" class="space-y-4">
         <Skeleton class="aspect-[16/10] w-full max-w-4xl rounded-xl" />
         <Skeleton class="h-8 w-1/2" />
@@ -98,10 +126,10 @@ onMounted(() => {
           <h1 class="text-2xl font-semibold text-foreground">Organization not found</h1>
           <p class="text-sm text-muted-foreground">This organization is inactive or unavailable.</p>
           <RouterLink
-            to="/find-internships"
+            :to="backTo"
             class="inline-flex h-10 items-center justify-center rounded-md border border-border bg-background px-4 text-sm font-medium text-foreground hover:bg-accent"
           >
-            Browse internships
+            {{ appRole ? 'Back to browse' : 'Browse internships' }}
           </RouterLink>
         </CardContent>
       </Card>
@@ -116,7 +144,32 @@ onMounted(() => {
 
       <div v-else-if="organization" class="grid gap-8 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
         <div class="space-y-6">
-          <MediaGallery :images="gallery" :alt-fallback="`${organization.name} photo`" />
+          <div class="relative h-56 overflow-hidden rounded-xl border border-border bg-white dark:bg-slate-100 sm:h-64">
+            <img
+              v-if="organization.coverImage"
+              :src="organization.coverImage"
+              :alt="`${organization.name} profile`"
+              class="absolute inset-0 m-auto max-h-full max-w-full object-contain p-8"
+            />
+            <div v-else class="flex h-full w-full flex-col items-center justify-center gap-2 text-sm text-slate-500">
+              <Building2 class="h-8 w-8 opacity-70" />
+              No profile photo
+            </div>
+          </div>
+
+          <section v-if="gallery.length" class="space-y-2">
+            <h2 class="text-sm font-medium text-foreground">{{ isCompany ? `${hostNoun} photos` : 'School photos' }}</h2>
+            <div class="grid grid-cols-3 gap-2">
+              <img
+                v-for="photo in gallery"
+                :key="photo.id"
+                :src="photo.url"
+                :alt="photo.caption || `${organization.name} photo`"
+                class="aspect-[4/3] w-full rounded-lg border border-border bg-muted object-cover"
+                loading="lazy"
+              />
+            </div>
+          </section>
 
           <div class="space-y-3">
             <div class="flex flex-wrap items-center gap-2">
@@ -132,9 +185,9 @@ onMounted(() => {
             <h1 class="text-3xl font-semibold tracking-tight text-foreground">{{ organization.name }}</h1>
             <p v-if="organization.tagline" class="text-base text-muted-foreground">{{ organization.tagline }}</p>
             <div class="flex flex-wrap gap-x-4 gap-y-2 text-sm text-muted-foreground">
-              <span v-if="organization.city" class="inline-flex items-center gap-1.5">
+              <span v-if="locationLabel" class="inline-flex items-center gap-1.5">
                 <MapPin class="h-3.5 w-3.5" />
-                {{ organization.city }}
+                {{ locationLabel }}
               </span>
               <span v-if="organization.industry" class="inline-flex items-center gap-1.5">
                 <Building2 class="h-3.5 w-3.5" />
@@ -188,8 +241,8 @@ onMounted(() => {
                   <img
                     v-if="item.coverImage"
                     :src="item.coverImage"
-                    :alt="`${item.title} cover`"
-                    class="h-full w-full object-cover"
+                    :alt="`${organization.name || 'Company'} logo`"
+                    class="h-full w-full object-contain p-1"
                     loading="lazy"
                   />
                   <div v-else class="flex h-full items-center justify-center text-muted-foreground">
@@ -201,9 +254,13 @@ onMounted(() => {
                   <p class="mt-1 truncate text-sm text-muted-foreground">
                     {{ item.location || item.workSetup || 'Cavite' }}
                   </p>
-                  <p class="mt-1 text-xs text-muted-foreground">
-                    {{ slotsLeft(item) }} slot{{ slotsLeft(item) === 1 ? '' : 's' }} left
-                  </p>
+                  <ApplicationCapacity
+                    class="mt-2"
+                    :slots-available="item.slotsAvailable"
+                    :slots-remaining="item.slotsRemaining"
+                    :filled-slots="item.filledSlots"
+                    compact
+                  />
                 </div>
               </div>
             </RouterLink>
@@ -216,6 +273,6 @@ onMounted(() => {
           </Card>
         </div>
       </div>
-    </main>
-  </div>
+    </div>
+  </component>
 </template>

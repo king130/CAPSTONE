@@ -1083,7 +1083,14 @@ onMounted(() => {
               @click="approveSelectedLogs"
             >
               <LoaderCircle v-if="bulkApproveSubmitting" class="h-4 w-4 animate-spin" />
-              <span>Approve Selected</span>
+              <Check v-else class="h-4 w-4" />
+              <span>
+                {{
+                  selectedCompanyLogIds.length
+                    ? `Approve ${selectedCompanyLogIds.length} selected log${selectedCompanyLogIds.length === 1 ? '' : 's'}`
+                    : 'Approve selected logs'
+                }}
+              </span>
             </Button>
           </CardHeader>
           <CardContent>
@@ -1095,6 +1102,11 @@ onMounted(() => {
               </TabsList>
 
               <TabsContent value="pending">
+                <p class="mb-3 text-sm text-muted-foreground">
+                  Use the checkboxes to choose one or more intern logs, then click
+                  <span class="font-medium text-foreground">Approve selected logs</span>.
+                  Or use <span class="font-medium text-foreground">Approve</span> / <span class="font-medium text-foreground">Reject</span> on a single row.
+                </p>
                 <div v-if="companyLoading" class="space-y-3">
                   <Skeleton v-for="index in 5" :key="index" class="h-14 rounded-xl" />
                 </div>
@@ -1102,12 +1114,18 @@ onMounted(() => {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead class="w-12">
-                          <input
-                            type="checkbox"
-                            :checked="activeCompanyLogs.length > 0 && selectedCompanyLogIds.length === activeCompanyLogs.length"
-                            @change="toggleSelectAllCompanyLogs(checkboxChecked($event))"
-                          />
+                        <TableHead class="w-28">
+                          <label class="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            <input
+                              type="checkbox"
+                              class="h-4 w-4"
+                              title="Select all pending logs for bulk approve"
+                              aria-label="Select all pending logs for bulk approve"
+                              :checked="activeCompanyLogs.length > 0 && selectedCompanyLogIds.length === activeCompanyLogs.length"
+                              @change="toggleSelectAllCompanyLogs(checkboxChecked($event))"
+                            />
+                            <span>Select</span>
+                          </label>
                         </TableHead>
                         <TableHead>Intern Name</TableHead>
                         <TableHead>Date</TableHead>
@@ -1123,6 +1141,9 @@ onMounted(() => {
                         <TableCell>
                           <input
                             type="checkbox"
+                            class="h-4 w-4"
+                            :title="`Select ${log.internName}'s log for bulk approve`"
+                            :aria-label="`Select ${log.internName}'s log dated ${formatDate(log.date)} for bulk approve`"
                             :checked="selectedCompanyLogIds.includes(log.id)"
                             @change="toggleCompanySelection(log.id, checkboxChecked($event))"
                           />
@@ -1764,7 +1785,7 @@ onMounted(() => {
                 <p class="leading-7">{{ selectedAdminLog.tasksDone }}</p>
               </CardContent>
             </Card>
-            <Card v-if="selectedAdminLog.rejectionReason" class="border-red-200 bg-red-50 md:col-span-2">
+            <Card v-if="selectedAdminLog.rejectionReason" class="border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40 md:col-span-2">
               <CardContent class="space-y-2 p-4">
                 <p class="text-sm font-medium text-red-600">Rejection Reason</p>
                 <p class="leading-7 text-red-700">{{ selectedAdminLog.rejectionReason }}</p>

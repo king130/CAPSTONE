@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { ChevronDown } from 'lucide-vue-next'
-import { computed } from 'vue'
+import { computed, useAttrs } from 'vue'
 
 import { cn } from '@/lib/utils'
+
+defineOptions({
+  inheritAttrs: false,
+})
 
 const props = withDefaults(
   defineProps<{
@@ -25,6 +29,8 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
 }>()
 
+const attrs = useAttrs()
+
 const selectClass = computed(() =>
   cn(
     'flex h-11 w-full appearance-none rounded-md border border-input bg-background px-3 py-2 pr-10 text-sm ring-offset-background transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
@@ -38,8 +44,9 @@ function onChange(event: Event) {
 </script>
 
 <template>
-  <div class="relative">
+  <div class="relative w-full min-w-0">
     <select
+      v-bind="attrs"
       :id="id"
       :name="name"
       :value="modelValue"

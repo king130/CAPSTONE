@@ -68,8 +68,24 @@ async function chatFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 }
 
+export interface ChatEligiblePartner {
+  uid: string
+  displayName: string
+  role: string | null
+  orgName?: string
+  email?: string
+  courses?: string[]
+  verificationStatus?: string | null
+}
+
 export async function listConversations(): Promise<ChatConversation[]> {
   const res = await chatFetch<{ data: ChatConversation[] }>('/conversations')
+  return Array.isArray(res.data) ? res.data : []
+}
+
+/** Relationship-eligible, approved counterparties for the new-chat picker. */
+export async function listEligibleChatPartners(): Promise<ChatEligiblePartner[]> {
+  const res = await chatFetch<{ data: ChatEligiblePartner[] }>('/conversations/eligible-partners')
   return Array.isArray(res.data) ? res.data : []
 }
 

@@ -82,6 +82,91 @@ class OrgPermissions
     }
 
     /**
+     * Keys shown as separate toggles in the RBAC matrix.
+     * Legacy aliases stay in the catalog and PermissionGate, but are not listed twice.
+     *
+     * @return array<int, string>
+     */
+    public static function assignableOrganizationPermissionKeys(): array
+    {
+        return [
+            'org.manage_members',
+            'org.manage_roles',
+            'org.manage_subscription',
+            'org.manage_profile',
+            'org.view_internships',
+            'org.view_agreements',
+            'org.view_applications',
+            'org.view_students',
+            'org.view_ojt_progress',
+            'org.view_reports',
+            'org.manage_internships',
+            'org.manage_agreements',
+            'org.manage_applications',
+            'org.manage_students',
+            'org.manage_assessments',
+            'org.reports_export',
+            'org.approve_applications',
+            'org.approve_agreements',
+            'org.approve_ojt_logs',
+            'org.approve_certificates',
+            'upload_files',
+        ];
+    }
+
+    /**
+     * Assignable key → every stored key that means the same capability.
+     * Toggling the assignable key on/off should write or clear the whole group.
+     *
+     * @return array<string, array<int, string>>
+     */
+    public static function assignableAliasGroups(): array
+    {
+        return [
+            'org.manage_members' => ['org.manage_members', 'manage_users'],
+            'org.manage_roles' => ['org.manage_roles', 'manage_roles', 'manage_permissions'],
+            'org.manage_subscription' => ['org.manage_subscription', 'manage_subscription'],
+            'org.manage_profile' => ['org.manage_profile', 'manage_profile'],
+            'org.view_internships' => ['org.view_internships'],
+            'org.view_agreements' => ['org.view_agreements'],
+            'org.view_applications' => ['org.view_applications'],
+            'org.view_students' => ['org.view_students'],
+            'org.view_ojt_progress' => ['org.view_ojt_progress'],
+            'org.view_reports' => ['org.view_reports', 'org.reports_view', 'view_reports'],
+            'org.manage_internships' => ['org.manage_internships', 'manage_internships'],
+            'org.manage_agreements' => ['org.manage_agreements', 'org.manage_contracts', 'manage_contracts'],
+            'org.manage_applications' => ['org.manage_applications'],
+            'org.manage_students' => ['org.manage_students'],
+            'org.manage_assessments' => ['org.manage_assessments'],
+            'org.reports_export' => ['org.reports_export'],
+            'org.approve_applications' => ['org.approve_applications', 'org.review_applications', 'review_applications'],
+            'org.approve_agreements' => ['org.approve_agreements'],
+            'org.approve_ojt_logs' => ['org.approve_ojt_logs'],
+            'org.approve_certificates' => ['org.approve_certificates'],
+            'upload_files' => ['upload_files'],
+        ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public static function aliasGroupFor(string $permissionKey): array
+    {
+        $groups = self::assignableAliasGroups();
+        if (isset($groups[$permissionKey])) {
+            return $groups[$permissionKey];
+        }
+
+        foreach ($groups as $aliases) {
+            if (in_array($permissionKey, $aliases, true)) {
+                return $aliases;
+            }
+        }
+
+        return [$permissionKey];
+    }
+
+    /**
      * @return array<int, string>
      */
     public static function schoolAdmin(): array
@@ -128,7 +213,6 @@ class OrgPermissions
     public static function schoolDepartmentHead(): array
     {
         return [
-            'org.manage_profile',
             'org.view_internships',
             'org.view_agreements',
             'org.manage_agreements',

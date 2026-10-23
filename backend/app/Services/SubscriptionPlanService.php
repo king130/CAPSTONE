@@ -14,31 +14,73 @@ use App\Models\SubscriptionPlanDefinition;
 
 class SubscriptionPlanService
 {
-    public function getAllPlans()
+    public function getAllPlans(bool $selectableOnly = true)
     {
-        return SubscriptionPlanDefinition::query()
+        $query = SubscriptionPlanDefinition::query()
             ->where('is_active', true)
-            ->orderByRaw("case slug when 'free' then 1 when 'standard' then 2 when 'premium' then 3 else 99 end")
-            ->get();
+            ->orderByRaw("case slug when 'free' then 1 when 'standard' then 2 when 'premium' then 3 else 99 end");
+
+        if ($selectableOnly) {
+            $query->where(function ($q) {
+                $q->where('is_selectable', true)->orWhereNull('is_selectable');
+            })->where(function ($q) {
+                $q->where('is_legacy', false)->orWhereNull('is_legacy');
+            })->where('slug', '!=', 'free');
+        }
+
+        return $query->get();
     }
 
     public function getPlanForOrganization(Organization $organization): ?SubscriptionPlanDefinition
     {
         $organization->loadMissing('subscription');
 
-        $planSlug = strtolower((string) ($organization->subscription?->plan ?: 'free'));
-        $status = strtolower((string) ($organization->subscription?->status ?: 'inactive'));
+        $access = app(SubscriptionAccessService::class)->resolve($organization);
+        $rawPlan = strtolower(trim((string) ($organization->subscription?->plan ?: ''))) ?: '';
+        $planSlug = strtolower(trim((string) ($access['plan'] ?? $rawPlan))) ?: '';
+        $status = strtolower(trim((string) ($organization->subscription?->status ?: 'inactive'))) ?: 'inactive';
+        $settings = is_array($organization->settings) ? $organization->settings : [];
+        $pending = is_array($settings['pending_plan_change'] ?? null) ? $settings['pending_plan_change'] : null;
+        $previousPlan = $pending
+            ? strtolower(trim((string) ($pending['previousPlan'] ?? '')))
+            : '';
+        $targetPlan = $pending
+            ? strtolower(trim((string) ($pending['targetPlan'] ?? '')))
+            : '';
 
-        // Inactive or unpaid signup (status pending without a completed PayMongo verify) stays on free limits.
-        // Active orgs keep their current plan while a checkout is outstanding (tracked in pending_plan_change).
-        if (in_array($status, ['inactive', 'pending'], true)) {
+        // Trial / grace use the configured trial plan limits (default: standard).
+        if (in_array($access['status'], [SubscriptionAccessService::STATUS_TRIAL, SubscriptionAccessService::STATUS_GRACE], true)) {
+            $planSlug = app(SubscriptionAccessService::class)->trialPlanSlug();
+        } elseif ($pending) {
+            // Checkout in flight: keep CURRENT entitlements; never grant targetPlan before verify.
+            if ($previousPlan !== '' && $previousPlan !== 'free') {
+                $planSlug = $previousPlan;
+            } elseif (in_array($status, ['trialing', 'trial'], true)) {
+                $planSlug = app(SubscriptionAccessService::class)->trialPlanSlug();
+            } elseif ($previousPlan === 'free' || $rawPlan === 'free') {
+                // Legacy free → paid checkout still pending: keep free seat limits until verify.
+                $planSlug = 'free';
+            } elseif (in_array($status, ['inactive', 'pending'], true)) {
+                if ($planSlug === '' || ($targetPlan !== '' && $planSlug === $targetPlan)) {
+                    $planSlug = app(SubscriptionAccessService::class)->trialPlanSlug();
+                }
+            }
+        } elseif ($rawPlan === 'free') {
+            // Legacy free row (not on trial dates) — keep free limits for seat enforcement.
             $planSlug = 'free';
+        } elseif (in_array($status, ['inactive', 'pending'], true)) {
+            $planSlug = app(SubscriptionAccessService::class)->trialPlanSlug();
+        }
+
+        if ($planSlug === '') {
+            $planSlug = app(SubscriptionAccessService::class)->trialPlanSlug();
         }
 
         return SubscriptionPlanDefinition::query()
             ->where('is_active', true)
             ->where('slug', $planSlug)
             ->first()
+            ?? SubscriptionPlanDefinition::query()->where('slug', 'standard')->first()
             ?? SubscriptionPlanDefinition::query()->where('slug', 'free')->first();
     }
 
@@ -53,6 +95,8 @@ class SubscriptionPlanService
             'description' => $plan->description,
             'schoolPrice' => (int) $plan->school_price,
             'companyPrice' => (int) $plan->company_price,
+            'isSelectable' => (bool) ($plan->is_selectable ?? ($plan->slug !== 'free')),
+            'isLegacy' => (bool) ($plan->is_legacy ?? ($plan->slug === 'free')),
             'features' => [
                 'school' => array_values($plan->school_features ?? []),
                 'company' => array_values($plan->company_features ?? []),
@@ -82,10 +126,13 @@ class SubscriptionPlanService
         $school = School::query()->where('organization_id', $organization->id)->first();
         $company = Company::query()->where('organization_id', $organization->id)->first();
 
+        $seatRoles = \App\Support\OrganizationTypes::accountSeatRolesForOrganizationType($organization->type);
         $activeMemberCount = OrganizationMembership::query()
             ->where('organization_id', $organization->id)
             ->where('status', 'active')
-            ->whereHas('user', fn ($query) => $query->where('is_active', true)->where('role', $organization->type))
+            ->whereHas('user', function ($query) use ($seatRoles) {
+                $query->where('is_active', true)->whereIn('role', $seatRoles);
+            })
             ->count();
 
         $studentQuery = Student::query()->where('organization_id', $organization->id);
@@ -102,7 +149,8 @@ class SubscriptionPlanService
         if ($organization->type === 'school' && $school) {
             $internshipQuery->where('school_id', $school->id);
         }
-        if ($organization->type === 'company' && $company) {
+        $isHost = \App\Support\OrganizationTypes::isHostType($organization->type);
+        if ($isHost && $company) {
             $internshipQuery->where('company_id', $company->id);
         }
 
@@ -115,9 +163,9 @@ class SubscriptionPlanService
                 'photos' => $organization->type === 'school' ? $photoCount : 0,
             ],
             'company' => [
-                'accounts' => $organization->type === 'company' ? $activeMemberCount : 0,
-                'internships' => $organization->type === 'company' ? $internshipQuery->count() : 0,
-                'photos' => $organization->type === 'company' ? $photoCount : 0,
+                'accounts' => $isHost ? $activeMemberCount : 0,
+                'internships' => $isHost ? $internshipQuery->count() : 0,
+                'photos' => $isHost ? $photoCount : 0,
             ],
             'organization' => [
                 'photos' => $photoCount,
@@ -169,13 +217,16 @@ class SubscriptionPlanService
             ]));
         }
 
-        if ($organization->type === 'company') {
+        if (\App\Support\OrganizationTypes::isHostType($organization->type)) {
+            $accountLabel = $organization->type === 'municipal_hall'
+                ? 'Municipal Hall accounts'
+                : 'Company accounts';
             $items = array_values(array_filter([
                 $this->makeOverageItem(
                     'company.accounts',
                     'company',
                     'accounts',
-                    'Company accounts',
+                    $accountLabel,
                     $usage['company']['accounts'],
                     (int) $plan->company_accounts_limit
                 ),
@@ -208,8 +259,10 @@ class SubscriptionPlanService
     {
         $organization->loadMissing('owner', 'subscription');
 
-        $settings = $organization->settings ?? [];
-        $overages = $this->evaluateOverages($organization);
+        $this->reconcileAccountSeats($organization);
+
+        $settings = $organization->fresh()->settings ?? [];
+        $overages = $this->evaluateOverages($organization->fresh());
         $settings['subscription_overages'] = $overages;
         $organization->settings = $settings;
         $organization->save();
@@ -293,6 +346,107 @@ class SubscriptionPlanService
     private function isLimited(int $limit, int $current): bool
     {
         return $limit < 999 && $current > $limit;
+    }
+
+    /**
+     * Keep the owner plus the oldest seats that fit the plan.
+     * Extra coordinator or company accounts are paused, and restored when the plan covers them.
+     */
+    public function reconcileAccountSeats(Organization $organization): void
+    {
+        if (! in_array($organization->type, ['school', 'company', 'municipal_hall'], true)) {
+            return;
+        }
+
+        $plan = $this->getPlanForOrganization($organization);
+        if (! $plan) {
+            return;
+        }
+
+        $limit = $organization->type === 'school'
+            ? (int) $plan->school_coordinators_limit
+            : (int) $plan->company_accounts_limit;
+        $label = $organization->type === 'school'
+            ? 'School coordinator accounts'
+            : ($organization->type === 'municipal_hall' ? 'Municipal Hall accounts' : 'Company accounts');
+        $key = $organization->type === 'school' ? 'school.coordinators' : 'company.accounts';
+        $unlimited = $limit >= 999;
+
+        $seatRoles = \App\Support\OrganizationTypes::accountSeatRolesForOrganizationType($organization->type);
+        $memberships = OrganizationMembership::query()
+            ->with('user')
+            ->where('organization_id', $organization->id)
+            ->whereHas('user', fn ($query) => $query->whereIn('role', $seatRoles))
+            ->orderBy('id')
+            ->get();
+
+        $ownerId = $organization->owner_user_id ? (int) $organization->owner_user_id : null;
+
+        $candidates = $memberships->filter(function (OrganizationMembership $membership) {
+            $override = is_array($membership->permissions_override) ? $membership->permissions_override : [];
+            if (! empty($override['planLimitHold'])) {
+                return true;
+            }
+
+            return $membership->status === 'active' && $membership->user?->is_active;
+        })->sortBy(function (OrganizationMembership $membership) use ($ownerId) {
+            $ownerRank = $ownerId !== null && (int) $membership->user_id === $ownerId ? 0 : 1;
+
+            return sprintf('%d-%010d', $ownerRank, $membership->id);
+        })->values();
+
+        $keepCount = $unlimited ? $candidates->count() : max($limit, $ownerId ? 1 : 0);
+        $keepIds = $candidates->take($keepCount)->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $paused = 0;
+
+        foreach ($candidates as $membership) {
+            $user = $membership->user;
+            if (! $user) {
+                continue;
+            }
+
+            $override = is_array($membership->permissions_override) ? $membership->permissions_override : [];
+            $keep = in_array((int) $membership->id, $keepIds, true);
+
+            if ($keep) {
+                $changed = ! empty($override['planLimitHold']) || $membership->status !== 'active' || ! $user->is_active;
+                unset($override['planLimitHold']);
+                if ($changed) {
+                    $membership->permissions_override = $override;
+                    $membership->status = 'active';
+                    $membership->save();
+                    $user->forceFill(['is_active' => true])->save();
+                }
+
+                continue;
+            }
+
+            if ($ownerId !== null && (int) $user->id === $ownerId) {
+                continue;
+            }
+
+            $override['planLimitHold'] = true;
+            $membership->permissions_override = $override;
+            $membership->status = 'inactive';
+            $membership->save();
+            $user->forceFill(['is_active' => false])->save();
+            $user->tokens()->delete();
+            $paused++;
+        }
+
+        $settings = is_array($organization->settings) ? $organization->settings : [];
+        if ($paused > 0) {
+            $settings['plan_seat_holds'] = [[
+                'key' => $key,
+                'label' => $label,
+                'paused' => $paused,
+                'limit' => $limit,
+            ]];
+        } else {
+            unset($settings['plan_seat_holds']);
+        }
+        $organization->settings = $settings;
+        $organization->save();
     }
 
     /**

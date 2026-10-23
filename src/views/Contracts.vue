@@ -157,8 +157,15 @@ function openAmendDialog(contract: ContractRecord) {
   amendDialogOpen.value = true
 }
 
+const amendPurposeError = ref('')
+
 async function confirmAmend() {
   if (!amendTarget.value) return
+  if (!amendForm.value.purpose.trim()) {
+    amendPurposeError.value = 'Purpose is required.'
+    return
+  }
+  amendPurposeError.value = ''
   amendSubmitting.value = true
   try {
     await amendContract(amendTarget.value.id, {
@@ -444,8 +451,9 @@ onUnmounted(() => {
             </div>
           </div>
           <div>
-            <label class="mb-1 block text-sm text-muted-foreground">Purpose</label>
-            <Textarea v-model="amendForm.purpose" :rows="3" />
+            <label class="mb-1 block text-sm text-muted-foreground">Purpose <span class="text-red-500">*</span></label>
+            <Textarea v-model="amendForm.purpose" :rows="3" required @blur="amendPurposeError = amendForm.purpose.trim() ? '' : 'Purpose is required.'" />
+            <p v-if="amendPurposeError" class="mt-1 text-sm text-destructive">{{ amendPurposeError }}</p>
           </div>
           <div>
             <label class="mb-1 block text-sm text-muted-foreground">Terms</label>

@@ -11,7 +11,12 @@ import CardHeader from '@/components/ui/card/CardHeader.vue'
 import Skeleton from '@/components/ui/skeleton/Skeleton.vue'
 import { useToast } from '@/composables/useToast'
 import MainLayout from '@/layouts/MainLayout.vue'
-import { listPublicProfiles, type PublicProfile } from '@/services/profilesPublic'
+import {
+  filterAgreementDirectoryPartners,
+  isAgreementPartnerSelectable,
+  listPublicProfiles,
+  type PublicProfile,
+} from '@/services/profilesPublic'
 import { useAuthStore } from '@/stores/auth'
 
 type ContractRole = 'school' | 'company'
@@ -29,7 +34,9 @@ const selectedPartner = ref<PublicProfile | null>(null)
 async function loadPartners() {
   loadingPartners.value = true
   try {
-    partners.value = await listPublicProfiles(currentRole.value === 'school' ? 'company' : 'school')
+    const listed = await listPublicProfiles(currentRole.value === 'school' ? 'company' : 'school')
+    // Agreement requests only list approved organizations; chat/directory may still see others.
+    partners.value = filterAgreementDirectoryPartners(listed)
   } catch (caughtError) {
     error(caughtError, {
       fallback: 'Could not load directory partners for contracts.',
@@ -45,6 +52,18 @@ function goBack() {
 
 function resetPartner() {
   selectedPartner.value = null
+}
+
+function selectPartner(partner: PublicProfile) {
+  if (!isAgreementPartnerSelectable(partner)) return
+  selectedPartner.value = partner
+}
+
+function partnerStatusLabel(partner: PublicProfile): string | null {
+  if (partner.agreementStatusLabel) return partner.agreementStatusLabel
+  if (partner.agreementStatus === 'active') return 'Agreement already active'
+  if (partner.agreementStatus === 'pending') return 'Agreement request pending'
+  return null
 }
 
 function handleSubmitted(_payload?: { id?: string; moaReferenceNo?: string }) {
@@ -83,7 +102,7 @@ onMounted(() => {
           <CardHeader>
             <h3 class="text-2xl font-semibold text-foreground">Choose a {{ partnerLabel.toLowerCase() }}</h3>
             <p class="text-sm text-muted-foreground">
-              Start by selecting the organization you want to send the agreement to.
+              Start by selecting an approved organization you want to send the agreement to. Pending or unverified accounts are hidden.
             </p>
           </CardHeader>
           <CardContent>
@@ -96,16 +115,38 @@ onMounted(() => {
                 v-for="partner in partners"
                 :key="partner.uid"
                 type="button"
-                class="rounded-2xl border border-border bg-card p-5 text-left shadow-sm transition hover:border-primary hover:bg-primary/5"
-                @click="selectedPartner = partner"
+                class="rounded-2xl border border-border bg-card p-5 text-left shadow-sm transition"
+                :class="
+                  isAgreementPartnerSelectable(partner)
+                    ? 'hover:border-primary hover:bg-primary/5'
+                    : 'cursor-not-allowed opacity-70'
+                "
+                :disabled="!isAgreementPartnerSelectable(partner)"
+                :aria-disabled="!isAgreementPartnerSelectable(partner)"
+                @click="selectPartner(partner)"
               >
                 <div class="flex items-start gap-4">
-                  <div class="rounded-2xl bg-primary/10 p-3 text-primary">
+                  <div
+                    class="rounded-2xl p-3"
+                    :class="
+                      isAgreementPartnerSelectable(partner)
+                        ? 'bg-primary/10 text-primary'
+                        : 'bg-muted text-muted-foreground'
+                    "
+                  >
                     <Building2 v-if="currentRole === 'school'" class="h-5 w-5" />
                     <BriefcaseBusiness v-else class="h-5 w-5" />
                   </div>
-                  <div class="min-w-0">
-                    <p class="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">{{ partnerLabel }}</p>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <p class="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">{{ partnerLabel }}</p>
+                      <span
+                        v-if="partnerStatusLabel(partner)"
+                        class="rounded-full bg-muted px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
+                      >
+                        {{ partnerStatusLabel(partner) }}
+                      </span>
+                    </div>
                     <p class="mt-2 text-lg font-semibold text-foreground">{{ partner.orgName || partner.displayName }}</p>
                     <p class="mt-1 text-sm text-muted-foreground">{{ partner.email || 'Directory profile' }}</p>
                   </div>

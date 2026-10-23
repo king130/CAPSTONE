@@ -11,24 +11,24 @@ defineProps<{
 
 <template>
   <div class="space-y-3">
-    <ol class="flex flex-col gap-3 md:flex-row md:items-start md:gap-2">
+    <ol class="flex flex-col gap-3 xl:flex-row xl:items-start xl:gap-2">
       <li
         v-for="(step, index) in result.steps"
         :key="step.key"
-        class="relative flex flex-1 items-start gap-3 md:flex-col md:items-center md:text-center"
+        class="relative flex min-w-0 flex-1 items-start gap-3 xl:flex-col xl:items-center xl:text-center"
       >
         <div
           v-if="index < result.steps.length - 1"
-          class="absolute left-4 top-8 h-[calc(100%-0.5rem)] w-px bg-border md:left-[calc(50%+1.1rem)] md:top-4 md:h-px md:w-[calc(100%-0.5rem)]"
+          class="absolute left-4 top-8 h-[calc(100%-0.5rem)] w-px bg-border xl:left-[calc(50%+1.1rem)] xl:top-4 xl:h-px xl:w-[calc(100%-0.5rem)]"
           aria-hidden="true"
         />
         <div
           class="relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border"
           :class="{
-            'border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300': step.tone === 'complete',
+            'border-emerald-500/40 bg-emerald-500/15 text-emerald-800 dark:text-emerald-200': step.tone === 'complete',
             'border-primary bg-primary text-primary-foreground': step.tone === 'active',
             'border-destructive/40 bg-destructive/10 text-destructive': step.tone === 'error',
-            'border-amber-500/40 bg-amber-500/15 text-amber-700 dark:text-amber-300': step.tone === 'warning',
+            'border-amber-500/40 bg-amber-500/15 text-amber-800 dark:text-amber-200': step.tone === 'warning',
             'border-border bg-muted text-muted-foreground': step.tone === 'pending',
           }"
         >

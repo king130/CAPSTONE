@@ -5,22 +5,17 @@ namespace App\Http\Controllers;
 use App\Models\Application;
 use App\Models\ApplicationInterview;
 use App\Models\Notification;
+use App\Services\ApplicationTracker;
 use App\Services\PermissionGate;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 
 class InterviewController extends Controller
 {
-    /**
-     * Application statuses that may receive interview proposals.
-     * School endorsement is required; company acceptance is not.
-     *
-     * @var list<string>
-     */
-    private const PROPOSABLE_APPLICATION_STATUSES = ['endorsed', 'accepted'];
-
-    public function __construct(private readonly PermissionGate $permissions)
-    {
+    public function __construct(
+        private readonly PermissionGate $permissions,
+        private readonly ApplicationTracker $tracker,
+    ) {
     }
 
     public function index(Request $request)
@@ -100,13 +95,34 @@ class InterviewController extends Controller
             return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
         }
 
-        $applicationStatus = strtolower(trim((string) $application->status));
-        if (! in_array($applicationStatus, self::PROPOSABLE_APPLICATION_STATUSES, true)) {
+        if ($appRole === 'school' && ! $this->schoolHostsInternship($user, $application)) {
             return response()->json([
-                'message' => 'Interviews can only be proposed after the application has been endorsed by the school.',
+                'message' => 'Hosts schedule interviews after school endorsement.',
+            ], Response::HTTP_FORBIDDEN);
+        }
+
+        $locked = ApplicationInterview::query()
+            ->where('application_id', $application->id)
+            ->whereIn('status', ['confirmed', 'scheduled', 'accepted', 'completed'])
+            ->exists();
+        if ($locked) {
+            return response()->json([
+                'message' => 'This interview is already accepted or completed and cannot be rescheduled.',
+                'code' => 'interview_locked',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $this->tracker->ensureStageColumn($application);
+        $stage = $this->tracker->currentStage($application);
+        if (! in_array($stage, [
+            ApplicationTracker::STAGE_ENDORSED,
+            ApplicationTracker::STAGE_INTERVIEW_SCHEDULED,
+        ], true)) {
+            return response()->json([
+                'message' => 'Interviews can only be scheduled after endorsement (or to reschedule an existing interview).',
                 'code' => 'application_not_endorsed',
                 'errors' => [
-                    'application_id' => ['Interviews can only be proposed after the application has been endorsed by the school.'],
+                    'application_id' => ['Interviews can only be scheduled after the application has been endorsed by the school.'],
                 ],
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
@@ -121,6 +137,22 @@ class InterviewController extends Controller
             'notes' => $data['notes'] ?? null,
             'created_by_user_id' => $user->id,
         ]);
+
+        if ($stage === ApplicationTracker::STAGE_ENDORSED) {
+            $this->tracker->transition(
+                $application,
+                ApplicationTracker::STAGE_INTERVIEW_SCHEDULED,
+                $user,
+                'Interview scheduled',
+            );
+        } elseif ($stage === ApplicationTracker::STAGE_INTERVIEW_SCHEDULED) {
+            $this->tracker->transition(
+                $application,
+                ApplicationTracker::STAGE_INTERVIEW_SCHEDULED,
+                $user,
+                'Interview rescheduled',
+            );
+        }
 
         $interview->load([
             'application:id,internship_id,student_id,company_id,status,internship_title,student_name,student_email',
@@ -150,6 +182,12 @@ class InterviewController extends Controller
             return response()->json(['message' => 'Only proposed interviews can be confirmed.'], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
+        if ((int) $interview->created_by_user_id === (int) $user->id) {
+            return response()->json([
+                'message' => 'You cannot confirm an interview that you proposed.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
         $interview->update(['status' => 'confirmed']);
 
         $fresh = $interview->fresh([
@@ -176,7 +214,15 @@ class InterviewController extends Controller
             return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
         }
 
-        if (in_array($interview->status, ['cancelled', 'completed'], true)) {
+        $status = strtolower((string) $interview->status);
+        if (in_array($status, ['confirmed', 'scheduled', 'accepted', 'completed'], true)) {
+            return response()->json([
+                'message' => 'This interview is already accepted or completed and cannot be rescheduled.',
+                'code' => 'interview_locked',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        if ($status === 'cancelled') {
             return response()->json(['message' => 'This interview can no longer be cancelled.'], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
@@ -228,6 +274,21 @@ class InterviewController extends Controller
         }
 
         return false;
+    }
+
+    private function schoolHostsInternship($user, Application $application): bool
+    {
+        $school = $user->organizationSchool() ?? $user->school;
+        $internship = $application->internship;
+        if (! $school || ! $internship || (int) $internship->school_id !== (int) $school->id) {
+            return false;
+        }
+
+        if (strtolower(trim((string) $internship->host_type)) === 'school') {
+            return true;
+        }
+
+        return $internship->company_id === null && $internship->school_id !== null;
     }
 
     private function notifyInterviewProposed(ApplicationInterview $interview, int $actorUserId): void

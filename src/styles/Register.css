@@ -3,9 +3,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background:
-    radial-gradient(circle at bottom left, #9ec5ff 0 30%, transparent 31%),
-    radial-gradient(circle at top right, #9ec5ff 0 25%, transparent 26%), #f5f7fb;
+  background: hsl(var(--background));
   font-family:
     Inter,
     system-ui,
@@ -15,7 +13,7 @@
 
 .card {
   width: min(480px, calc(100vw - 32px));
-  background: #ffffff;
+  background: hsl(var(--card));
   border-radius: 12px;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
   padding: 32px 32px 28px;
@@ -30,7 +28,7 @@
 }
 
 .back-btn {
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   text-decoration: none;
   font-size: 24px;
   font-weight: 400;
@@ -76,7 +74,7 @@ h1 {
 
 .subtitle {
   text-align: center;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   font-size: 13px;
   margin-bottom: 20px;
 }
@@ -95,19 +93,19 @@ h1 {
 }
 
 .field span {
-  color: #4b5563;
+  color: hsl(var(--muted-foreground));
 }
 
 .field-hint {
   font-size: 11px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   margin-top: 4px;
 }
 
 .field > input {
   padding: 8px 10px;
   border-radius: 6px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid hsl(var(--border));
   font-size: 12px;
   width: 100%;
   box-sizing: border-box;
@@ -129,7 +127,7 @@ h1 {
   width: 100%;
   padding: 8px 64px 8px 10px;
   border-radius: 6px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid hsl(var(--border));
   font-size: 12px;
   box-sizing: border-box;
   transition: all 0.2s ease;
@@ -159,7 +157,7 @@ h1 {
 .section-label {
   margin-top: 10px;
   font-size: 12px;
-  color: #4b5563;
+  color: hsl(var(--muted-foreground));
 }
 
 .role-grid {
@@ -171,13 +169,13 @@ h1 {
 
 .role-card {
   border-radius: 8px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid hsl(var(--border));
   padding: 10px 8px;
   background: #f9fafb;
   cursor: pointer;
   text-align: center;
   font-size: 11px;
-  color: #4b5563;
+  color: hsl(var(--muted-foreground));
   transition:
     border-color 0.15s ease,
     box-shadow 0.15s ease,
@@ -213,7 +211,7 @@ h1 {
 .role-title {
   font-weight: 600;
   margin-bottom: 2px;
-  color: #111827;
+  color: hsl(var(--foreground));
 }
 
 .price-tag {
@@ -228,7 +226,7 @@ h1 {
   align-items: center;
   gap: 6px;
   font-size: 11px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   margin-top: 8px;
 }
 
@@ -275,7 +273,7 @@ h1 {
   margin-top: 12px;
   text-align: center;
   font-size: 12px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
 }
 
 .footer-link a {
@@ -322,20 +320,20 @@ h1 {
 
 .step-btn.ghost {
   background: #f1f5f9;
-  color: #0f172a;
-  border: 1px solid #e2e8f0;
+  color: hsl(var(--foreground));
+  border: 1px solid hsl(var(--border));
 }
 
 .step-btn.ghost:hover:not(:disabled) {
   background: #e2e8f0;
-  border-color: #cbd5e1;
+  border-color: hsl(var(--border));
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.1);
 }
 
 .step-btn:disabled {
   background: #e2e8f0;
-  color: #94a3b8;
+  color: hsl(var(--muted-foreground));
   cursor: not-allowed;
   box-shadow: none;
 }
@@ -344,13 +342,13 @@ h1 {
   margin-top: 16px;
   padding: 12px;
   border-radius: 10px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
 }
 
 .demo-label {
   font-size: 12px;
-  color: #64748b;
+  color: hsl(var(--muted-foreground));
   margin-bottom: 8px;
 }
 
@@ -362,8 +360,8 @@ h1 {
 
 .demo-btn {
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
-  background: #fff;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
   padding: 8px 10px;
   font-size: 12px;
   cursor: pointer;
@@ -371,16 +369,16 @@ h1 {
 
 .demo-note {
   font-size: 11px;
-  color: #94a3b8;
+  color: hsl(var(--muted-foreground));
   margin: 8px 0 0;
 }
 
 .select-input {
   padding: 8px 10px;
   border-radius: 6px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid hsl(var(--border));
   font-size: 12px;
-  background: white;
+  background: hsl(var(--card));
   cursor: pointer;
   transition: all 0.2s ease;
 }
@@ -399,9 +397,9 @@ h1 {
 .textarea-input {
   padding: 8px 10px;
   border-radius: 6px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid hsl(var(--border));
   font-size: 12px;
-  background: white;
+  background: hsl(var(--card));
   resize: vertical;
   min-height: 48px;
   font-family: inherit;
@@ -444,7 +442,7 @@ h1 {
   cursor: pointer;
   transition: all 0.2s;
   font-size: 13px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
 }
 
 .file-upload-btn:hover {
@@ -459,7 +457,7 @@ h1 {
 
 .file-help-text {
   font-size: 11px;
-  color: #9ca3af;
+  color: hsl(var(--muted-foreground));
   margin: 0;
 }
 

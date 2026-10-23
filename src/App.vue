@@ -13,7 +13,7 @@
   const authStore = useAuthStore()
   const showChat = computed(() => {
     const role = authStore.user?.role
-    return role === 'student' || role === 'school' || role === 'company'
+    return role === 'student' || role === 'school' || role === 'company' || role === 'municipal_hall'
   })
 </script>
 

@@ -10,7 +10,9 @@ use App\Services\SubscriptionPlanService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class OrganizationMediaController extends Controller
 {
@@ -39,6 +41,7 @@ class OrganizationMediaController extends Controller
     {
         $media = OrganizationMedia::query()
             ->where('organization_id', $organization->id)
+            ->where('path', 'like', 'organization-media/'.$organization->id.'/%')
             ->orderBy('sort_order')
             ->orderBy('id')
             ->get()
@@ -46,6 +49,25 @@ class OrganizationMediaController extends Controller
             ->values();
 
         return response()->json(['data' => $media]);
+    }
+
+    public function showFile(OrganizationMedia $organizationMedia): StreamedResponse|Response
+    {
+        $path = $organizationMedia->path;
+        $organizationId = (int) $organizationMedia->organization_id;
+        $prefix = 'organization-media/'.$organizationId.'/';
+
+        if (! is_string($path) || $path === '' || ! str_starts_with($path, $prefix)) {
+            abort(Response::HTTP_NOT_FOUND);
+        }
+
+        if (! Storage::disk('public')->exists($path)) {
+            abort(Response::HTTP_NOT_FOUND);
+        }
+
+        return Storage::disk('public')->response($path, null, [
+            'Cache-Control' => 'public, max-age=3600',
+        ]);
     }
 
     public function store(Request $request)

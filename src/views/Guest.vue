@@ -113,12 +113,14 @@ function goToProfile() {
 
 async function selectRole(role: string) {
   selectedRole.value = role
-  
+  const label =
+    role === 'company' ? 'Company' : role === 'municipal_hall' ? 'Municipal Hall' : 'School'
+
   await Swal.fire({
     icon: 'success',
-    title: `${role === 'company' ? 'Company' : 'School'} Role Selected`,
+    title: `${label} Role Selected`,
     html: `
-      <p>You've selected the <strong>${role === 'company' ? 'Company' : 'School'}</strong> role.</p>
+      <p>You've selected the <strong>${label}</strong> role.</p>
       <p>You'll now be taken to our subscription plans page to choose the perfect plan for your needs.</p>
     `,
     confirmButtonText: 'Continue to Plans',
@@ -420,13 +422,37 @@ async function submitAccountDistribution() {
               <span class="selected-text">✓ Selected</span>
             </div>
           </div>
+
+          <!-- Municipal Hall Role -->
+          <div
+            class="role-card"
+            :class="{ selected: selectedRole === 'municipal_hall' }"
+            @click="selectRole('municipal_hall')"
+          >
+            <div class="role-icon company">
+              <BuildingOfficeIcon class="icon" />
+            </div>
+            <h3 class="role-title">Municipal Hall</h3>
+            <p class="role-description">
+              Host OJT students as a Cavite LGU office and manage DTR approvals.
+            </p>
+            <ul class="role-features">
+              <li>Post LGU internship openings</li>
+              <li>Review endorsed students</li>
+              <li>Approve DTRs</li>
+              <li>Submit verification documents</li>
+            </ul>
+            <div v-if="selectedRole === 'municipal_hall'" class="role-selected-badge">
+              <span class="selected-text">✓ Selected</span>
+            </div>
+          </div>
         </div>
       </section>
 
       <!-- Subscription Plans Section (shown after role selection) -->
       <section v-if="showAccountDistribution && selectedRole && selectedPlan" class="content-section subscription-plans-section">
         <h2 class="section-title">
-          Setup Complete - {{ selectedRole === 'company' ? 'Company' : 'School' }} {{ selectedPlan }} Plan
+          Setup Complete - {{ selectedRole === 'company' ? 'Company' : selectedRole === 'municipal_hall' ? 'Municipal Hall' : 'School' }} {{ selectedPlan }} Plan
         </h2>
         <p class="section-subtitle">
           Configure your account distribution below to get started
@@ -732,9 +758,7 @@ async function submitAccountDistribution() {
 /* Base Styles */
 .guest-page {
   min-height: 100vh;
-  background:
-    radial-gradient(circle at bottom left, #9ec5ff 0 30%, transparent 31%),
-    radial-gradient(circle at top right, #9ec5ff 0 25%, transparent 26%), #f5f7fb;
+  background: hsl(var(--background));
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
@@ -774,7 +798,7 @@ async function submitAccountDistribution() {
 .logo-text {
   font-size: 18px;
   font-weight: 600;
-  color: #1f2937;
+  color: hsl(var(--foreground));
 }
 
 .nav-actions {
@@ -790,7 +814,7 @@ async function submitAccountDistribution() {
   width: 40px;
   height: 40px;
   padding: 0;
-  background: white;
+  background: hsl(var(--card));
   color: #2563eb;
   border: 2px solid #2563eb;
   border-radius: 50%;
@@ -812,7 +836,7 @@ async function submitAccountDistribution() {
 
 .logout-btn {
   padding: 10px 24px;
-  background: white;
+  background: hsl(var(--card));
   color: #dc2626;
   border: 2px solid #dc2626;
   border-radius: 6px;
@@ -845,21 +869,21 @@ async function submitAccountDistribution() {
 .welcome-title {
   font-size: 42px;
   font-weight: 700;
-  color: #1f2937;
+  color: hsl(var(--foreground));
   margin: 0 0 12px 0;
   letter-spacing: -0.02em;
 }
 
 .welcome-subtitle {
   font-size: 18px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   margin: 0;
   font-weight: 400;
 }
 
 /* Info Card */
 .info-card {
-  background: white;
+  background: hsl(var(--card));
   border-radius: 12px;
   padding: 32px;
   margin-bottom: 56px;
@@ -867,7 +891,7 @@ async function submitAccountDistribution() {
   gap: 24px;
   align-items: flex-start;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
-  border: 1px solid #e5e7eb;
+  border: 1px solid hsl(var(--border));
 }
 
 .info-icon {
@@ -894,13 +918,13 @@ async function submitAccountDistribution() {
 .info-title {
   font-size: 20px;
   font-weight: 600;
-  color: #1f2937;
+  color: hsl(var(--foreground));
   margin: 0 0 10px 0;
 }
 
 .info-text {
   font-size: 15px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   line-height: 1.6;
   margin: 0;
   font-weight: 400;
@@ -914,7 +938,7 @@ async function submitAccountDistribution() {
 .section-title {
   font-size: 32px;
   font-weight: 700;
-  color: #1f2937;
+  color: hsl(var(--foreground));
   text-align: center;
   margin: 0 0 12px 0;
   letter-spacing: -0.02em;
@@ -922,7 +946,7 @@ async function submitAccountDistribution() {
 
 .section-subtitle {
   font-size: 16px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   text-align: center;
   margin: 0 0 40px 0;
   font-weight: 400;
@@ -938,11 +962,11 @@ async function submitAccountDistribution() {
 }
 
 .role-card {
-  background: white;
+  background: hsl(var(--card));
   border-radius: 12px;
   padding: 32px;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
-  border: 1px solid #e5e7eb;
+  border: 1px solid hsl(var(--border));
   transition: all 0.3s ease;
   cursor: pointer;
   position: relative;
@@ -994,11 +1018,11 @@ async function submitAccountDistribution() {
 }
 
 .plan-info-card {
-  background: white;
+  background: hsl(var(--card));
   border-radius: 12px;
   padding: 24px;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
-  border: 1px solid #e5e7eb;
+  border: 1px solid hsl(var(--border));
   max-width: 600px;
   margin: 0 auto;
 }
@@ -1015,7 +1039,7 @@ async function submitAccountDistribution() {
 .plan-info-title {
   font-size: 18px;
   font-weight: 600;
-  color: #1f2937;
+  color: hsl(var(--foreground));
   margin: 0;
 }
 
@@ -1023,7 +1047,7 @@ async function submitAccountDistribution() {
   display: inline-block;
   padding: 4px 12px;
   background: #dbeafe;
-  color: #1e40af;
+  color: hsl(var(--foreground));
   border-radius: 12px;
   font-size: 12px;
   font-weight: 600;
@@ -1032,7 +1056,7 @@ async function submitAccountDistribution() {
 
 .plan-info-text {
   font-size: 14px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   margin: 0;
   line-height: 1.5;
 }
@@ -1047,12 +1071,12 @@ async function submitAccountDistribution() {
 }
 
 .step-card {
-  background: white;
+  background: hsl(var(--card));
   border-radius: 12px;
   padding: 32px 24px;
   text-align: center;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
-  border: 1px solid #e5e7eb;
+  border: 1px solid hsl(var(--border));
   transition: all 0.3s ease;
 }
 
@@ -1078,13 +1102,13 @@ async function submitAccountDistribution() {
 .step-title {
   font-size: 18px;
   font-weight: 600;
-  color: #1f2937;
+  color: hsl(var(--foreground));
   margin: 0 0 12px 0;
 }
 
 .step-description {
   font-size: 14px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   line-height: 1.6;
   margin: 0;
 }
@@ -1120,13 +1144,13 @@ async function submitAccountDistribution() {
 .role-title {
   font-size: 20px;
   font-weight: 600;
-  color: #1f2937;
+  color: hsl(var(--foreground));
   margin: 0 0 12px 0;
 }
 
 .role-description {
   font-size: 14px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   line-height: 1.6;
   margin: 0 0 20px 0;
   font-weight: 400;
@@ -1140,7 +1164,7 @@ async function submitAccountDistribution() {
 
 .role-features li {
   font-size: 14px;
-  color: #374151;
+  color: hsl(var(--muted-foreground));
   padding: 10px 0;
   padding-left: 28px;
   position: relative;
@@ -1169,7 +1193,7 @@ async function submitAccountDistribution() {
   display: inline-block;
   padding: 6px 12px;
   background: #dbeafe;
-  color: #1e40af;
+  color: hsl(var(--foreground));
   border-radius: 6px;
   font-size: 12px;
   font-weight: 600;
@@ -1212,10 +1236,10 @@ async function submitAccountDistribution() {
   justify-content: center;
   margin-bottom: 40px;
   padding: 24px;
-  background: white;
+  background: hsl(var(--card));
   border-radius: 12px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
-  border: 1px solid #e5e7eb;
+  border: 1px solid hsl(var(--border));
   max-width: 600px;
   margin-left: auto;
   margin-right: auto;
@@ -1241,8 +1265,8 @@ async function submitAccountDistribution() {
   font-size: 16px;
   transition: all 0.3s ease;
   border: 2px solid #e5e7eb;
-  background: white;
-  color: #9ca3af;
+  background: hsl(var(--card));
+  color: hsl(var(--muted-foreground));
 }
 
 .progress-step.completed .step-number {
@@ -1273,7 +1297,7 @@ async function submitAccountDistribution() {
 .step-label {
   font-size: 12px;
   font-weight: 600;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   text-align: center;
   white-space: nowrap;
 }
@@ -1362,11 +1386,11 @@ async function submitAccountDistribution() {
 }
 
 .distribution-card {
-  background: white;
+  background: hsl(var(--card));
   border-radius: 12px;
   padding: 32px;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
-  border: 1px solid #e5e7eb;
+  border: 1px solid hsl(var(--border));
   max-width: 900px;
   margin: 0 auto;
 }
@@ -1390,13 +1414,13 @@ async function submitAccountDistribution() {
 .distribution-title {
   font-size: 20px;
   font-weight: 600;
-  color: #1f2937;
+  color: hsl(var(--foreground));
   margin: 0 0 8px 0;
 }
 
 .distribution-subtitle {
   font-size: 14px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   margin: 0;
 }
 
@@ -1414,14 +1438,14 @@ async function submitAccountDistribution() {
 
 .summary-label {
   font-size: 12px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   font-weight: 500;
 }
 
 .summary-value {
   font-size: 24px;
   font-weight: 700;
-  color: #1f2937;
+  color: hsl(var(--foreground));
 }
 
 .summary-value.allocated {
@@ -1470,13 +1494,13 @@ async function submitAccountDistribution() {
 .input-label {
   font-size: 13px;
   font-weight: 500;
-  color: #374151;
+  color: hsl(var(--muted-foreground));
 }
 
 .department-input {
   flex: 1;
   padding: 12px 16px;
-  border: 1px solid #d1d5db;
+  border: 1px solid hsl(var(--border));
   border-radius: 8px;
   font-size: 14px;
   outline: none;
@@ -1509,7 +1533,7 @@ async function submitAccountDistribution() {
 .accounts-input {
   width: 150px;
   padding: 12px 16px;
-  border: 1px solid #d1d5db;
+  border: 1px solid hsl(var(--border));
   border-radius: 8px;
   font-size: 14px;
   outline: none;
@@ -1530,7 +1554,7 @@ async function submitAccountDistribution() {
   border-radius: 6px;
   margin-top: 8px;
   font-size: 12px;
-  color: #1e40af;
+  color: hsl(var(--foreground));
 }
 
 .note-icon {
@@ -1572,7 +1596,7 @@ async function submitAccountDistribution() {
 
 .add-dept-btn {
   padding: 12px 24px;
-  background: white;
+  background: hsl(var(--card));
   color: #2563eb;
   border: 2px solid #2563eb;
   border-radius: 8px;
@@ -1590,14 +1614,14 @@ async function submitAccountDistribution() {
   opacity: 0.5;
   cursor: not-allowed;
   background: #f3f4f6;
-  color: #9ca3af;
-  border-color: #d1d5db;
+  color: hsl(var(--muted-foreground));
+  border-color: hsl(var(--border));
 }
 
 .add-dept-btn:disabled:hover {
   background: #f3f4f6;
-  color: #9ca3af;
-  border-color: #d1d5db;
+  color: hsl(var(--muted-foreground));
+  border-color: hsl(var(--border));
   transform: none;
 }
 
@@ -1626,7 +1650,7 @@ async function submitAccountDistribution() {
   gap: 16px;
   margin-bottom: 32px;
   padding: 24px;
-  background: #f8fafc;
+  background: hsl(var(--background));
   border-radius: 8px;
 }
 
@@ -1644,13 +1668,13 @@ async function submitAccountDistribution() {
 
 .detail-label {
   font-size: 14px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   font-weight: 500;
 }
 
 .detail-value {
   font-size: 16px;
-  color: #1f2937;
+  color: hsl(var(--foreground));
   font-weight: 600;
 }
 
@@ -1664,11 +1688,11 @@ async function submitAccountDistribution() {
 }
 
 .pricing-card {
-  background: white;
+  background: hsl(var(--card));
   border-radius: 12px;
   padding: 40px 32px;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
-  border: 1px solid #e5e7eb;
+  border: 1px solid hsl(var(--border));
   transition: all 0.3s ease;
   position: relative;
   display: flex;
@@ -1732,7 +1756,7 @@ async function submitAccountDistribution() {
 .plan-name {
   font-size: 24px;
   font-weight: 600;
-  color: #1f2937;
+  color: hsl(var(--foreground));
   margin: 20px 0 16px 0;
   text-align: center;
 }
@@ -1749,12 +1773,12 @@ async function submitAccountDistribution() {
 .period {
   font-size: 16px;
   font-weight: 400;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
 }
 
 .plan-description {
   font-size: 14px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   text-align: center;
   margin: 0 0 24px 0;
   padding-bottom: 24px;
@@ -1771,7 +1795,7 @@ async function submitAccountDistribution() {
 
 .plan-features li {
   font-size: 14px;
-  color: #374151;
+  color: hsl(var(--muted-foreground));
   padding: 10px 0;
   padding-left: 28px;
   position: relative;
@@ -1790,7 +1814,7 @@ async function submitAccountDistribution() {
 .plan-btn {
   width: 100%;
   padding: 12px 24px;
-  background: white;
+  background: hsl(var(--card));
   color: #2563eb;
   border: 2px solid #2563eb;
   border-radius: 6px;
@@ -1836,26 +1860,26 @@ async function submitAccountDistribution() {
 
 /* Contact Card */
 .contact-card {
-  background: white;
+  background: hsl(var(--card));
   border-radius: 12px;
   padding: 48px 40px;
   text-align: center;
   max-width: 700px;
   margin: 0 auto;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
-  border: 1px solid #e5e7eb;
+  border: 1px solid hsl(var(--border));
 }
 
 .contact-title {
   font-size: 26px;
   font-weight: 600;
-  color: #1f2937;
+  color: hsl(var(--foreground));
   margin: 0 0 16px 0;
 }
 
 .contact-text {
   font-size: 15px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   line-height: 1.6;
   margin: 0 0 28px 0;
   font-weight: 400;

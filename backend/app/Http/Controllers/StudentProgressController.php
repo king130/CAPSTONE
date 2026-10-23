@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Application;
 use App\Models\ApplicationAssessment;
+use App\Models\OjtDtrSubmission;
 use App\Models\OjtLog;
 use App\Models\Student;
 use App\Services\PermissionGate;
@@ -57,12 +58,14 @@ class StudentProgressController extends Controller
             $approvedHours = (float) OjtLog::query()
                 ->where('student_id', $student->id)
                 ->where('status', 'approved')
-                ->sum('hours');
+                ->sum('hours')
+                + OjtDtrSubmission::hoursForStudent((int) $student->id, 'approved');
 
             $pendingHours = (float) OjtLog::query()
                 ->where('student_id', $student->id)
                 ->where('status', 'pending')
-                ->sum('hours');
+                ->sum('hours')
+                + OjtDtrSubmission::hoursForStudent((int) $student->id, 'pending');
 
             $latestAssessment = null;
             if ($latestApplication) {

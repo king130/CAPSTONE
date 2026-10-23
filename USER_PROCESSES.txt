@@ -1,0 +1,230 @@
+================================================================================
+OJT INTERN PATH — USER PROCESSES (how people use the system)
+================================================================================
+Product: Capstone / OJT Intern Path
+File purpose: Step-by-step business flows (register, login, apply, endorse, etc.)
+Not OS processes. Last updated: 2026-10-18
+
+Roles involved:
+  - Admin (platform)
+  - School (org + staff: admin, teacher, dept head, …)
+  - Company / Municipal Hall (host orgs; municipal reuses company workspace)
+  - Student / Intern
+  - Guest (browse only)
+
+================================================================================
+A. REGISTRATION
+================================================================================
+
+A1. Register as SCHOOL
+  1. Open /register (or Role Selection → School)
+  2. Fill school details (institution name, email, password, address, etc.)
+  3. Submit → account created, org verificationStatus usually pending
+  4. Land on /organization-verification
+  5. Upload required verification documents
+  6. Wait for Admin approval (cannot use full school features until approved)
+
+A2. Register as COMPANY
+  1. Open /register → Company
+  2. Fill company details + password
+  3. Submit → pending verification + trial subscription starts (banner may show)
+  4. /organization-verification → upload docs
+  5. Wait for Admin approval
+
+A3. Register as MUNICIPAL HALL
+  1. Same pattern as company (host-type org)
+  2. Uses company-style workspace/nav after approval
+  3. Verification docs + Admin approve, same as company
+
+A4. Students do NOT self-register normally
+  - School creates the student account (see C1)
+  - Student gets email setup link → sets password (see C2)
+
+================================================================================
+B. LOGIN / UNLOCK
+================================================================================
+
+B1. Login (any role)
+  1. /login → email + password
+  2. Token stored as capstone_auth_token
+  3. Redirect by role:
+       admin   → /admin/...
+       school  → /school (or first allowed page)
+       company / municipal_hall → /dashboard
+       student → /intern
+       guest   → /guest
+
+B2. Pending / rejected organization
+  - School/Company/Municipal still pending → forced to /organization-verification
+  - After Admin approves → refresh status (or re-login) → workspace unlocks
+
+B3. Forced password change
+  - Staff created with temporary password → /change-password first
+  - Then continue to role dashboard
+
+B4. Account disabled
+  - Login blocked / redirected to account-disabled
+
+================================================================================
+C. SCHOOL SETUP + STUDENTS
+================================================================================
+
+C1. School sets course OJT requirements (Settings)
+  1. Login as school
+  2. /settings → School Courses
+  3. Add course name, required OJT hours, eligible year levels
+  4. Save (needed so “Use school hours” and apply rules work)
+
+C2. School creates student account
+  1. /school/students → Create Student Account
+  2. First name, last name, course, year level
+  3. Email is auto-generated (school domain)
+  4. Confirm → system emails account-setup link (MAIL_MAILER=log writes to laravel.log locally)
+
+C3. Student completes account setup
+  1. Open setup URL from email/log (/account-setup?token=…)
+  2. Create password → Confirm Account
+  3. Logged in as student → /intern (NOT organization-verification)
+
+C4. School adds staff (e.g. Teacher)
+  1. /access/roles → Add user (name, email, role = Teacher)
+  2. Toast shows temporary password
+  3. Teacher logs in → change password if required
+  4. Teacher /settings: sees school name + courses (read-only), no org admin controls
+
+================================================================================
+D. HOST JOBS + SCHOOL↔HOST AGREEMENT
+================================================================================
+
+D1. Company / Municipal posts internship
+  1. Login as host → Create Job / internship form
+  2. Set title, details, host required hours (e.g. 80)
+  3. Publish → job visible when school agreement allows
+
+D2. Propose / accept school–company agreement (MOA-style)
+  1. Host: /agreements/new → choose school + type → Send Request
+  2. School: /agreements → Accept
+  3. Active agreement unlocks students applying to that host’s jobs
+     (without it, student may see “Not yet available”)
+
+================================================================================
+E. APPLY → ENDORSE → INTERVIEW → ACCEPT
+================================================================================
+
+E1. Student applies
+  1. /find-internships (or intern opportunities)
+  2. View & Apply → upload endorsement PDF (required)
+  3. Submit Application
+  4. If school hours ≠ host hours → hours agreement is created (mismatch)
+
+E2. Hours agreement (school + host)
+  1. School: /school/endorsements → View application → Hours agreement panel
+  2. “Use school hours” only works if course hours are set; else disabled + warning
+  3. Or Propose custom hours → Confirm
+  4. Host: Applicants → View Profile → Confirm proposal
+  5. UI shows “Hours agreed” when both sides confirmed
+  6. Accept is blocked until hours are agreed when there is a mismatch
+
+E3. School endorses
+  1. /school/endorsements → Endorse (status submitted → endorsed)
+
+E4. Host schedules interview
+  1. Dashboard / Applicants → View Profile → Schedule interview
+  2. Student: /intern/tracker → Confirm interview (student must NOT propose)
+
+E5. Host assess + accept
+  1. Mark interviewed → Submit assessment (scores) → Accept
+  2. Placement schedule is created on accept
+  3. Student can then use tracker calendar + DTR
+
+================================================================================
+F. PLACEMENT: SCHEDULE, DTR, CERTIFICATE
+================================================================================
+
+F1. Schedule change
+  1. Student: /intern/tracker → Request different schedule → reason → Submit
+  2. Host: View Profile → Approve schedule request → Confirm
+
+F2. Daily Time Record (DTR)
+  1. Student: /intern/placement → Daily Time Record (DTR)
+       - Choose accepted placement, hours, period, upload file → Upload DTR
+  2. Host: /dashboard/dtr → Reject/request revision (remarks) OR Approve
+  3. If revision: student Resubmit DTR
+  4. Host Approve → School: /school/dtr → Approve
+  5. Approved hours appear on student / host / school views (no double count)
+
+F3. Certificate
+  1. School: /school/placements → Issue (for accepted placement with hours)
+  2. Student: /intern/placement → View Certificate / Print / Save as PDF
+  3. Certificate hours use approved DTR + required OJT hours accessor
+
+================================================================================
+G. SUBSCRIPTION (HOST / SCHOOL ORG)
+================================================================================
+
+G1. Trial / Active / Grace / Expired
+  - New company often starts on trial (banner)
+  - Admin or artisan demo-status can set expired for testing
+  - Expired: banner on dashboard; org writes blocked; billing still reachable
+  - Restore Active via billing or subscription:demo-status … active
+
+G2. Where banner shows
+  - Main layout for school / company / municipal when subscriptionAccess ≠ active
+
+================================================================================
+H. ADMIN PROCESSES
+================================================================================
+
+H1. Approve organizations
+  1. Login admin
+  2. /admin/schools or /admin/companies
+  3. Actions → Approve → confirm dialog
+  4. Org verificationStatus → approved → owners can leave verification page
+
+H2. Other admin work (high level)
+  - Users, subscriptions, holidays, system overview, pricing
+
+================================================================================
+I. TYPICAL FULL HAPPY PATH (E2E ORDER)
+================================================================================
+
+  1  Register school + upload verification docs
+  2  Register company + docs (trial)
+  3  Admin approves both
+  4  School + company login unlocked (leave verification)
+  5  School sets course hours + year levels
+  6  Company posts job (host hours)
+  7  Company proposes agreement; school accepts
+  8  School creates student
+  9  Student account-setup from email link
+ 10  Student applies (with endorsement file)
+ 11  School + company agree OJT hours in UI
+ 12  School endorses
+ 13  Company schedules interview; student confirms
+ 14  Company interviewed → assess → accept
+ 15  Student requests schedule change; company approves
+ 16  DTR: student upload → company reject → resubmit → company approve → school approve
+ 17  School issues certificate; student opens/downloads
+ 18  School adds teacher; teacher sees read-only school/courses
+ 19  Expire company subscription; check banner; restore Active
+ 20  (Optional) responsive / dark screenshots
+
+================================================================================
+J. QUICK ROUTE CHEAT SHEET
+================================================================================
+
+  /register, /login
+  /organization-verification
+  /school, /school/students, /school/endorsements, /school/placements, /school/dtr
+  /access/roles
+  /settings
+  /dashboard, /dashboard/dtr   (company / municipal)
+  /agreements, /agreements/new
+  /find-internships
+  /intern, /intern/tracker, /intern/placement
+  /account-setup?token=…
+  /admin/schools, /admin/companies
+
+================================================================================
+END
+================================================================================

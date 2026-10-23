@@ -2792,7 +2792,7 @@
 }
 
 .btn-view-details {
-  background: white;
+  background: hsl(var(--card));
   color: hsl(var(--muted-foreground));
   border: 1px solid hsl(var(--border));
   padding: 8px 16px;
@@ -2879,7 +2879,7 @@
 
 /* Internship Details Modal Styles */
 .internship-details-modal {
-  background: white;
+  background: hsl(var(--card));
   border-radius: 12px;
   width: 90%;
   max-width: 800px;
@@ -3057,7 +3057,7 @@
 
 .internship-details-modal .btn-secondary {
   padding: 10px 20px;
-  background: white;
+  background: hsl(var(--card));
   color: hsl(var(--muted-foreground));
   border: 1px solid hsl(var(--border));
   border-radius: 8px;

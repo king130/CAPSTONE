@@ -19,7 +19,7 @@ const alertClass = computed(() =>
     'relative w-full rounded-lg border p-4 text-sm',
     props.variant === 'default' && 'border-border bg-background text-foreground',
     props.variant === 'destructive' &&
-      'border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300',
+      'border-red-200 bg-red-50 text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200',
     props.class,
   ),
 )

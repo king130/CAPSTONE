@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { toTypedSchema } from '@vee-validate/zod'
 import { useForm } from 'vee-validate'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -43,15 +43,28 @@ import {
   type ProfileSettings,
   type SettingsPayload,
 } from '@/services/settings'
+import { hasPermission } from '@/services/permissions'
+import {
+  ALL_YEAR_LEVEL_OPTIONS,
+  DEFAULT_ELIGIBLE_YEAR_LEVELS,
+  createCourseRequirement,
+  listCourseRequirements,
+  listFlaggedCourseStudents,
+  updateCourseRequirement,
+  type CourseRequirement,
+  type CourseRequirementMeta,
+  type FlaggedStudent,
+} from '@/services/schoolPrograms'
 import type { UserRole } from '@/services/auth'
 import { useAuthStore } from '@/stores/auth'
 
-type SettingsTab = 'profile' | 'security' | 'notifications' | 'system'
+type SettingsTab = 'profile' | 'configure' | 'security' | 'notifications' | 'system'
 
 interface SettingsField {
   key: string
   label: string
   options?: string[]
+  readonly?: boolean
 }
 
 interface NotificationPreferenceOption {
@@ -110,7 +123,23 @@ const organizationCourseSelectRef = ref<HTMLSelectElement | null>(null)
 let organizationCourseTomSelect: TomSelect | null = null
 
 const currentRole = computed<UserRole>(() => authStore.user?.role ?? null)
-const canManageOrgOjtHours = computed(() => currentRole.value === 'school' || currentRole.value === 'company')
+const organizationType = computed(() => authStore.user?.activeOrganization?.type ?? '')
+const canManageOrgOjtHours = computed(
+  () => organizationType.value === 'school' || (organizationType.value === '' && currentRole.value === 'school'),
+)
+const canEditSchoolOrg = computed(
+  () =>
+    currentRole.value === 'school' &&
+    (hasPermission('org.manage_members') || hasPermission('manage_users')),
+)
+const courseRequirements = ref<CourseRequirement[]>([])
+const courseRequirementMeta = ref<CourseRequirementMeta | null>(null)
+const flaggedCourseStudents = ref<FlaggedStudent[]>([])
+const loadingCourseRequirements = ref(false)
+const savingCourseRequirement = ref(false)
+const courseRequirementError = ref('')
+const courseHourDrafts = ref<Record<string, string>>({})
+const courseYearDrafts = ref<Record<string, string[]>>({})
 const currentProfile = computed(() => (authStore.user?.profile as Record<string, unknown> | undefined) ?? {})
 const currentEmail = computed(() => authStore.user?.email ?? '')
 const currentAvatar = computed(() => {
@@ -135,9 +164,14 @@ const locationBarangayOptions = computed(() => caviteBarangaysByLocation[String(
 const availableTabs = computed<Array<{ key: SettingsTab; label: string }>>(() => {
   const tabs: Array<{ key: SettingsTab; label: string }> = [
     { key: 'profile', label: 'Profile Settings' },
+  ]
+  if (currentRole.value === 'school' || currentRole.value === 'company') {
+    tabs.push({ key: 'configure', label: 'Configure' })
+  }
+  tabs.push(
     { key: 'security', label: 'Account & Security' },
     { key: 'notifications', label: 'Notifications Preferences' },
-  ]
+  )
 
   if (currentRole.value === 'admin') {
     tabs.push({ key: 'system', label: 'System Settings' })
@@ -236,27 +270,39 @@ const {
 const roleSpecificFields = computed<SettingsField[]>(() => {
   if (currentRole.value === 'student') {
     return [
-      { key: 'course', label: 'Course' },
-      { key: 'yearLevel', label: 'Year Level', options: ['1st Year', '2nd Year', '3rd Year', '4th Year', '5th Year'] },
-      { key: 'schoolName', label: 'School Name' },
+      { key: 'course', label: 'Course', readonly: true },
+      { key: 'yearLevel', label: 'Year Level', options: ['3rd Year', '4th Year'], readonly: true },
+      { key: 'schoolName', label: 'School Name', readonly: true },
     ]
   }
 
   if (currentRole.value === 'school') {
+    if (!canEditSchoolOrg.value) {
+      return [{ key: 'schoolName', label: 'School Name', readonly: true }]
+    }
     return [
       { key: 'schoolName', label: 'School Name' },
       { key: 'schoolAddress', label: 'School Address' },
       { key: 'contactPerson', label: 'Contact Person' },
       { key: 'schoolType', label: 'School Type' },
-      { key: 'officialSchoolEmail', label: 'School Email Domain' },
     ]
   }
 
   if (currentRole.value === 'company') {
+    const isMunicipal = organizationType.value === 'municipal_hall'
+    const canEditOrg = hasPermission('org.manage_profile') || hasPermission('manage_profile')
     return [
-      { key: 'companyName', label: 'Company Name' },
-      { key: 'industry', label: 'Industry' },
-      { key: 'website', label: 'Website' },
+      {
+        key: 'companyName',
+        label: isMunicipal ? 'Official Office Name' : 'Company Name',
+        readonly: !canEditOrg,
+      },
+      {
+        key: 'industry',
+        label: isMunicipal ? 'Office Classification' : 'Industry',
+        readonly: !canEditOrg,
+      },
+      { key: 'website', label: 'Website', readonly: !canEditOrg },
     ]
   }
 
@@ -384,6 +430,109 @@ function applySettings(payload: SettingsPayload) {
   }
 }
 
+async function loadCourseRequirements() {
+  if (currentRole.value !== 'school') return
+  loadingCourseRequirements.value = true
+  courseRequirementError.value = ''
+  try {
+    const { requirements, meta } = await listCourseRequirements()
+    courseRequirements.value = requirements
+    courseRequirementMeta.value = meta
+    applyCourseDrafts()
+    flaggedCourseStudents.value = meta?.flaggedStudentCount
+      ? await listFlaggedCourseStudents().catch(() => [])
+      : []
+  } catch (caughtError) {
+    courseRequirementError.value =
+      caughtError instanceof Error ? caughtError.message : 'Unable to load course OJT requirements.'
+    applyCourseDrafts()
+  } finally {
+    loadingCourseRequirements.value = false
+  }
+}
+
+function requirementForCourse(courseName: string) {
+  const key = courseName.trim().toLowerCase()
+  return courseRequirements.value.find((item) => item.courseName.trim().toLowerCase() === key) ?? null
+}
+
+function applyCourseDrafts() {
+  const hours: Record<string, string> = {}
+  const years: Record<string, string[]> = {}
+  for (const course of organizationCourses.value) {
+    const requirement = requirementForCourse(course)
+    hours[course] = requirement ? String(requirement.requiredHours) : ''
+    years[course] = requirement ? [...requirement.eligibleYearLevels] : [...DEFAULT_ELIGIBLE_YEAR_LEVELS]
+  }
+  courseHourDrafts.value = hours
+  courseYearDrafts.value = years
+}
+
+watch(organizationCourses, (courses) => {
+  if (currentRole.value !== 'school') return
+  const hours = { ...courseHourDrafts.value }
+  const years = { ...courseYearDrafts.value }
+  let changed = false
+  for (const course of courses) {
+    if (hours[course] !== undefined) continue
+    const requirement = requirementForCourse(course)
+    hours[course] = requirement ? String(requirement.requiredHours) : ''
+    years[course] = requirement ? [...requirement.eligibleYearLevels] : [...DEFAULT_ELIGIBLE_YEAR_LEVELS]
+    changed = true
+  }
+  if (!changed) return
+  courseHourDrafts.value = hours
+  courseYearDrafts.value = years
+})
+
+function courseHoursAreValid(value: string) {
+  const hours = Number(value)
+  return Number.isInteger(hours) && hours >= 1 && hours <= 10000
+}
+
+function toggleCourseYearDraft(courseName: string, level: string) {
+  const current = courseYearDrafts.value[courseName] ?? []
+  courseYearDrafts.value = {
+    ...courseYearDrafts.value,
+    [courseName]: current.includes(level)
+      ? current.filter((item) => item !== level)
+      : [...current, level],
+  }
+}
+
+async function saveCourseRequirementHours(courseName: string) {
+  const draft = courseHourDrafts.value[courseName] ?? ''
+  const years = courseYearDrafts.value[courseName] ?? []
+  if (!courseHoursAreValid(draft)) {
+    courseRequirementError.value = 'Required hours must be a whole number of at least 1.'
+    return
+  }
+  if (years.length === 0) {
+    courseRequirementError.value = 'Select at least one eligible year level.'
+    return
+  }
+
+  savingCourseRequirement.value = true
+  courseRequirementError.value = ''
+  try {
+    const existing = requirementForCourse(courseName)
+    const updated = existing
+      ? await updateCourseRequirement(existing.id, courseName, Number(draft), years)
+      : await createCourseRequirement(courseName, Number(draft), years)
+    courseRequirements.value = [
+      ...courseRequirements.value.filter((item) => item.id !== updated.id && item.courseName.trim().toLowerCase() !== courseName.trim().toLowerCase()),
+      updated,
+    ].sort((left, right) => left.courseName.localeCompare(right.courseName))
+    applyCourseDrafts()
+    await loadCourseRequirements()
+  } catch (caughtError) {
+    courseRequirementError.value =
+      caughtError instanceof Error ? caughtError.message : 'Unable to update the course requirement.'
+  } finally {
+    savingCourseRequirement.value = false
+  }
+}
+
 async function loadSettingsData() {
   loading.value = true
   try {
@@ -393,6 +542,7 @@ async function loadSettingsData() {
       const ojtSettings = await fetchOrgOjtSettings().catch(() => ({ requiredHours: 500 }))
       orgRequiredHours.value = String(ojtSettings.requiredHours || 500)
     }
+    await loadCourseRequirements()
   } catch {
     applySettings(buildFallbackSettings())
   } finally {
@@ -421,6 +571,11 @@ function mapProfilePayload(): ProfileSettings {
   const payload: ProfileSettings = {
     fullName: profileValues.fullName ?? '',
     phone: profileValues.phone ?? '',
+  }
+
+  // Students only persist contact; school-managed fields stay view-only and are not submitted.
+  if (currentRole.value === 'student') {
+    return payload
   }
 
   for (const field of roleSpecificFields.value) {
@@ -489,12 +644,8 @@ function addOrganizationCourseFromPicker() {
       organizationCourseTomSelect.addOptionGroup(group.label, { label: group.label, value: group.label })
     }
     for (const option of group.options) {
+      if (organizationCourses.value.includes(option)) continue
       organizationCourseTomSelect.addOption({ value: option, text: option, optgroup: group.label })
-    }
-  }
-  for (const course of organizationCourses.value) {
-    if (!organizationCourseTomSelect.options[course]) {
-      organizationCourseTomSelect.addOption({ value: course, text: course })
     }
   }
   organizationCourseTomSelect.refreshOptions(false)
@@ -536,7 +687,7 @@ async function initializeOrganizationCourseTomSelect() {
     persist: false,
     maxOptions: 200,
     closeAfterSelect: false,
-    hideSelected: false,
+    hideSelected: true,
     placeholder: currentRole.value === 'school'
       ? 'Select one or more school courses'
       : 'Select one or more accepted courses',
@@ -623,7 +774,7 @@ const saveProfile = handleProfileSubmit(async () => {
 
     const payload = mapProfilePayload()
     payload.acceptedCourses = JSON.stringify(organizationCourses.value)
-    await saveProfileSettings(payload)
+    await saveProfileSettings(payload, currentRole.value)
     const refreshedUser = await authStore.refreshUser()
     if (refreshedUser) {
       authStore.setUserProfile(refreshedUser)
@@ -822,19 +973,26 @@ onBeforeUnmount(() => {
                       id="settingsFullName"
                       v-bind="componentField"
                       :model-value="profileValues.fullName"
+                      :readonly="currentRole === 'student'"
+                      :disabled="currentRole === 'student'"
                       @update:modelValue="setProfileFieldValue('fullName', $event)"
                     />
                   </FormControl>
                   <FormMessage :message="fieldError || profileErrors.fullName" />
+                  <p v-if="currentRole === 'student'" class="text-sm text-muted-foreground">
+                    Managed by your school.
+                  </p>
                 </FormItem>
               </FormField>
 
               <FormItem>
                 <FormLabel for="settingsEmail">Email</FormLabel>
                 <FormControl>
-                  <Input id="settingsEmail" :model-value="currentEmail" type="email" readonly />
+                  <Input id="settingsEmail" :model-value="currentEmail" type="email" readonly disabled />
                 </FormControl>
-                <p class="text-sm text-muted-foreground">Contact admin to change email.</p>
+                <p class="text-sm text-muted-foreground">
+                  {{ currentRole === 'student' ? 'Managed by your school.' : 'Contact admin to change email.' }}
+                </p>
               </FormItem>
 
               <FormField v-slot="{ componentField, errorMessage: fieldError }" name="phone">
@@ -866,6 +1024,7 @@ onBeforeUnmount(() => {
                       :id="field.key"
                       v-bind="componentField"
                       :model-value="profileValues[field.key]"
+                      :disabled="field.readonly"
                       @update:modelValue="setProfileFieldValue(field.key, $event)"
                     >
                       <option value="">Select {{ field.label.toLowerCase() }}</option>
@@ -876,14 +1035,35 @@ onBeforeUnmount(() => {
                       :id="field.key"
                       v-bind="componentField"
                       :model-value="profileValues[field.key]"
+                      :readonly="field.readonly"
+                      :disabled="field.readonly"
                       @update:modelValue="setProfileFieldValue(field.key, $event)"
                     />
                   </FormControl>
                   <FormMessage :message="fieldError || profileErrors[field.key]" />
+                  <p v-if="field.readonly" class="text-sm text-muted-foreground">Managed by your school.</p>
                 </FormItem>
               </FormField>
 
-              <template v-if="currentRole === 'company' || currentRole === 'school'">
+              <div
+                v-if="currentRole === 'school' && !canEditSchoolOrg"
+                class="space-y-3 rounded-2xl border border-border bg-muted p-5"
+              >
+                <h4 class="text-base font-semibold text-foreground">School Courses</h4>
+                <p class="text-sm text-muted-foreground">Visible for your teaching role. Only school admins can edit courses.</p>
+                <div v-if="organizationCourses.length" class="flex flex-wrap gap-2">
+                  <span
+                    v-for="course in organizationCourses"
+                    :key="course"
+                    class="inline-flex items-center rounded-full border border-border bg-card px-3 py-1.5 text-sm text-card-foreground"
+                  >
+                    {{ course }}
+                  </span>
+                </div>
+                <p v-else class="text-sm text-muted-foreground">No school courses listed yet.</p>
+              </div>
+
+              <template v-if="currentRole === 'company' || canEditSchoolOrg">
                 <div class="space-y-4 rounded-2xl border border-border bg-muted p-5">
                   <div class="space-y-1">
                     <h4 class="text-base font-semibold text-foreground">
@@ -892,14 +1072,20 @@ onBeforeUnmount(() => {
                     <p class="text-sm text-muted-foreground">
                       {{ currentRole === 'school'
                         ? 'Add the courses or programs your school offers for student account creation and matching.'
-                        : 'Add the courses or programs your company accepts for internships.' }}
+                        : organizationType === 'municipal_hall'
+                          ? 'Add the courses or programs your municipal hall accepts for internships.'
+                          : 'Add the courses or programs your company accepts for internships.' }}
                     </p>
                   </div>
                   <div class="space-y-2">
                     <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
                       <select ref="organizationCourseSelectRef" multiple class="organization-course-select">
                         <optgroup v-for="group in courseGroups" :key="group.label" :label="group.label">
-                          <option v-for="option in group.options" :key="option" :value="option">{{ option }}</option>
+                          <option
+                            v-for="option in group.options.filter((item) => !organizationCourses.includes(item))"
+                            :key="option"
+                            :value="option"
+                          >{{ option }}</option>
                         </optgroup>
                       </select>
                       <Button type="button" variant="outline" @mousedown.prevent="addOrganizationCourseFromPicker">
@@ -907,7 +1093,7 @@ onBeforeUnmount(() => {
                       </Button>
                     </div>
                     <p class="text-sm text-muted-foreground">
-                      Program headers are grouped above the courses. Search and select multiple courses at once, or type a custom one and click `Add Course`.
+                      Search a course, select it, then click Add Course. The list below shows only courses already added.
                     </p>
                   </div>
                   <div v-if="organizationCourses.length" class="flex flex-wrap gap-2">
@@ -930,12 +1116,20 @@ onBeforeUnmount(() => {
                 <div class="space-y-4 rounded-2xl border border-border bg-muted p-5">
                   <div class="space-y-1">
                     <h4 class="text-base font-semibold text-foreground">
-                      {{ currentRole === 'school' ? 'School Address' : 'Company Address' }}
+                      {{
+                        currentRole === 'school'
+                          ? 'School Address'
+                          : organizationType === 'municipal_hall'
+                            ? 'Municipal Hall Address'
+                            : 'Company Address'
+                      }}
                     </h4>
                     <p class="text-sm text-muted-foreground">
                       {{ currentRole === 'school'
                         ? 'Use the Cavite location fields so student accounts and directory data stay consistent.'
-                        : 'Use the Cavite location fields so schools can filter your company correctly.' }}
+                        : organizationType === 'municipal_hall'
+                          ? 'Use the Cavite location fields so schools can filter your municipal hall correctly.'
+                          : 'Use the Cavite location fields so schools can filter your company correctly.' }}
                     </p>
                   </div>
                   <FormItem v-if="currentRole === 'school'">
@@ -1011,7 +1205,154 @@ onBeforeUnmount(() => {
                   </FormItem>
                 </div>
 
-                <div class="space-y-4 rounded-2xl border border-border bg-muted p-5">
+
+                <OrganizationPublicProfileSection />
+              </template>
+
+              <Button type="submit" class="w-full md:w-auto" :disabled="savingProfile">
+                {{ savingProfile ? 'Saving...' : 'Save Changes' }}
+              </Button>
+            </form>
+          </div>
+
+          <div v-else-if="activeTab === 'configure'" class="space-y-6">
+            <div>
+              <h3 class="text-2xl font-semibold text-foreground">Configure</h3>
+              <p class="mt-2 text-sm text-muted-foreground">Course requirements and OJT hours for this organization.</p>
+            </div>
+                <div
+                  v-if="currentRole === 'school'"
+                  class="space-y-4 rounded-2xl border border-border bg-muted p-5"
+                >
+                  <div class="space-y-1">
+                    <h4 class="text-base font-semibold text-foreground">Course OJT Requirements</h4>
+                    <p class="text-sm text-muted-foreground">
+                      Each course from Settings is listed here. Set required OJT hours and eligible year levels, then save.
+                      Hours changes apply to future applications only.
+                    </p>
+                  </div>
+
+                  <div
+                    v-if="(courseRequirementMeta?.incompleteCourses?.length || 0) > 0 || (courseRequirementMeta?.flaggedStudentCount || 0) > 0"
+                    class="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-foreground"
+                  >
+                    <p class="font-semibold">Course setup needs attention</p>
+                    <ul class="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+                      <li v-for="item in courseRequirementMeta?.incompleteCourses || []" :key="item.id">
+                        {{ item.courseName }} is incomplete
+                        <span v-if="item.missingHours"> (hours)</span>
+                        <span v-if="item.missingYearLevels"> (year levels)</span>.
+                      </li>
+                      <li v-if="(courseRequirementMeta?.flaggedStudentCount || 0) > 0">
+                        {{ courseRequirementMeta?.flaggedStudentCount }} student{{
+                          (courseRequirementMeta?.flaggedStudentCount || 0) === 1 ? '' : 's'
+                        }}
+                        have a year level that does not match their course â€” review the list below. Records were not changed.
+                      </li>
+                    </ul>
+                  </div>
+
+                  <div
+                    v-if="flaggedCourseStudents.length"
+                    class="rounded-xl border border-border bg-background px-4 py-3 text-sm"
+                  >
+                    <p class="font-medium text-foreground">Flagged students (not modified)</p>
+                    <ul class="mt-2 space-y-1 text-muted-foreground">
+                      <li v-for="row in flaggedCourseStudents" :key="row.id">
+                        {{ row.name || 'Student' }}
+                        <span v-if="row.email">({{ row.email }})</span>
+                        â€” {{ row.course || 'No course' }} / {{ row.yearLevel || 'No year' }}
+                        <span class="text-xs">({{ row.reasons.join(', ') }})</span>
+                      </li>
+                    </ul>
+                  </div>
+
+                  <p v-if="courseRequirementError" class="text-sm font-medium text-destructive">
+                    {{ courseRequirementError }}
+                  </p>
+                  <p v-if="loadingCourseRequirements" class="text-sm text-muted-foreground">
+                    Loading course requirements...
+                  </p>
+
+                  <div
+                    v-if="!loadingCourseRequirements && !organizationCourses.length"
+                    class="rounded-xl border border-dashed border-border bg-background px-4 py-6 text-sm text-muted-foreground"
+                  >
+                    <p>
+                      Add a course in
+                      <button type="button" class="font-medium text-primary underline" @click="activeTab = 'profile'">
+                        Settings
+                      </button>
+                      first,
+                    </p>
+                  </div>
+
+                  <div v-else-if="!loadingCourseRequirements && organizationCourses.length" class="space-y-4">
+                    <article
+                      v-for="course in organizationCourses"
+                      :key="course"
+                      class="rounded-xl border border-border bg-background p-4"
+                    >
+                      <div class="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p class="font-medium text-foreground">{{ course }}</p>
+                          <p class="text-xs text-muted-foreground">
+                            {{
+                              requirementForCourse(course)
+                                ? 'Saved for this course'
+                                : 'Not saved yet'
+                            }}
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          :disabled="savingCourseRequirement"
+                          @click="saveCourseRequirementHours(course)"
+                        >
+                          Save course
+                        </Button>
+                      </div>
+                      <div class="mt-3 grid gap-3 sm:grid-cols-[140px_minmax(0,1fr)] sm:items-start">
+                        <FormItem>
+                          <FormLabel :for="`course-hours-${course}`">Required hours</FormLabel>
+                          <FormControl>
+                            <Input
+                              :id="`course-hours-${course}`"
+                              v-model="courseHourDrafts[course]"
+                              type="number"
+                              min="1"
+                              max="10000"
+                            />
+                          </FormControl>
+                        </FormItem>
+                        <div>
+                          <p class="mb-2 text-sm font-medium text-foreground">Eligible year levels</p>
+                          <div class="flex flex-wrap gap-2">
+                            <button
+                              v-for="level in ALL_YEAR_LEVEL_OPTIONS"
+                              :key="`${course}-${level}`"
+                              type="button"
+                              class="rounded-full border px-3 py-1 text-xs font-medium transition"
+                              :class="
+                                (courseYearDrafts[course] || []).includes(level)
+                                  ? 'border-primary bg-primary/10 text-foreground'
+                                  : 'border-border bg-muted text-muted-foreground'
+                              "
+                              @click="toggleCourseYearDraft(course, level)"
+                            >
+                              {{ level }}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  </div>
+                </div>
+
+
+                <div v-if="canManageOrgOjtHours" class="space-y-4 rounded-2xl border border-border bg-muted p-5">
                   <div class="space-y-1">
                     <h4 class="text-base font-semibold text-foreground">OJT Required Hours</h4>
                     <p class="text-sm text-muted-foreground">
@@ -1034,14 +1375,6 @@ onBeforeUnmount(() => {
                     {{ savingOrgOjt ? 'Saving...' : 'Save OJT Hours' }}
                   </Button>
                 </div>
-
-                <OrganizationPublicProfileSection />
-              </template>
-
-              <Button type="submit" class="w-full md:w-auto" :disabled="savingProfile">
-                {{ savingProfile ? 'Saving...' : 'Save Changes' }}
-              </Button>
-            </form>
           </div>
 
           <div v-else-if="activeTab === 'security'" class="space-y-6">

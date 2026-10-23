@@ -123,7 +123,7 @@ onUnmounted(() => {
     <Teleport to="body">
       <div
         v-if="lightboxOpen && active"
-        class="fixed inset-0 z-50 flex items-center justify-center bg-background/90 p-4 backdrop-blur-sm"
+        class="fixed inset-0 z-modal flex items-center justify-center bg-background/90 p-4 backdrop-blur-sm"
         role="dialog"
         aria-modal="true"
         @click.self="closeLightbox"

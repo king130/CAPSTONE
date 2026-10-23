@@ -35,7 +35,7 @@ const message = computed(() => authStore.blockedReason || 'Your account has been
   width: 420px;
   padding: 28px;
   border-radius: 12px;
-  background: #ffffff;
+  background: hsl(var(--card));
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
   text-align: center;
 }
@@ -46,7 +46,7 @@ h1 {
 }
 
 p {
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   font-size: 14px;
   margin-bottom: 20px;
 }

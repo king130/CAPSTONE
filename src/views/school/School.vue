@@ -17,6 +17,7 @@ import {
 } from 'lucide-vue-next'
 
 import AlertDialog from '@/components/ui/alert-dialog/AlertDialog.vue'
+import OrganizationDirectory from '@/components/opportunities/OrganizationDirectory.vue'
 import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
 import Card from '@/components/ui/card/Card.vue'
@@ -33,21 +34,31 @@ import TableCell from '@/components/ui/table/TableCell.vue'
 import TableHead from '@/components/ui/table/TableHead.vue'
 import TableHeader from '@/components/ui/table/TableHeader.vue'
 import TableRow from '@/components/ui/table/TableRow.vue'
-import ApplicationAssessmentPanel from '@/components/ApplicationAssessmentPanel.vue'
-import ApplicationInterviewPanel from '@/components/ApplicationInterviewPanel.vue'
+import ApplicationTrackerPanel from '@/components/ApplicationTrackerPanel.vue'
+import ApplicationStatusStepper from '@/components/applications/ApplicationStatusStepper.vue'
 import { useToast } from '@/composables/useToast'
 import MainLayout from '@/layouts/MainLayout.vue'
-import { subscribeAllApplications, updateApplicationStatus, type ApplicationRecord } from '@/services/applications'
+import { assignedPermissionAllows, routePermissionRequirements } from '@/layouts/navigation'
+import {
+  listApplications,
+  subscribeAllApplications,
+  updateApplicationStatus,
+  type ApplicationRecord,
+} from '@/services/applications'
 import { subscribeSchoolContracts, type ContractRecord } from '@/services/contracts'
 import { subscribeInternships, type InternshipRecord } from '@/services/internships'
 import { generateCertificate } from '@/services/certificates'
 import { exportReport, fetchKpiReport, fetchStudentProgress, type KpiReport, type StudentProgressRow } from '@/services/kpi'
+import { deriveApplicationStepper } from '@/utils/applicationStepper'
 import { hasPermission } from '@/services/permissions'
 import { subscribeSchoolStudents, type SchoolStudentRow } from '@/services/schoolStudents'
+import { listCourseRequirements, type CourseRequirementMeta } from '@/services/schoolPrograms'
+import { verificationStatusLabel } from '@/services/organizationVerification'
 import { useAuthStore } from '@/stores/auth'
 
 type SchoolView = 'dashboard' | 'student-interns' | 'opportunities' | 'applications' | 'placements' | 'reports'
-type PendingDecision = { applicationId: string; action: 'endorsed' | 'school_rejected'; internName: string } | null
+type SchoolDecisionAction = 'endorsed' | 'school_rejected' | 'accepted' | 'rejected'
+type PendingDecision = { applicationId: string; action: SchoolDecisionAction; internName: string } | null
 type EndorsementDetail = {
   id: string
   internName: string
@@ -57,7 +68,13 @@ type EndorsementDetail = {
   school: string
   internshipTitle: string
   appliedAt: string
+  resume?: string | null
   status: string
+  hostType: string
+  isSchoolHosted: boolean
+  hoursMismatch?: boolean
+  schoolRequiredHours?: number | null
+  hostRequiredHours?: number | null
 }
 
 const currentView = ref<SchoolView>('dashboard')
@@ -68,6 +85,7 @@ const authStore = useAuthStore()
 const students = ref<SchoolStudentRow[]>([])
 const applications = ref<ApplicationRecord[]>([])
 const internships = ref<InternshipRecord[]>([])
+const courseSetupMeta = ref<CourseRequirementMeta | null>(null)
 const contracts = ref<ContractRecord[]>([])
 const loadingStudents = ref(true)
 const loadingApplications = ref(true)
@@ -77,6 +95,7 @@ const searchQuery = ref('')
 const pendingDecision = ref<PendingDecision>(null)
 const submittingDecision = ref(false)
 const selectedEndorsement = ref<EndorsementDetail | null>(null)
+const endorsementDialogMode = ref<'profile' | 'tracker'>('profile')
 const studentProgress = ref<StudentProgressRow[]>([])
 const loadingProgress = ref(false)
 const kpi = ref<KpiReport | null>(null)
@@ -136,7 +155,7 @@ const pageTitle = computed(() => {
   const titles: Record<SchoolView, string> = {
     dashboard: 'Dashboard',
     'student-interns': 'Interns List',
-    opportunities: 'Opportunities',
+    opportunities: 'Browse',
     applications: 'Endorsements',
     placements: 'Placements',
     reports: 'Reports',
@@ -197,7 +216,12 @@ const opportunityRows = computed(() => {
       id: internship.id,
       title: internship.title || 'Untitled placement',
       hostName: internship.companyName || internship.hostName || internship.schoolName || 'Host not set',
-      hostType: internship.hostType === 'school' ? 'School' : 'Company',
+      hostType:
+        internship.hostType === 'school'
+          ? 'School'
+          : internship.hostType === 'municipal_hall'
+            ? 'Municipal Hall'
+            : 'Company',
       location: internship.location || 'Location not set',
       status: normalizeOpportunityStatus(internship.status),
       programs: (internship.eligibleCourses || []).join(', ') || 'Open to endorsed students',
@@ -211,6 +235,22 @@ const opportunityRows = computed(() => {
     )
 })
 
+function isSchoolHostedApplication(application: ApplicationRecord): boolean {
+  const hostType = String(application.hostType || '').trim().toLowerCase()
+  if (hostType === 'school') return true
+  if (hostType === 'company') return false
+  return !application.companyName && !application.companyId
+}
+
+function applicationHostLabel(application: ApplicationRecord): string {
+  return (
+    application.hostName ||
+    application.companyName ||
+    application.schoolName ||
+    (isSchoolHostedApplication(application) ? 'School-hosted placement' : 'Pending assignment')
+  )
+}
+
 const pendingEndorsements = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
 
@@ -221,11 +261,47 @@ const pendingEndorsements = computed(() => {
       internName: application.studentName || 'Unnamed Intern',
       email: application.studentEmail || 'No email provided',
       course: application.studentCourse || 'Not set',
-      company: application.companyName || 'Pending assignment',
+      company: applicationHostLabel(application),
       internshipTitle: application.internshipTitle || 'Untitled position',
       appliedAt: formatDate(application.createdAt),
+      resume: application.resume,
       school: application.schoolName || 'Current school',
       status: normalizeStatus(application.status),
+      hostType: String(application.hostType || (isSchoolHostedApplication(application) ? 'school' : 'company')),
+      isSchoolHosted: isSchoolHostedApplication(application),
+      hoursMismatch: !!application.hoursMismatch,
+      schoolRequiredHours: application.schoolRequiredHours ?? null,
+      hostRequiredHours: application.hostRequiredHours ?? null,
+    }))
+    .filter((row) =>
+      !query ||
+      [row.internName, row.email, row.course, row.company, row.school, row.internshipTitle].some((value) =>
+        value.toLowerCase().includes(query),
+      ),
+    )
+})
+
+const pendingSchoolHostedAcceptances = computed(() => {
+  const query = searchQuery.value.trim().toLowerCase()
+
+  return applications.value
+    .filter(
+      (application) =>
+        normalizeStatus(application.status) === 'endorsed' && isSchoolHostedApplication(application),
+    )
+    .map((application) => ({
+      id: application.id,
+      internName: application.studentName || 'Unnamed Intern',
+      email: application.studentEmail || 'No email provided',
+      course: application.studentCourse || 'Not set',
+      company: applicationHostLabel(application),
+      internshipTitle: application.internshipTitle || 'Untitled position',
+      appliedAt: formatDate(application.createdAt),
+      resume: application.resume,
+      school: application.schoolName || 'Current school',
+      status: normalizeStatus(application.status),
+      hostType: 'school',
+      isSchoolHosted: true,
     }))
     .filter((row) =>
       !query ||
@@ -272,7 +348,7 @@ const dashboardStats = computed(() => {
       label: 'Active Placements',
       value: activePlacements,
       icon: BriefcaseBusiness,
-      iconClass: 'bg-emerald-100 text-emerald-700',
+      iconClass: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200',
       caption: 'Accepted by partners',
     },
     {
@@ -287,20 +363,29 @@ const dashboardStats = computed(() => {
 
 const attentionEndorsements = computed(() => pendingEndorsements.value.slice(0, 5))
 
+function canOpenRoute(routeName: string) {
+  const required = routePermissionRequirements(routeName)
+  const assigned = authStore.user?.memberships?.[0]?.permissions ?? []
+  return !required || assignedPermissionAllows(assigned, required)
+}
+
 const compactQuickActions = computed(() => [
   {
     label: 'Student Accounts',
     icon: UserRoundPlus,
+    route: 'school-students',
     action: () => router.push({ name: 'school-students' }),
   },
   {
     label: 'Agreements',
     icon: FileText,
+    route: 'agreements',
     action: () => router.push({ name: 'agreements' }),
   },
   {
-    label: 'Opportunities',
+    label: 'Browse',
     icon: BriefcaseBusiness,
+    route: 'school-opportunities',
     action: () => router.push({ name: 'school-opportunities' }),
   },
   {
@@ -308,7 +393,7 @@ const compactQuickActions = computed(() => [
     icon: MessageSquare,
     action: () => window.dispatchEvent(new CustomEvent('chat:open')),
   },
-])
+].filter((item) => !item.route || canOpenRoute(item.route)))
 
 const placementRows = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
@@ -406,32 +491,80 @@ function formatDate(value?: string) {
 }
 
 async function loadApplications() {
-  loadingApplications.value = false
+  loadingApplications.value = true
+  try {
+    applications.value = await listApplications()
+  } catch (caughtError) {
+    error(caughtError, { fallback: 'Unable to load endorsements.' })
+  } finally {
+    loadingApplications.value = false
+  }
 }
 
-function openDecisionDialog(applicationId: string, action: 'endorsed' | 'school_rejected', internName: string) {
+function openDecisionDialog(applicationId: string, action: SchoolDecisionAction, internName: string) {
   pendingDecision.value = { applicationId, action, internName }
 }
 
-function openEndorsementDetail(endorsement: EndorsementDetail) {
+const selectedStepper = computed(() =>
+  selectedEndorsement.value
+    ? deriveApplicationStepper({ status: selectedEndorsement.value.status, audience: 'school' })
+    : null,
+)
+
+function openEndorsementDetail(endorsement: EndorsementDetail, mode: 'profile' | 'tracker' = 'profile') {
+  endorsementDialogMode.value = mode
   selectedEndorsement.value = endorsement
 }
 
+function decisionSuccessMessage(action: SchoolDecisionAction): string {
+  if (action === 'endorsed') return 'Student endorsed.'
+  if (action === 'school_rejected') return 'Endorsement rejected.'
+  if (action === 'accepted') return 'School-hosted placement accepted.'
+  return 'Application rejected.'
+}
+
+function decisionDialogTitle(action: SchoolDecisionAction | undefined): string {
+  if (action === 'endorsed') return 'Endorse application?'
+  if (action === 'school_rejected') return 'Reject endorsement?'
+  if (action === 'accepted') return 'Accept school-hosted application?'
+  if (action === 'rejected') return 'Reject school-hosted application?'
+  return 'Update application?'
+}
+
+function decisionDialogDescription(decision: PendingDecision): string {
+  if (!decision) return ''
+  if (decision.action === 'endorsed') {
+    return `Endorse ${decision.internName}'s application at the school stage?`
+  }
+  if (decision.action === 'school_rejected') {
+    return `Reject ${decision.internName}'s application at the school stage?`
+  }
+  if (decision.action === 'accepted') {
+    return `Accept ${decision.internName} for this school-hosted placement?`
+  }
+  return `Reject ${decision.internName}'s school-hosted application?`
+}
+
+function decisionActionLabel(action: SchoolDecisionAction | undefined): string {
+  if (action === 'endorsed') return 'Endorse'
+  if (action === 'accepted') return 'Accept'
+  return 'Reject'
+}
+
 async function confirmDecision() {
-  if (!pendingDecision.value) return
+  const decision = pendingDecision.value
+  if (!decision) return
   submittingDecision.value = true
+  // AlertDialog closes (and clears pendingDecision) before this async work finishes.
   try {
-    await updateApplicationStatus(pendingDecision.value.applicationId, pendingDecision.value.action)
+    await updateApplicationStatus(decision.applicationId, decision.action)
     await loadApplications()
-    success(
-      pendingDecision.value.action === 'endorsed' ? 'Student endorsed.' : 'Endorsement rejected.',
-      {
-        description: `${pendingDecision.value.internName} has been updated.`,
-      },
-    )
+    success(decisionSuccessMessage(decision.action), {
+      description: `${decision.internName} has been updated.`,
+    })
   } catch (caughtError) {
     error(caughtError, {
-      fallback: 'Unable to update endorsement.',
+      fallback: 'Unable to update application.',
     })
   } finally {
     submittingDecision.value = false
@@ -510,6 +643,19 @@ async function issueCertificate(applicationId: string) {
   }
 }
 
+async function loadCourseSetupWarnings() {
+  if (!hasPermission('org.manage_students')) {
+    courseSetupMeta.value = null
+    return
+  }
+  try {
+    const { meta } = await listCourseRequirements()
+    courseSetupMeta.value = meta
+  } catch {
+    courseSetupMeta.value = null
+  }
+}
+
 onMounted(() => {
   currentView.value = schoolViewFromRouteName(route.name)
   startSchoolSubscriptions(authStore.user?.uid)
@@ -519,6 +665,7 @@ onMounted(() => {
   if (currentView.value === 'reports' || currentView.value === 'placements') {
     void loadStudentProgress()
   }
+  void loadCourseSetupWarnings()
 })
 
 onUnmounted(() => {
@@ -538,6 +685,10 @@ watch(currentView, (view) => {
   }
   if (view === 'reports' || view === 'placements') {
     void loadStudentProgress()
+  }
+  // Force a fresh /applications pull when opening Endorsements (polling alone can stay empty after a failed fetch).
+  if (view === 'applications') {
+    void loadApplications()
   }
 })
 
@@ -562,7 +713,20 @@ watch(
                 </div>
                 <div>
                   <p class="text-xs font-semibold uppercase tracking-[0.2em] text-primary">Overview</p>
-                  <h2 class="mt-1 text-2xl font-semibold tracking-tight text-foreground">{{ schoolDisplayName }}</h2>
+                  <div class="mt-1 flex flex-wrap items-center gap-2">
+                    <h2 class="text-2xl font-semibold tracking-tight text-foreground">{{ schoolDisplayName }}</h2>
+                    <Badge
+                      :variant="
+                        String(authStore.user?.verificationStatus || '').toLowerCase() === 'approved'
+                          ? 'success'
+                          : String(authStore.user?.verificationStatus || '').toLowerCase() === 'rejected'
+                            ? 'destructive'
+                            : 'warning'
+                      "
+                    >
+                      {{ verificationStatusLabel(String(authStore.user?.verificationStatus || 'pending')) }}
+                    </Badge>
+                  </div>
                   <p class="mt-1 text-sm text-muted-foreground">
                     {{ dashboardStats[1]?.value || 0 }} endorsement{{ (dashboardStats[1]?.value || 0) === 1 ? '' : 's' }} waiting ·
                     {{ dashboardStats[2]?.value || 0 }} active placement{{ (dashboardStats[2]?.value || 0) === 1 ? '' : 's' }}
@@ -596,6 +760,31 @@ watch(
             </div>
           </div>
         </section>
+
+        <div
+          v-if="courseSetupMeta?.hasSetupWarnings"
+          class="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-5 py-4 text-sm text-foreground"
+        >
+          <p class="font-semibold">Course setup needs attention</p>
+          <p class="mt-1 text-muted-foreground">
+            Configure required OJT hours and eligible year levels for each course in Settings.
+            Students in incomplete courses cannot apply.
+          </p>
+          <ul class="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+            <li v-for="item in courseSetupMeta.incompleteCourses" :key="item.id">
+              {{ item.courseName }} is incomplete
+            </li>
+            <li v-if="courseSetupMeta.flaggedStudentCount > 0">
+              {{ courseSetupMeta.flaggedStudentCount }} student{{
+                courseSetupMeta.flaggedStudentCount === 1 ? '' : 's'
+              }}
+              have a year level that does not match their course (records were not changed).
+            </li>
+          </ul>
+          <Button class="mt-3" size="sm" variant="outline" @click="router.push({ name: 'settings' })">
+            Open course settings
+          </Button>
+        </div>
 
         <section v-if="kpi" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
@@ -677,80 +866,14 @@ watch(
       </template>
 
       <Card v-else-if="currentView === 'opportunities'" class="border-border/80 shadow-sm">
-        <CardHeader class="space-y-4">
-          <div>
-            <h2 class="text-2xl font-semibold text-foreground">Internship Opportunities</h2>
-            <p class="text-sm text-muted-foreground">Review school-hosted placements and company posts from partners with active contracts.</p>
-          </div>
-          <div class="relative max-w-md">
-            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input v-model="searchQuery" placeholder="Search opportunities..." class="pl-9" />
-          </div>
+        <CardHeader class="space-y-2">
+          <h2 class="text-2xl font-semibold text-foreground">Companies</h2>
+          <p class="text-sm text-muted-foreground">
+            Discover companies that publish OJT opportunities. Profiles show only the information those companies have made public.
+          </p>
         </CardHeader>
         <CardContent>
-          <div class="mb-4 rounded-2xl border border-border bg-accent p-4 text-sm text-foreground">
-            <p class="font-medium">Student-visible opportunities</p>
-            <p class="mt-2">
-              This list now mirrors what students can access: your school-hosted posts and company opportunities from active partner contracts.
-            </p>
-          </div>
-          <div class="rounded-xl border border-border bg-card">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Opportunity</TableHead>
-                  <TableHead>Host</TableHead>
-                  <TableHead>Programs</TableHead>
-                  <TableHead>Slots</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead class="text-right">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <template v-if="loadingInternships || loadingContracts">
-                  <TableRow v-for="index in 5" :key="index">
-                    <TableCell><Skeleton class="h-5 w-40" /></TableCell>
-                    <TableCell><Skeleton class="h-5 w-36" /></TableCell>
-                    <TableCell><Skeleton class="h-5 w-44" /></TableCell>
-                    <TableCell><Skeleton class="h-5 w-12" /></TableCell>
-                    <TableCell><Skeleton class="h-5 w-20" /></TableCell>
-                    <TableCell><Skeleton class="ml-auto h-9 w-32" /></TableCell>
-                  </TableRow>
-                </template>
-                <template v-else-if="opportunityRows.length">
-                  <TableRow v-for="opportunity in opportunityRows" :key="opportunity.id">
-                    <TableCell>
-                      <div class="space-y-1">
-                        <p class="font-medium text-foreground">{{ opportunity.title }}</p>
-                        <p class="text-sm text-muted-foreground">{{ opportunity.location }}</p>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div class="space-y-1">
-                        <p class="text-foreground">{{ opportunity.hostName }}</p>
-                        <p class="text-sm text-muted-foreground">{{ opportunity.hostType }}</p>
-                      </div>
-                    </TableCell>
-                    <TableCell class="text-foreground">{{ opportunity.programs }}</TableCell>
-                    <TableCell class="text-foreground">{{ opportunity.slots }}</TableCell>
-                    <TableCell>
-                      <Badge :variant="opportunityBadgeVariant(opportunity.status)">{{ opportunityBadgeLabel(opportunity.status) }}</Badge>
-                    </TableCell>
-                    <TableCell class="text-right">
-                      <Button variant="outline" size="sm" @click="router.push({ name: 'school-endorsements' })">
-                        Endorse Student
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                </template>
-                <TableRow v-else>
-                  <TableCell colspan="6" class="py-10 text-center text-muted-foreground">
-                    No student-visible opportunities matched your search.
-                  </TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
-          </div>
+          <OrganizationDirectory kind="company" />
         </CardContent>
       </Card>
 
@@ -1002,14 +1125,16 @@ watch(
         <CardHeader class="space-y-4">
           <div>
             <h2 class="text-2xl font-semibold text-foreground">Endorsements</h2>
-            <p class="text-sm text-muted-foreground">Review newly submitted applications and either endorse them to the company or reject them at the school level.</p>
+            <p class="text-sm text-muted-foreground">
+              Endorse company-hosted applications to the partner, and accept or reject school-hosted placements after endorsement.
+            </p>
           </div>
           <div class="relative max-w-md">
             <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input v-model="searchQuery" placeholder="Search pending endorsements..." class="pl-9" />
           </div>
         </CardHeader>
-        <CardContent class="space-y-4">
+        <CardContent class="space-y-6">
           <template v-if="loadingApplications">
             <Card v-for="index in 3" :key="index" class="border-border/70 shadow-none">
               <CardContent class="space-y-3 p-5">
@@ -1023,67 +1148,141 @@ watch(
               </CardContent>
             </Card>
           </template>
-          <template v-else-if="pendingEndorsements.length">
-            <Card v-for="endorsement in pendingEndorsements" :key="endorsement.id" class="border-border/70 shadow-none">
-              <CardContent class="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
-                <div class="space-y-2">
-                  <div class="flex items-center gap-2">
-                    <h3 class="text-lg font-semibold text-foreground">{{ endorsement.internName }}</h3>
-                    <Badge variant="warning">Submitted</Badge>
-                  </div>
-                  <p class="text-sm text-muted-foreground">{{ endorsement.course }} · {{ endorsement.company }}</p>
-                  <p class="text-sm text-muted-foreground">Applied {{ endorsement.appliedAt }}</p>
-                </div>
-                <div class="flex gap-3">
-                  <Button
-                    variant="ghost"
-                    class="gap-2"
-                    :disabled="submittingDecision"
-                    @click="openEndorsementDetail(endorsement)"
-                  >
-                    <Eye class="h-4 w-4" />
-                    View
-                  </Button>
-                  <Button
-                    class="gap-2"
-                    :disabled="submittingDecision"
-                    @click="openDecisionDialog(endorsement.id, 'endorsed', endorsement.internName)"
-                  >
-                    <CheckCircle2 class="h-4 w-4" />
-                    Endorse
-                  </Button>
-                  <Button
-                    variant="outline"
-                    class="gap-2"
-                    :disabled="submittingDecision"
-                    @click="openDecisionDialog(endorsement.id, 'school_rejected', endorsement.internName)"
-                  >
-                    <XCircle class="h-4 w-4" />
-                    Reject
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+          <template v-else>
+            <div class="space-y-4">
+              <h3 class="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Awaiting endorsement</h3>
+              <template v-if="pendingEndorsements.length">
+                <Card v-for="endorsement in pendingEndorsements" :key="endorsement.id" class="border-border/70 shadow-none">
+                  <CardContent class="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
+                    <div class="space-y-2">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <h3 class="text-lg font-semibold text-foreground">{{ endorsement.internName }}</h3>
+                        <Badge variant="warning">Submitted</Badge>
+                        <Badge v-if="endorsement.isSchoolHosted" variant="outline">School-hosted</Badge>
+                      </div>
+                      <p class="text-sm text-muted-foreground">{{ endorsement.course }} · {{ endorsement.company }}</p>
+                      <p class="text-sm text-muted-foreground">Applied {{ endorsement.appliedAt }}</p>
+                    </div>
+                    <div class="flex gap-3">
+                      <Button
+                        variant="ghost"
+                        class="gap-2"
+                        :disabled="submittingDecision"
+                        @click="openEndorsementDetail(endorsement, 'profile')"
+                      >
+                        <Eye class="h-4 w-4" />
+                        View Profile
+                      </Button>
+                      <Button
+                        variant="outline"
+                        class="gap-2"
+                        :disabled="submittingDecision"
+                        @click="openEndorsementDetail(endorsement, 'tracker')"
+                      >
+                        Open tracker
+                      </Button>
+                      <Button
+                        class="gap-2"
+                        :disabled="submittingDecision"
+                        @click="openDecisionDialog(endorsement.id, 'endorsed', endorsement.internName)"
+                      >
+                        <CheckCircle2 class="h-4 w-4" />
+                        Endorse
+                      </Button>
+                      <Button
+                        variant="outline"
+                        class="gap-2"
+                        :disabled="submittingDecision"
+                        @click="openDecisionDialog(endorsement.id, 'school_rejected', endorsement.internName)"
+                      >
+                        <XCircle class="h-4 w-4" />
+                        Reject
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </template>
+              <Card v-else class="border-dashed border-border/80 shadow-none">
+                <CardContent class="py-8 text-center text-muted-foreground">
+                  No submitted applications are waiting for school endorsement.
+                </CardContent>
+              </Card>
+            </div>
+
+            <div class="space-y-4">
+              <h3 class="text-sm font-semibold uppercase tracking-wide text-muted-foreground">School-hosted — awaiting acceptance</h3>
+              <template v-if="pendingSchoolHostedAcceptances.length">
+                <Card
+                  v-for="endorsement in pendingSchoolHostedAcceptances"
+                  :key="endorsement.id"
+                  class="border-border/70 shadow-none"
+                >
+                  <CardContent class="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
+                    <div class="space-y-2">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <h3 class="text-lg font-semibold text-foreground">{{ endorsement.internName }}</h3>
+                        <Badge variant="outline">Endorsed</Badge>
+                        <Badge variant="outline">School-hosted</Badge>
+                      </div>
+                      <p class="text-sm text-muted-foreground">{{ endorsement.course }} · {{ endorsement.company }}</p>
+                      <p class="text-sm text-muted-foreground">Applied {{ endorsement.appliedAt }}</p>
+                    </div>
+                    <div class="flex gap-3">
+                      <Button
+                        variant="ghost"
+                        class="gap-2"
+                        :disabled="submittingDecision"
+                        @click="openEndorsementDetail(endorsement, 'profile')"
+                      >
+                        <Eye class="h-4 w-4" />
+                        View Profile
+                      </Button>
+                      <Button
+                        variant="outline"
+                        class="gap-2"
+                        :disabled="submittingDecision"
+                        @click="openEndorsementDetail(endorsement, 'tracker')"
+                      >
+                        Open tracker
+                      </Button>
+                      <Button
+                        class="gap-2"
+                        :disabled="submittingDecision"
+                        @click="openDecisionDialog(endorsement.id, 'accepted', endorsement.internName)"
+                      >
+                        <CheckCircle2 class="h-4 w-4" />
+                        Accept
+                      </Button>
+                      <Button
+                        variant="outline"
+                        class="gap-2"
+                        :disabled="submittingDecision"
+                        @click="openDecisionDialog(endorsement.id, 'rejected', endorsement.internName)"
+                      >
+                        <XCircle class="h-4 w-4" />
+                        Reject
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </template>
+              <Card v-else class="border-dashed border-border/80 shadow-none">
+                <CardContent class="py-8 text-center text-muted-foreground">
+                  No endorsed school-hosted applications are waiting for acceptance.
+                </CardContent>
+              </Card>
+            </div>
           </template>
-          <Card v-else class="border-dashed border-border/80 shadow-none">
-            <CardContent class="py-10 text-center text-muted-foreground">
-              No submitted applications are waiting for school endorsement.
-            </CardContent>
-          </Card>
         </CardContent>
       </Card>
     </div>
 
     <AlertDialog
       :open="!!pendingDecision"
-      :title="pendingDecision?.action === 'endorsed' ? 'Endorse application?' : 'Reject endorsement?'"
-      :description="
-        pendingDecision
-          ? `${pendingDecision.action === 'endorsed' ? 'Endorse' : 'Reject'} ${pendingDecision.internName}'s application at the school stage?`
-          : ''
-      "
-      :action-label="pendingDecision?.action === 'endorsed' ? 'Endorse' : 'Reject'"
-      :action-variant="pendingDecision?.action === 'endorsed' ? 'default' : 'outline'"
+      :title="decisionDialogTitle(pendingDecision?.action)"
+      :description="decisionDialogDescription(pendingDecision)"
+      :action-label="decisionActionLabel(pendingDecision?.action)"
+      :action-variant="pendingDecision?.action === 'endorsed' || pendingDecision?.action === 'accepted' ? 'default' : 'outline'"
       @update:open="(open) => { if (!open) pendingDecision = null }"
       @action="confirmDecision"
     />
@@ -1091,49 +1290,65 @@ watch(
     <Dialog :open="!!selectedEndorsement" @update:open="(open) => { if (!open) selectedEndorsement = null }">
       <template #default="{ close }">
         <DialogHeader>
-          <DialogTitle>{{ selectedEndorsement?.internName || 'Intern Application' }}</DialogTitle>
-          <p class="text-sm text-muted-foreground">Review this intern's submitted endorsement details before taking action.</p>
+          <DialogTitle>
+            {{ endorsementDialogMode === 'profile' ? 'Applicant profile' : 'Application tracker' }}
+          </DialogTitle>
+          <p class="text-sm text-muted-foreground">
+            {{
+              endorsementDialogMode === 'profile'
+                ? `${selectedEndorsement?.internName || 'This applicant'}'s details.`
+                : 'Progress stages for this application.'
+            }}
+          </p>
         </DialogHeader>
 
         <div v-if="selectedEndorsement" class="mt-6 space-y-4">
-          <div class="grid gap-4 sm:grid-cols-2">
+          <div v-if="endorsementDialogMode === 'tracker' && selectedStepper" class="rounded-2xl border border-border/70 p-4">
+            <ApplicationStatusStepper :result="selectedStepper" />
+          </div>
+          <div v-if="endorsementDialogMode === 'profile'" class="grid gap-4 sm:grid-cols-2">
             <div class="rounded-xl bg-muted p-4">
-              <p class="text-sm text-muted-foreground">Email</p>
-              <p class="mt-2 font-medium text-foreground">{{ selectedEndorsement.email }}</p>
-            </div>
-            <div class="rounded-xl bg-muted p-4">
-              <p class="text-sm text-muted-foreground">Course</p>
-              <p class="mt-2 font-medium text-foreground">{{ selectedEndorsement.course }}</p>
+              <p class="text-sm text-muted-foreground">Applicant</p>
+              <p class="mt-2 font-medium text-foreground">{{ selectedEndorsement.internName }}</p>
+              <p class="text-sm text-muted-foreground">{{ selectedEndorsement.email }}</p>
             </div>
             <div class="rounded-xl bg-muted p-4">
               <p class="text-sm text-muted-foreground">Internship</p>
               <p class="mt-2 font-medium text-foreground">{{ selectedEndorsement.internshipTitle }}</p>
+              <p class="text-sm text-muted-foreground">{{ selectedEndorsement.company }}</p>
             </div>
             <div class="rounded-xl bg-muted p-4">
-              <p class="text-sm text-muted-foreground">Company</p>
-              <p class="mt-2 font-medium text-foreground">{{ selectedEndorsement.company }}</p>
-            </div>
-            <div class="rounded-xl bg-muted p-4">
-              <p class="text-sm text-muted-foreground">School</p>
-              <p class="mt-2 font-medium text-foreground">{{ selectedEndorsement.school }}</p>
-            </div>
-            <div class="rounded-xl bg-muted p-4">
-              <p class="text-sm text-muted-foreground">Applied</p>
+              <p class="text-sm text-muted-foreground">Application date</p>
               <p class="mt-2 font-medium text-foreground">{{ selectedEndorsement.appliedAt }}</p>
             </div>
-          </div>
-
-          <div class="flex items-center justify-between rounded-xl border border-border/70 bg-card p-4">
-            <div>
-              <p class="text-sm text-muted-foreground">Current Status</p>
-              <p class="mt-2">
-                <Badge :variant="badgeVariant(selectedEndorsement.status)">{{ badgeLabel(selectedEndorsement.status) }}</Badge>
-              </p>
+            <div class="rounded-xl bg-muted p-4">
+              <p class="text-sm text-muted-foreground">Resume</p>
+              <a
+                v-if="selectedEndorsement.resume"
+                :href="selectedEndorsement.resume"
+                class="mt-2 block font-medium text-primary underline-offset-4 hover:underline"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                View resume
+              </a>
+              <p v-else class="mt-2 font-medium text-foreground">No resume on file</p>
             </div>
           </div>
 
-          <ApplicationInterviewPanel :application-id="selectedEndorsement.id" mode="manage" />
-          <ApplicationAssessmentPanel :application-id="selectedEndorsement.id" />
+          <div v-if="endorsementDialogMode === 'profile'" class="rounded-xl border border-border/70 bg-card p-4">
+            <p class="text-sm text-muted-foreground">Application status</p>
+            <p class="mt-2">
+              <Badge :variant="badgeVariant(selectedEndorsement.status)">{{ badgeLabel(selectedEndorsement.status) }}</Badge>
+            </p>
+          </div>
+
+          <ApplicationTrackerPanel
+            v-if="endorsementDialogMode === 'tracker'"
+            :application-id="selectedEndorsement.id"
+            mode="school"
+            :allow-schedule="!!selectedEndorsement.isSchoolHosted && selectedEndorsement.status !== 'submitted'"
+          />
         </div>
 
         <div class="mt-6 flex justify-end">
@@ -1144,7 +1359,7 @@ watch(
 
     <div
       v-if="submittingDecision"
-      class="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm text-background shadow-lg"
+      class="fixed bottom-6 right-6 z-dropdown flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm text-background shadow-lg"
     >
       <LoaderCircle class="h-4 w-4 animate-spin" />
       Saving decision...

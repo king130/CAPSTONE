@@ -96,6 +96,15 @@ class InternshipApplicationEligibilityTest extends TestCase
             'school_name' => $school->institution_name,
             'school_subscription_code' => $school->subscription_code,
             'course' => 'BSIT',
+            'year_level' => '4th Year',
+        ]);
+
+        \App\Models\SchoolCourseRequirement::query()->create([
+            'school_id' => $school->id,
+            'course_name' => 'BSIT',
+            'course_name_key' => \App\Models\SchoolCourseRequirement::courseNameKey('BSIT'),
+            'required_hours' => 486,
+            'eligible_year_levels' => \App\Support\StudentYearLevel::DEFAULT_ELIGIBLE,
         ]);
 
         return compact(
@@ -131,6 +140,7 @@ class InternshipApplicationEligibilityTest extends TestCase
         $internship = Internship::query()->create([
             'company_id' => $ctx['company']->id,
             'host_type' => 'company',
+            'requires_resume' => false,
             'title' => 'No Agreement Internship',
             'status' => 'active',
         ]);
@@ -138,9 +148,7 @@ class InternshipApplicationEligibilityTest extends TestCase
         Sanctum::actingAs($ctx['studentUser']);
         $before = Application::query()->count();
 
-        $response = $this->postJson('/api/applications', [
-            'internship_id' => $internship->id,
-        ]);
+        $response = $this->postApplication($internship->id);
 
         $response->assertStatus(422);
         $response->assertJsonPath('code', 'agreement_required');
@@ -154,6 +162,7 @@ class InternshipApplicationEligibilityTest extends TestCase
         $internship = Internship::query()->create([
             'company_id' => $ctx['company']->id,
             'host_type' => 'company',
+            'requires_resume' => false,
             'title' => 'Agreed Internship',
             'status' => 'active',
         ]);
@@ -161,9 +170,7 @@ class InternshipApplicationEligibilityTest extends TestCase
         Sanctum::actingAs($ctx['studentUser']);
         $before = Application::query()->count();
 
-        $response = $this->postJson('/api/applications', [
-            'internship_id' => $internship->id,
-        ]);
+        $response = $this->postApplication($internship->id);
 
         $response->assertCreated();
         $this->assertSame($before + 1, Application::query()->count());
@@ -181,6 +188,7 @@ class InternshipApplicationEligibilityTest extends TestCase
         $internship = Internship::query()->create([
             'company_id' => $ctx['company']->id,
             'host_type' => 'company',
+            'requires_resume' => false,
             'title' => 'Closed Internship',
             'status' => 'closed',
         ]);
@@ -188,9 +196,7 @@ class InternshipApplicationEligibilityTest extends TestCase
         Sanctum::actingAs($ctx['studentUser']);
         $before = Application::query()->count();
 
-        $response = $this->postJson('/api/applications', [
-            'internship_id' => $internship->id,
-        ]);
+        $response = $this->postApplication($internship->id);
 
         $response->assertStatus(422);
         $response->assertJsonPath('code', 'internship_not_active');
@@ -237,9 +243,7 @@ class InternshipApplicationEligibilityTest extends TestCase
         Sanctum::actingAs($ctx['studentUser']);
         $before = Application::query()->count();
 
-        $response = $this->postJson('/api/applications', [
-            'internship_id' => $internship->id,
-        ]);
+        $response = $this->postApplication($internship->id);
 
         $response->assertStatus(422);
         $response->assertJsonPath('code', 'school_internship_mismatch');
@@ -254,13 +258,13 @@ class InternshipApplicationEligibilityTest extends TestCase
             'host_type' => 'school',
             'title' => 'Own School Internship',
             'status' => 'active',
+            // Match sibling eligibility tests: this case asserts school-host matching, not resume gating.
+            'requires_resume' => false,
         ]);
 
         Sanctum::actingAs($ctx['studentUser']);
 
-        $response = $this->postJson('/api/applications', [
-            'internship_id' => $internship->id,
-        ]);
+        $response = $this->postApplication($internship->id);
 
         $response->assertCreated();
         $this->assertDatabaseHas('applications', [
@@ -302,6 +306,7 @@ class InternshipApplicationEligibilityTest extends TestCase
         $withoutAgreement = Internship::query()->create([
             'company_id' => $unrelatedCompany->id,
             'host_type' => 'company',
+            'requires_resume' => false,
             'title' => 'Hidden Without Agreement',
             'status' => 'active',
         ]);
@@ -311,6 +316,7 @@ class InternshipApplicationEligibilityTest extends TestCase
         $withAgreement = Internship::query()->create([
             'company_id' => $ctx['company']->id,
             'host_type' => 'company',
+            'requires_resume' => false,
             'title' => 'Visible With Agreement',
             'status' => 'active',
         ]);
@@ -357,6 +363,7 @@ class InternshipApplicationEligibilityTest extends TestCase
         $inactive = Internship::query()->create([
             'company_id' => $ctx['company']->id,
             'host_type' => 'company',
+            'requires_resume' => false,
             'title' => 'Inactive Agreed Internship',
             'status' => 'draft',
         ]);
@@ -373,9 +380,9 @@ class InternshipApplicationEligibilityTest extends TestCase
         $this->assertNotContains((string) $foreignSchoolHosted->id, $eligibleIds);
         $this->assertNotContains((string) $inactive->id, $eligibleIds);
 
-        $this->postJson('/api/applications', ['internship_id' => $withoutAgreement->id])->assertStatus(422);
-        $this->postJson('/api/applications', ['internship_id' => $foreignSchoolHosted->id])->assertStatus(422);
-        $this->postJson('/api/applications', ['internship_id' => $inactive->id])->assertStatus(422);
-        $this->postJson('/api/applications', ['internship_id' => $withAgreement->id])->assertCreated();
+        $this->postApplication($withoutAgreement->id)->assertStatus(422);
+        $this->postApplication($foreignSchoolHosted->id)->assertStatus(422);
+        $this->postApplication($inactive->id)->assertStatus(422);
+        $this->postApplication($withAgreement->id)->assertCreated();
     }
 }

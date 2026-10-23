@@ -36,7 +36,7 @@ interface DashboardSchoolRow {
   email: string
   address: string
   contactPerson: string
-  status: 'pending' | 'approved' | 'rejected'
+  status: 'pending' | 'approved' | 'rejected' | 'under_review'
 }
 
 interface DashboardCompanyRow {
@@ -45,7 +45,7 @@ interface DashboardCompanyRow {
   email: string
   industry: string
   address: string
-  status: 'pending' | 'approved' | 'rejected'
+  status: 'pending' | 'approved' | 'rejected' | 'under_review'
 }
 
 interface DashboardApplicationRow {
@@ -87,7 +87,7 @@ const stats = computed(() => {
       value: schools.length,
       trend: 'Institution partners',
       icon: Building2,
-      iconClass: 'bg-emerald-100 text-emerald-700',
+      iconClass: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200',
     },
     {
       key: 'companies' as const,
@@ -115,8 +115,14 @@ function normalizeStatus(status?: string | null): 'pending' | 'approved' | 'reje
   return 'pending'
 }
 
-function normalizeVerificationStatus(status?: VerificationStatus | string | null): 'pending' | 'approved' | 'rejected' {
-  return normalizeStatus(status ? String(status) : 'pending')
+function normalizeVerificationStatus(
+  status?: VerificationStatus | string | null,
+): 'pending' | 'under_review' | 'approved' | 'rejected' {
+  const value = String(status || 'pending').trim().toLowerCase()
+  if (value === 'approved') return 'approved'
+  if (value === 'rejected') return 'rejected'
+  if (value === 'under_review') return 'under_review'
+  return 'pending'
 }
 
 function formatDate(value?: string | null): string {
@@ -206,17 +212,17 @@ const internColumns = [
     header: 'Name',
     cell: ({ row }) =>
       h('div', { class: 'space-y-1' }, [
-        h('p', { class: 'font-medium text-slate-950' }, row.original.name),
+        h('p', { class: 'font-medium text-foreground' }, row.original.name),
         h('p', { class: 'text-sm text-muted-foreground' }, row.original.email),
       ]),
   }),
   internColumnHelper.accessor('school', {
     header: 'School',
-    cell: ({ getValue }) => h('span', { class: 'text-slate-700' }, getValue()),
+    cell: ({ getValue }) => h('span', { class: 'text-muted-foreground' }, getValue()),
   }),
   internColumnHelper.accessor('company', {
     header: 'Company',
-    cell: ({ getValue }) => h('span', { class: 'text-slate-700' }, getValue()),
+    cell: ({ getValue }) => h('span', { class: 'text-muted-foreground' }, getValue()),
   }),
   internColumnHelper.accessor('status', {
     header: 'Status',
@@ -249,17 +255,17 @@ const schoolColumns = [
     header: 'School',
     cell: ({ row }) =>
       h('div', { class: 'space-y-1' }, [
-        h('p', { class: 'font-medium text-slate-950' }, row.original.name),
+        h('p', { class: 'font-medium text-foreground' }, row.original.name),
         h('p', { class: 'text-sm text-muted-foreground' }, row.original.email),
       ]),
   }),
   schoolColumnHelper.accessor('contactPerson', {
     header: 'Contact',
-    cell: ({ getValue }) => h('span', { class: 'text-slate-700' }, getValue() || '—'),
+    cell: ({ getValue }) => h('span', { class: 'text-muted-foreground' }, getValue() || '—'),
   }),
   schoolColumnHelper.accessor('address', {
     header: 'Address',
-    cell: ({ getValue }) => h('span', { class: 'text-slate-700' }, getValue() || '—'),
+    cell: ({ getValue }) => h('span', { class: 'text-muted-foreground' }, getValue() || '—'),
   }),
   schoolColumnHelper.accessor('status', {
     header: 'Verification',
@@ -280,17 +286,17 @@ const companyColumns = [
     header: 'Company',
     cell: ({ row }) =>
       h('div', { class: 'space-y-1' }, [
-        h('p', { class: 'font-medium text-slate-950' }, row.original.name),
+        h('p', { class: 'font-medium text-foreground' }, row.original.name),
         h('p', { class: 'text-sm text-muted-foreground' }, row.original.email),
       ]),
   }),
   companyColumnHelper.accessor('industry', {
     header: 'Industry',
-    cell: ({ getValue }) => h('span', { class: 'text-slate-700' }, getValue() || '—'),
+    cell: ({ getValue }) => h('span', { class: 'text-muted-foreground' }, getValue() || '—'),
   }),
   companyColumnHelper.accessor('address', {
     header: 'Address',
-    cell: ({ getValue }) => h('span', { class: 'text-slate-700' }, getValue() || '—'),
+    cell: ({ getValue }) => h('span', { class: 'text-muted-foreground' }, getValue() || '—'),
   }),
   companyColumnHelper.accessor('status', {
     header: 'Verification',
@@ -311,25 +317,25 @@ const applicationColumns = [
     header: 'Intern',
     cell: ({ row }) =>
       h('div', { class: 'space-y-1' }, [
-        h('p', { class: 'font-medium text-slate-950' }, row.original.studentName),
+        h('p', { class: 'font-medium text-foreground' }, row.original.studentName),
         h('p', { class: 'text-sm text-muted-foreground' }, row.original.studentEmail),
       ]),
   }),
   applicationColumnHelper.accessor('schoolName', {
     header: 'School',
-    cell: ({ getValue }) => h('span', { class: 'text-slate-700' }, getValue() || '—'),
+    cell: ({ getValue }) => h('span', { class: 'text-muted-foreground' }, getValue() || '—'),
   }),
   applicationColumnHelper.accessor('companyName', {
     header: 'Company',
-    cell: ({ getValue }) => h('span', { class: 'text-slate-700' }, getValue() || '—'),
+    cell: ({ getValue }) => h('span', { class: 'text-muted-foreground' }, getValue() || '—'),
   }),
   applicationColumnHelper.accessor('internshipTitle', {
     header: 'Internship',
-    cell: ({ getValue }) => h('span', { class: 'text-slate-700' }, getValue() || '—'),
+    cell: ({ getValue }) => h('span', { class: 'text-muted-foreground' }, getValue() || '—'),
   }),
   applicationColumnHelper.accessor('createdAt', {
     header: 'Submitted',
-    cell: ({ getValue }) => h('span', { class: 'text-slate-700' }, formatDate(getValue())),
+    cell: ({ getValue }) => h('span', { class: 'text-muted-foreground' }, formatDate(getValue())),
   }),
   applicationColumnHelper.accessor('status', {
     header: 'Status',
@@ -422,8 +428,8 @@ onMounted(() => {
   <section class="space-y-8">
     <div>
       <p class="text-sm font-semibold uppercase tracking-[0.3em] text-sky-700">Admin Dashboard</p>
-      <h2 class="mt-2 text-3xl font-semibold tracking-tight text-slate-950">Platform overview at a glance</h2>
-      <p class="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
+      <h2 class="mt-2 text-3xl font-semibold tracking-tight text-foreground">Platform overview at a glance</h2>
+      <p class="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
         Monitor key organization counts, review pending activity, and quickly inspect intern records from the admin workspace.
       </p>
     </div>
@@ -456,14 +462,14 @@ onMounted(() => {
               <div :class="['flex h-12 w-12 items-center justify-center rounded-2xl', stat.iconClass]">
                 <component :is="stat.icon" class="h-5 w-5" />
               </div>
-              <div class="flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+              <div class="flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
                 <TrendingUp class="h-3.5 w-3.5" />
                 Live
               </div>
             </div>
-            <p class="mt-6 text-sm font-medium text-slate-500">{{ stat.label }}</p>
-            <p class="mt-2 text-3xl font-semibold text-slate-950">{{ stat.value }}</p>
-            <p class="mt-3 text-sm text-slate-600">{{ stat.trend }}</p>
+            <p class="mt-6 text-sm font-medium text-muted-foreground">{{ stat.label }}</p>
+            <p class="mt-2 text-3xl font-semibold text-foreground">{{ stat.value }}</p>
+            <p class="mt-3 text-sm text-muted-foreground">{{ stat.trend }}</p>
           </template>
         </CardContent>
       </Card>
@@ -473,10 +479,10 @@ onMounted(() => {
       <CardContent class="space-y-6 p-6">
         <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h3 class="text-xl font-semibold text-slate-950">{{ tableConfig.title }}</h3>
-            <p class="text-sm text-slate-600">{{ tableConfig.subtitle }}</p>
+            <h3 class="text-xl font-semibold text-foreground">{{ tableConfig.title }}</h3>
+            <p class="text-sm text-muted-foreground">{{ tableConfig.subtitle }}</p>
           </div>
-          <div class="rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-600">
+          <div class="rounded-full bg-muted px-3 py-1 text-sm text-muted-foreground">
             {{ tableConfig.data.length }} {{ tableConfig.countLabel }}
           </div>
         </div>
@@ -494,15 +500,15 @@ onMounted(() => {
 
     <div
       v-if="activeTab === 'interns' && selectedIntern"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 backdrop-blur-sm"
+      class="fixed inset-0 z-modal flex items-center justify-center bg-slate-950/40 px-4 backdrop-blur-sm"
       @click.self="selectedIntern = null"
     >
       <Card class="w-full max-w-lg shadow-2xl">
         <CardContent class="space-y-6 p-6">
           <div class="flex items-start justify-between gap-4">
             <div>
-              <h3 class="text-xl font-semibold text-slate-950">{{ selectedIntern.name }}</h3>
-              <p class="text-sm text-slate-600">{{ selectedIntern.email }}</p>
+              <h3 class="text-xl font-semibold text-foreground">{{ selectedIntern.name }}</h3>
+              <p class="text-sm text-muted-foreground">{{ selectedIntern.email }}</p>
             </div>
             <Badge
               :variant="
@@ -519,21 +525,21 @@ onMounted(() => {
 
           <div class="grid gap-4 sm:grid-cols-2">
             <div>
-              <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">School</p>
-              <p class="mt-2 text-sm text-slate-900">{{ selectedIntern.school }}</p>
+              <p class="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">School</p>
+              <p class="mt-2 text-sm text-foreground">{{ selectedIntern.school }}</p>
             </div>
             <div>
-              <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Company</p>
-              <p class="mt-2 text-sm text-slate-900">{{ selectedIntern.company }}</p>
+              <p class="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Company</p>
+              <p class="mt-2 text-sm text-foreground">{{ selectedIntern.company }}</p>
             </div>
             <div class="sm:col-span-2">
-              <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Internship</p>
-              <p class="mt-2 text-sm text-slate-900">{{ selectedIntern.internshipTitle }}</p>
+              <p class="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Internship</p>
+              <p class="mt-2 text-sm text-foreground">{{ selectedIntern.internshipTitle }}</p>
             </div>
           </div>
 
           <div class="flex justify-end">
-            <button class="text-sm font-medium text-slate-600 transition hover:text-slate-950" @click="selectedIntern = null">
+            <button class="text-sm font-medium text-muted-foreground transition hover:text-foreground" @click="selectedIntern = null">
               Close
             </button>
           </div>

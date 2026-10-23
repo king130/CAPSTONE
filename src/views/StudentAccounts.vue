@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import Swal from '@/services/swal'
 import {
   AtSign,
@@ -48,6 +48,11 @@ import {
   subscribeSchoolStudents,
   type SchoolStudentRow,
 } from '@/services/schoolStudents'
+import {
+  DEFAULT_ELIGIBLE_YEAR_LEVELS,
+  listCourseRequirements,
+  type CourseRequirement,
+} from '@/services/schoolPrograms'
 
 interface StudentFormState {
   firstName: string
@@ -57,7 +62,6 @@ interface StudentFormState {
   course: string
   yearLevel: string
   yearLevelChoice: string
-  customYearLevel: string
 }
 
 type EmailFormat =
@@ -66,8 +70,7 @@ type EmailFormat =
   | 'firstinitial.last'
   | 'first.lastinitial'
 
-const YEAR_LEVEL_OPTIONS = ['1st Year', '2nd Year', '3rd Year', '4th Year']
-const CUSTOM_YEAR_LEVEL_VALUE = 'other'
+const courseRequirements = ref<CourseRequirement[]>([])
 
 const EMAIL_FORMAT_OPTIONS: Array<{ value: EmailFormat; label: string; example: string }> = [
   { value: 'first.last', label: 'firstname.lastname', example: 'juan.delacruz' },
@@ -96,7 +99,6 @@ function defaultStudentForm(): StudentFormState {
     course: '',
     yearLevel: '',
     yearLevelChoice: '',
-    customYearLevel: '',
   }
 }
 
@@ -167,9 +169,26 @@ const filteredStudents = computed(() => {
 
 const schoolProfile = computed(() => (authStore.user?.profile as Record<string, unknown> | undefined) ?? {})
 const schoolCourseOptions = computed(() => {
+  const fromRequirements = courseRequirements.value.map((item) => item.courseName)
   const raw = schoolProfile.value?.courses
-  return Array.isArray(raw) ? raw.map((value) => String(value).trim()).filter(Boolean) : []
+  const fromProfile = Array.isArray(raw) ? raw.map((value) => String(value).trim()).filter(Boolean) : []
+  return Array.from(new Set([...fromRequirements, ...fromProfile]))
 })
+
+const yearLevelOptionsForSelectedCourse = computed(() => {
+  const course = studentForm.value.course.trim().toLowerCase()
+  if (!course) return [...DEFAULT_ELIGIBLE_YEAR_LEVELS]
+  const match = courseRequirements.value.find((item) => item.courseName.trim().toLowerCase() === course)
+  if (match?.eligibleYearLevels?.length) return match.eligibleYearLevels
+  return [...DEFAULT_ELIGIBLE_YEAR_LEVELS]
+})
+
+function eligibleYearsForCourse(courseName: string): string[] {
+  const key = courseName.trim().toLowerCase()
+  const match = courseRequirements.value.find((item) => item.courseName.trim().toLowerCase() === key)
+  if (match?.eligibleYearLevels?.length) return match.eligibleYearLevels
+  return [...DEFAULT_ELIGIBLE_YEAR_LEVELS]
+}
 const schoolEmailDomain = computed(() => {
   const official = String(schoolProfile.value?.officialSchoolEmail ?? '').trim().toLowerCase()
   const fallback = String(authStore.user?.email ?? '').trim().toLowerCase()
@@ -211,14 +230,7 @@ const selectedEmailFormat = computed(() => {
   const found = EMAIL_FORMAT_OPTIONS.find((option) => option.value === studentForm.value.emailFormat)
   return found ?? EMAIL_FORMAT_OPTIONS[0]!
 })
-const selectedYearLevelLabel = computed(() => {
-  if (studentForm.value.yearLevelChoice === CUSTOM_YEAR_LEVEL_VALUE) {
-    return studentForm.value.customYearLevel || 'Other'
-  }
-
-  return studentForm.value.yearLevel || 'Select year level'
-})
-const isCustomYearLevel = computed(() => studentForm.value.yearLevelChoice === CUSTOM_YEAR_LEVEL_VALUE)
+const selectedYearLevelLabel = computed(() => studentForm.value.yearLevel || 'Select year level')
 
 function toggleDropdown(name: 'emailFormat' | 'course' | 'yearLevel') {
   openDropdown.value = openDropdown.value === name ? null : name
@@ -235,25 +247,29 @@ function selectEmailFormat(value: EmailFormat) {
 
 function selectCourse(value: string) {
   studentForm.value.course = value
+  const allowed = eligibleYearsForCourse(value)
+  if (studentForm.value.yearLevel && !allowed.includes(studentForm.value.yearLevel)) {
+    studentForm.value.yearLevel = ''
+    studentForm.value.yearLevelChoice = ''
+  }
   closeDropdowns()
 }
+
+watch(
+  () => studentForm.value.course,
+  () => {
+    const allowed = yearLevelOptionsForSelectedCourse.value
+    if (studentForm.value.yearLevel && !allowed.includes(studentForm.value.yearLevel)) {
+      studentForm.value.yearLevel = ''
+      studentForm.value.yearLevelChoice = ''
+    }
+  },
+)
 
 function selectYearLevel(value: string) {
   studentForm.value.yearLevelChoice = value
-  if (value === CUSTOM_YEAR_LEVEL_VALUE) {
-    studentForm.value.yearLevel = studentForm.value.customYearLevel.trim()
-  } else {
-    studentForm.value.yearLevel = value
-    studentForm.value.customYearLevel = ''
-  }
+  studentForm.value.yearLevel = value
   closeDropdowns()
-}
-
-function updateCustomYearLevel(value: string) {
-  studentForm.value.customYearLevel = value
-  if (studentForm.value.yearLevelChoice === CUSTOM_YEAR_LEVEL_VALUE) {
-    studentForm.value.yearLevel = value.trim()
-  }
 }
 
 function handleGlobalPointer(event: MouseEvent) {
@@ -401,6 +417,17 @@ async function runBulkImport(close: () => void) {
       continue
     }
 
+    if (row.yearLevel) {
+      const allowed = eligibleYearsForCourse(row.course || '')
+      if (!allowed.includes(row.yearLevel)) {
+        result.failed.push({
+          line: row.line,
+          message: `Year level must be one of: ${allowed.join(', ')}.`,
+        })
+        continue
+      }
+    }
+
     try {
       const created = await addSchoolStudent('', row.email, {
         studentName: row.studentName || undefined,
@@ -486,6 +513,13 @@ onMounted(() => {
     students.value = items
     loading.value = false
   })
+  void listCourseRequirements()
+    .then(({ requirements }) => {
+      courseRequirements.value = requirements
+    })
+    .catch(() => {
+      courseRequirements.value = []
+    })
   window.addEventListener('click', handleGlobalPointer)
 })
 
@@ -524,7 +558,7 @@ onUnmounted(() => {
         </CardHeader>
       </Card>
 
-      <Card v-if="studentOverage" class="border-amber-200 bg-amber-50 shadow-sm">
+      <Card v-if="studentOverage" class="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 shadow-sm">
         <CardHeader>
           <h2 class="text-xl font-semibold text-amber-900">Student Limit Reached</h2>
           <p class="text-sm text-amber-800">
@@ -533,7 +567,7 @@ onUnmounted(() => {
         </CardHeader>
       </Card>
 
-      <Card v-if="latestInvites.length" class="border-emerald-200 bg-emerald-50 shadow-sm">
+      <Card v-if="latestInvites.length" class="border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30 shadow-sm">
         <CardHeader>
           <h2 class="text-xl font-semibold text-emerald-900">Latest Student Invite Emails</h2>
           <p class="text-sm text-emerald-700">
@@ -563,7 +597,7 @@ onUnmounted(() => {
           <p class="text-sm text-muted-foreground">
             Created {{ latestBulkImport.created }} account{{ latestBulkImport.created === 1 ? '' : 's' }}.
           </p>
-          <div v-if="latestBulkImport.failed.length" class="space-y-2 rounded-xl border border-red-200 bg-red-50 p-4">
+          <div v-if="latestBulkImport.failed.length" class="space-y-2 rounded-xl border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40 p-4">
             <p class="font-medium text-red-700">Failed rows</p>
             <p
               v-for="failure in latestBulkImport.failed"
@@ -802,7 +836,7 @@ onUnmounted(() => {
                     <span class="dropdown-option-title">Select year level</span>
                   </button>
                   <button
-                    v-for="yearLevel in YEAR_LEVEL_OPTIONS"
+                    v-for="yearLevel in yearLevelOptionsForSelectedCourse"
                     :key="yearLevel"
                     type="button"
                     class="dropdown-option"
@@ -811,31 +845,8 @@ onUnmounted(() => {
                   >
                     <span class="dropdown-option-title">{{ yearLevel }}</span>
                   </button>
-                  <button
-                    type="button"
-                    class="dropdown-option"
-                    :class="{ active: studentForm.yearLevelChoice === CUSTOM_YEAR_LEVEL_VALUE }"
-                    @click="selectYearLevel(CUSTOM_YEAR_LEVEL_VALUE)"
-                  >
-                    <span class="dropdown-option-title">Other</span>
-                    <span class="dropdown-option-copy">Use a custom year level</span>
-                  </button>
                 </div>
               </div>
-            </FormControl>
-          </FormItem>
-          <FormItem
-            v-if="isCustomYearLevel"
-            class="md:col-span-2 rounded-2xl border border-border bg-card/80 p-4 shadow-sm"
-          >
-            <FormLabel class="text-foreground">Custom Year Level</FormLabel>
-            <FormControl>
-              <Input
-                :model-value="studentForm.customYearLevel"
-                placeholder="e.g., 6th Year, Senior High, Graduate Level"
-                class="mt-1 border-border bg-muted/80"
-                @update:modelValue="updateCustomYearLevel(String($event))"
-              />
             </FormControl>
           </FormItem>
           <div class="md:col-span-2 rounded-xl border border-border bg-muted px-4 py-3 text-sm text-muted-foreground">

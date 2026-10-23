@@ -109,7 +109,6 @@ class TenantRoleService
                         'org.reports_view',
                         'view_reports',
                         'upload_files',
-                        'manage_profile',
                     ],
                 ],
                 [
@@ -137,11 +136,17 @@ class TenantRoleService
             ];
         }
 
+        $isMunicipal = $type === 'municipal_hall';
+        $adminLabel = $isMunicipal ? 'Municipal Hall Admin' : 'Company Admin';
+        $adminDescription = $isMunicipal
+            ? 'Full administrative access inside this municipal hall tenant.'
+            : 'Full administrative access inside this company tenant.';
+
         return [
             [
-                'name' => 'Company Admin',
+                'name' => $adminLabel,
                 'slug' => 'company_admin',
-                'description' => 'Full administrative access inside this company tenant.',
+                'description' => $adminDescription,
                 'permissions' => OrgPermissions::companyAdmin(),
             ],
             [

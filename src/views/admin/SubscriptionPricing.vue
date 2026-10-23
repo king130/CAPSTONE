@@ -474,12 +474,12 @@ async function savePlan(plan: PlanEditor) {
 .page-header h1 {
   margin: 0;
   font-size: 32px;
-  color: #0f172a;
+  color: hsl(var(--foreground));
 }
 
 .subtitle {
   margin: 10px 0 0;
-  color: #475569;
+  color: hsl(var(--muted-foreground));
   line-height: 1.6;
 }
 
@@ -493,7 +493,7 @@ async function savePlan(plan: PlanEditor) {
   padding: 10px 14px;
   border-radius: 999px;
   background: #dbeafe;
-  color: #1e3a8a;
+  color: hsl(var(--foreground));
   font-weight: 700;
   white-space: nowrap;
 }
@@ -504,14 +504,14 @@ async function savePlan(plan: PlanEditor) {
   align-items: flex-start;
   padding: 18px 20px;
   border-radius: 18px;
-  background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%);
+  background: hsl(var(--muted));
   border: 1px solid #bfdbfe;
   margin-bottom: 24px;
 }
 
 .tip-banner p {
   margin: 4px 0 0;
-  color: #475569;
+  color: hsl(var(--muted-foreground));
 }
 
 .tip-icon {
@@ -525,8 +525,8 @@ async function savePlan(plan: PlanEditor) {
   padding: 48px 24px;
   text-align: center;
   border-radius: 18px;
-  background: #f8fafc;
-  color: #475569;
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
 }
 
 .plan-grid {
@@ -538,9 +538,7 @@ async function savePlan(plan: PlanEditor) {
   padding: 24px;
   border-radius: 24px;
   border: 1px solid #dbeafe;
-  background:
-    radial-gradient(circle at top right, rgba(59, 130, 246, 0.12), transparent 25%),
-    linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  background: hsl(var(--card));
   box-shadow: 0 18px 36px rgba(15, 23, 42, 0.08);
 }
 
@@ -563,13 +561,13 @@ async function savePlan(plan: PlanEditor) {
 
 .plan-top h2 {
   margin: 0;
-  color: #0f172a;
+  color: hsl(var(--foreground));
   font-size: 28px;
 }
 
 .plan-preview {
   margin: 8px 0 0;
-  color: #475569;
+  color: hsl(var(--muted-foreground));
   font-weight: 600;
 }
 
@@ -605,7 +603,7 @@ async function savePlan(plan: PlanEditor) {
   align-items: center;
   gap: 10px;
   font-weight: 800;
-  color: #0f172a;
+  color: hsl(var(--foreground));
   min-height: 24px;
 }
 
@@ -652,12 +650,12 @@ async function savePlan(plan: PlanEditor) {
 
 .field-input {
   width: 100%;
-  border: 1px solid #cbd5e1;
+  border: 1px solid hsl(var(--border));
   border-radius: 14px;
   padding: 12px 14px;
   font: inherit;
-  color: #0f172a;
-  background: #fff;
+  color: hsl(var(--foreground));
+  background: hsl(var(--card));
 }
 
 .field-input:focus {
@@ -687,8 +685,8 @@ async function savePlan(plan: PlanEditor) {
 .features-box {
   padding: 16px;
   border-radius: 18px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
   margin-bottom: 16px;
 }
 
@@ -725,7 +723,7 @@ async function savePlan(plan: PlanEditor) {
   padding: 12px 16px;
   border-radius: 12px;
   background: #e2e8f0;
-  color: #0f172a;
+  color: hsl(var(--foreground));
   font-weight: 700;
 }
 
@@ -742,7 +740,7 @@ async function savePlan(plan: PlanEditor) {
   padding: 8px 10px;
   border-radius: 10px;
   background: #e2e8f0;
-  color: #0f172a;
+  color: hsl(var(--foreground));
   font-size: 12px;
   font-weight: 700;
 }
@@ -822,7 +820,7 @@ async function savePlan(plan: PlanEditor) {
   align-items: center;
   gap: 10px;
   margin-top: 8px;
-  color: #475569;
+  color: hsl(var(--muted-foreground));
   font-size: 14px;
 }
 

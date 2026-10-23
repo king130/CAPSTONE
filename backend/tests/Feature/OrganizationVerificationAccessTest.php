@@ -354,4 +354,126 @@ class OrganizationVerificationAccessTest extends TestCase
         $me->assertOk();
         $me->assertJsonPath('verificationStatus', 'pending');
     }
+
+    /**
+     * School staff sub-accounts have membership but do not own a schools.user_id row.
+     *
+     * @return array{user: User, role: Role}
+     */
+    private function createSchoolSubAccount(array $schoolContext, string $roleSlug, string $roleName): array
+    {
+        $role = Role::query()->create([
+            'tenant_id' => $schoolContext['organization']->id,
+            'name' => $roleName,
+            'slug' => $roleSlug.'_'.uniqid(),
+            'scope' => 'organization',
+            'organization_type' => 'school',
+            'is_system' => false,
+        ]);
+
+        $user = User::factory()->create([
+            'role' => 'school',
+            'email' => $roleSlug.'.'.uniqid('', true).'@example.com',
+            'is_active' => true,
+            'is_temporary' => true,
+            'must_change_password' => true,
+            'profile_setup_complete' => true,
+            'tenant_id' => $schoolContext['organization']->id,
+            'role_id' => $role->id,
+        ]);
+
+        OrganizationMembership::query()->create([
+            'organization_id' => $schoolContext['organization']->id,
+            'user_id' => $user->id,
+            'role_id' => $role->id,
+            'status' => 'active',
+            'title' => $roleName,
+        ]);
+
+        return compact('user', 'role');
+    }
+
+    public function test_approved_school_teacher_inherits_parent_verification_after_password_change(): void
+    {
+        $school = $this->createSchoolOrg('approved');
+        $teacher = $this->createSchoolSubAccount($school, 'teacher', 'Teacher');
+
+        Sanctum::actingAs($teacher['user']);
+
+        $before = $this->getJson('/api/auth/me');
+        $before->assertOk();
+        $before->assertJsonPath('verificationStatus', 'approved');
+        $before->assertJsonPath('mustChangePassword', true);
+        $before->assertJsonPath('role', 'school');
+
+        $password = $this->postJson('/api/auth/password', [
+            'password' => 'Teacher@2026',
+            'password_confirmation' => 'Teacher@2026',
+        ]);
+        $password->assertOk();
+
+        $me = $this->getJson('/api/auth/me');
+        $me->assertOk();
+        $me->assertJsonPath('mustChangePassword', false);
+        $me->assertJsonPath('verificationStatus', 'approved');
+        $me->assertJsonPath('role', 'school');
+        $this->assertFalse((bool) $teacher['user']->fresh()->must_change_password);
+    }
+
+    public function test_pending_school_teacher_inherits_pending_verification(): void
+    {
+        $school = $this->createSchoolOrg('pending');
+        $teacher = $this->createSchoolSubAccount($school, 'teacher', 'Teacher');
+
+        Sanctum::actingAs($teacher['user']);
+        $me = $this->getJson('/api/auth/me');
+        $me->assertOk();
+        $me->assertJsonPath('verificationStatus', 'pending');
+        $me->assertJsonPath('role', 'school');
+    }
+
+    public function test_rejected_school_teacher_inherits_rejected_verification(): void
+    {
+        $school = $this->createSchoolOrg('rejected');
+        $teacher = $this->createSchoolSubAccount($school, 'teacher', 'Teacher');
+
+        Sanctum::actingAs($teacher['user']);
+        $me = $this->getJson('/api/auth/me');
+        $me->assertOk();
+        $me->assertJsonPath('verificationStatus', 'rejected');
+        $me->assertJsonPath('role', 'school');
+    }
+
+    public function test_approved_school_department_head_inherits_parent_verification(): void
+    {
+        $school = $this->createSchoolOrg('approved');
+        $deptHead = $this->createSchoolSubAccount($school, 'department_head', 'Department Head');
+
+        Sanctum::actingAs($deptHead['user']);
+        $me = $this->getJson('/api/auth/me');
+        $me->assertOk();
+        $me->assertJsonPath('verificationStatus', 'approved');
+        $me->assertJsonPath('role', 'school');
+    }
+
+    public function test_school_admin_owner_verification_status_unchanged(): void
+    {
+        $pending = $this->createSchoolOrg('pending');
+        Sanctum::actingAs($pending['user']);
+        $this->getJson('/api/auth/me')
+            ->assertOk()
+            ->assertJsonPath('verificationStatus', 'pending');
+
+        $approved = $this->createSchoolOrg('approved');
+        Sanctum::actingAs($approved['user']);
+        $this->getJson('/api/auth/me')
+            ->assertOk()
+            ->assertJsonPath('verificationStatus', 'approved');
+
+        $rejected = $this->createSchoolOrg('rejected');
+        Sanctum::actingAs($rejected['user']);
+        $this->getJson('/api/auth/me')
+            ->assertOk()
+            ->assertJsonPath('verificationStatus', 'rejected');
+    }
 }

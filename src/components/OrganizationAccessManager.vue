@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import Select from '@/components/ui/select/Select.vue'
+import { permissionDisplayLabel } from '@/services/permissions'
 import Swal from '@/services/swal'
 import { useAuthStore } from '@/stores/auth'
 import {
@@ -52,7 +54,9 @@ const canManageAccess = computed(() => {
 })
 const assignableRoles = computed(() => {
   if (props.organizationType === 'school') {
-    return roles.value.filter((role) => role.slug === 'intern')
+    // Staff roles only — student accounts are created via Student Accounts, not here.
+    // (Previously this incorrectly filtered to slug === 'intern', blocking teachers.)
+    return roles.value.filter((role) => role.slug !== 'intern')
   }
 
   return roles.value
@@ -63,7 +67,39 @@ const availablePermissions = computed(() => {
   for (const role of roles.value) {
     for (const permission of role.permissions) keys.add(permission)
   }
-  return Array.from(keys).sort()
+
+  // Prefer the assignable org.* key when a legacy alias is also present.
+  const preferred = [
+    'org.view_reports',
+    'org.manage_members',
+    'org.manage_roles',
+    'org.manage_subscription',
+    'org.manage_profile',
+    'org.manage_internships',
+    'org.manage_agreements',
+    'org.approve_applications',
+  ]
+  const hiddenAliases = new Set([
+    'view_reports',
+    'org.reports_view',
+    'manage_users',
+    'manage_roles',
+    'manage_permissions',
+    'manage_subscription',
+    'manage_profile',
+    'manage_internships',
+    'manage_contracts',
+    'org.manage_contracts',
+    'review_applications',
+    'org.review_applications',
+  ])
+
+  return Array.from(keys)
+    .filter((key) => {
+      if (!hiddenAliases.has(key)) return true
+      return !preferred.some((primary) => keys.has(primary))
+    })
+    .sort()
 })
 
 const filteredMembers = computed(() => {
@@ -96,7 +132,12 @@ async function loadAccess() {
     members.value = data.members
     memberDrafts.value = {}
     if (props.organizationType === 'school') {
-      newMember.value.roleId = data.roles.find((role) => role.slug === 'intern')?.id ?? ''
+      // Prefer teacher/department staff — intern accounts are created via Student Accounts.
+      const staff = data.roles.filter((role) => role.slug !== 'intern')
+      newMember.value.roleId =
+        staff.find((role) => /teacher|department|coordinator/i.test(role.slug + role.name))?.id
+        ?? staff[0]?.id
+        ?? ''
     }
   } catch (error) {
     await Swal.fire({
@@ -330,7 +371,7 @@ async function saveMemberChanges(member: OrganizationAccessMember) {
 }
 
 function permissionLabel(permission: string) {
-  return permission.replace(/^org\./, '').replace(/\./g, ' ')
+  return permissionDisplayLabel(permission)
 }
 
 function memberTitle(member: OrganizationAccessMember) {
@@ -376,29 +417,29 @@ onMounted(() => {
         </div>
         <div class="create-head">
           <div>
-            <div class="create-title">{{ organizationType === 'school' ? 'Add intern account' : 'Add team member' }}</div>
+            <div class="create-title">{{ organizationType === 'school' ? 'Add staff account' : 'Add team member' }}</div>
             <div class="create-copy">
-              {{ organizationType === 'school' ? 'Schools can create intern accounts only from this workspace.' : 'Create a staff account and assign its starting role.' }}
+              {{ organizationType === 'school' ? 'Create teacher or department staff accounts here. Student accounts use Student Accounts.' : 'Create a staff account and assign its starting role.' }}
             </div>
           </div>
         </div>
         <div class="create-grid">
           <input v-model="newMember.name" type="text" class="field-input" placeholder="Full name" />
           <input v-model="newMember.email" type="email" class="field-input" placeholder="Email address" />
-          <select v-model="newMember.roleId" class="field-input">
-            <option value="">{{ organizationType === 'school' ? 'Select intern role' : 'Select role' }}</option>
+          <Select v-model="newMember.roleId">
+            <option value="">{{ organizationType === 'school' ? 'Select staff role' : 'Select role' }}</option>
             <option v-for="role in assignableRoles" :key="role.id" :value="role.id">{{ role.name }}</option>
-          </select>
+          </Select>
           <input
             v-model="newMember.title"
             type="text"
             class="field-input"
-            :placeholder="organizationType === 'school' ? 'Course / section (optional)' : 'Job title / position'"
+            :placeholder="organizationType === 'school' ? 'Department / course (optional)' : 'Job title / position'"
           />
         </div>
         <div class="create-actions">
           <button type="button" class="create-btn" :disabled="creating || loading" @click="createMember">
-            {{ creating ? 'Creating...' : organizationType === 'school' ? 'Create Intern Account' : 'Create Staff Account' }}
+            {{ creating ? 'Creating...' : 'Create Staff Account' }}
           </button>
         </div>
       </div>
@@ -445,14 +486,14 @@ onMounted(() => {
                 </div>
               </td>
               <td>
-                <select
-                  class="field-input table-select"
-                  :value="currentRoleId(member)"
+                <Select
+                  class="min-w-40"
+                  :model-value="currentRoleId(member)"
                   :disabled="savingMemberId === member.id"
-                  @change="updateRole(member, ($event.target as HTMLSelectElement).value)"
+                  @update:model-value="updateRole(member, $event)"
                 >
                   <option v-for="role in roles" :key="role.id" :value="role.id">{{ role.name }}</option>
-                </select>
+                </Select>
               </td>
               <td>
                 <button

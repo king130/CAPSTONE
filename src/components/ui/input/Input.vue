@@ -42,7 +42,7 @@ function onInput(event: Event) {
   <input
     v-bind="attrs"
     :type="type"
-    :value="modelValue"
+    :value="type === 'file' ? undefined : modelValue"
     :class="inputClass"
     @input="onInput"
   />

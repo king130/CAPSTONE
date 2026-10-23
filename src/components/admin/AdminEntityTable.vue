@@ -87,7 +87,7 @@ const skeletonRows = computed(() => Array.from({ length: props.pageSize }))
       </p>
     </div>
 
-    <div class="rounded-xl border border-border bg-white">
+    <div class="rounded-xl border border-border bg-card">
       <Table>
         <TableHeader>
           <TableRow>

@@ -6,6 +6,8 @@ export interface SubscriptionPlan {
   schoolPrice: number
   companyPrice: number
   description: string
+  isSelectable?: boolean
+  isLegacy?: boolean
   features: {
     school: string[]
     company: string[]
@@ -115,12 +117,13 @@ export async function updateSubscriptionPlan(
   })
 }
 
-export async function getPricingForRole(role: 'school' | 'company'): Promise<{
+export async function getPricingForRole(role: 'school' | 'company' | 'municipal_hall'): Promise<{
   Free: { price: string; description: string; features: string[]; limits: Record<string, number> }
   Standard: { price: string; description: string; features: string[]; limits: Record<string, number> }
   Premium: { price: string; description: string; features: string[]; limits: Record<string, number> }
 }> {
   const plans = await getSubscriptionPlans()
+  const pricingRole = role === 'municipal_hall' ? 'company' : role
 
   const result = {} as {
     Free: { price: string; description: string; features: string[]; limits: Record<string, number> }
@@ -129,12 +132,12 @@ export async function getPricingForRole(role: 'school' | 'company'): Promise<{
   }
 
   plans.forEach((plan) => {
-    const price = role === 'school' ? plan.schoolPrice : plan.companyPrice
+    const price = pricingRole === 'school' ? plan.schoolPrice : plan.companyPrice
     result[plan.name as keyof typeof result] = {
       price: formatPrice(price),
       description: plan.description,
-      features: plan.features[role] || [],
-      limits: plan.limits[role] || {},
+      features: plan.features[pricingRole] || [],
+      limits: plan.limits[pricingRole] || {},
     }
   })
 

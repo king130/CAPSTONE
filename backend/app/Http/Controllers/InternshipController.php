@@ -11,7 +11,10 @@ use App\Models\School;
 use App\Models\Student;
 use App\Services\InternshipEligibilityService;
 use App\Services\PermissionGate;
+use App\Services\PlacementScheduleService;
 use App\Services\SubscriptionPlanService;
+use App\Support\InternshipDocumentRequirements;
+use App\Support\ProfileAvatar;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -19,6 +22,14 @@ use Illuminate\Support\Collection;
 
 class InternshipController extends Controller
 {
+    public function __construct(
+        private readonly PermissionGate $permissions,
+        private readonly SubscriptionPlanService $subscriptionPlans,
+        private readonly InternshipEligibilityService $internshipEligibility,
+        private readonly PlacementScheduleService $placementSchedules,
+    ) {
+    }
+
     /**
      * @return array<int, string|\Closure>
      */
@@ -26,20 +37,14 @@ class InternshipController extends Controller
     {
         return [
             'company:id,user_id,company_name,organization_id,verification_status,website,company_address,industry_type',
-            'company.user:id,profile',
+            'company.user:id,profile,updated_at',
             'company.organization:id,name,type,is_active,tagline,description,address,city,website,industry,perks',
             'company.organization.media',
             'school:id,user_id,institution_name,organization_id,verification_status,school_address',
+            'school.user:id,profile,updated_at',
             'school.organization:id,name,type,is_active,tagline,description,address,city,website,industry,perks',
             'school.organization.media',
         ];
-    }
-
-    public function __construct(
-        private readonly SubscriptionPlanService $subscriptionPlans,
-        private readonly PermissionGate $permissions,
-        private readonly InternshipEligibilityService $internshipEligibility,
-    ) {
     }
 
     public function index(Request $request)
@@ -189,6 +194,7 @@ class InternshipController extends Controller
             'type' => ['nullable', 'string', 'max:255'],
             'industry' => ['nullable', 'string', 'max:255'],
             'duration' => ['nullable', 'string', 'max:255'],
+            'host_required_hours' => ['nullable', 'integer', 'min:1', 'max:10000'],
             'slots_available' => ['nullable', 'integer', 'min:1'],
             'status' => ['nullable', 'in:active,draft,closed'],
             'requirements' => ['nullable', 'array'],
@@ -205,15 +211,23 @@ class InternshipController extends Controller
             'schedule_days.*' => ['string', 'max:20'],
             'time_in' => ['nullable', 'string', 'max:20'],
             'time_out' => ['nullable', 'string', 'max:20'],
+            'schedule_slots' => ['nullable', 'array'],
+            'schedule_slots.*.day' => ['required_with:schedule_slots', 'string', 'max:20'],
+            'schedule_slots.*.start' => ['required_with:schedule_slots', 'string', 'max:20'],
+            'schedule_slots.*.end' => ['required_with:schedule_slots', 'string', 'max:20'],
             'timezone' => ['nullable', 'string', 'max:100'],
             'is_flexible' => ['nullable', 'boolean'],
             'tasks' => ['nullable', 'string'],
             'required_skills' => ['nullable', 'array'],
             'intern_gains' => ['nullable', 'string'],
             'required_documents' => ['nullable', 'array'],
+            'requires_resume' => ['sometimes', 'boolean'],
             'application_instructions' => ['nullable', 'string'],
             'contact_info' => ['nullable', 'string', 'max:500'],
         ]);
+
+        // Phase E: only Endorsement may be required; resume is never a posting requirement.
+        $requiredDocuments = InternshipDocumentRequirements::normalizeForStorage($data['required_documents'] ?? null);
 
         $scheduleFields = $this->extractScheduleFields($data);
         $workSetup = $this->normalizeWorkSetup($data['work_setup'] ?? $data['type'] ?? null);
@@ -232,11 +246,12 @@ class InternshipController extends Controller
             'work_setup' => $workSetup,
             'type' => $data['type'] ?? $workSetup,
             'duration' => $data['duration'] ?? null,
+            'host_required_hours' => $data['host_required_hours'] ?? null,
             'slots_available' => $data['slots_available'] ?? 1,
             'status' => $data['status'] ?? 'active',
             'requirements' => $data['requirements'] ?? null,
             'eligible_courses' => $data['eligible_courses'] ?? null,
-            'allowance' => $data['allowance'] ?? null,
+            'allowance' => blank($data['allowance'] ?? null) ? null : $data['allowance'],
             'perks' => $data['perks'] ?? null,
             'start_date' => $data['start_date'] ?? null,
             'end_date' => $data['end_date'] ?? null,
@@ -247,12 +262,14 @@ class InternshipController extends Controller
             'schedule_days' => $scheduleFields['schedule_days'],
             'time_in' => $scheduleFields['time_in'],
             'time_out' => $scheduleFields['time_out'],
+            'schedule_slots' => $scheduleFields['schedule_slots'],
             'timezone' => $scheduleFields['timezone'],
             'is_flexible' => $scheduleFields['is_flexible'],
             'tasks' => $data['tasks'] ?? null,
             'required_skills' => $data['required_skills'] ?? null,
             'intern_gains' => $data['intern_gains'] ?? null,
-            'required_documents' => $data['required_documents'] ?? null,
+            'required_documents' => $requiredDocuments,
+            'requires_resume' => false,
             'application_instructions' => $data['application_instructions'] ?? null,
             'contact_info' => $data['contact_info'] ?? null,
             'approval_status' => 'approved',
@@ -274,10 +291,9 @@ class InternshipController extends Controller
         ]);
 
         $payload = $this->serialize($internship, $this->viewerPartnershipContext($request));
-        $media = $this->resolveOrganizationMediaGallery($internship, $payload['hostType'] ?? 'company');
-        $payload['organizationMedia'] = $media;
-        $payload['organization_media'] = $media;
-
+        $preview = $payload['previewPhotos'] ?? [];
+        $payload['organizationMedia'] = $preview;
+        $payload['organization_media'] = $preview;
         return response()->json(['data' => $payload]);
     }
 
@@ -333,6 +349,7 @@ class InternshipController extends Controller
             'type' => ['nullable', 'string', 'max:255'],
             'industry' => ['nullable', 'string', 'max:255'],
             'duration' => ['nullable', 'string', 'max:255'],
+            'host_required_hours' => ['nullable', 'integer', 'min:1', 'max:10000'],
             'slots_available' => ['nullable', 'integer', 'min:1'],
             'status' => ['nullable', 'in:active,draft,closed'],
             'requirements' => ['nullable', 'array'],
@@ -349,17 +366,29 @@ class InternshipController extends Controller
             'schedule_days.*' => ['string', 'max:20'],
             'time_in' => ['nullable', 'string', 'max:20'],
             'time_out' => ['nullable', 'string', 'max:20'],
+            'schedule_slots' => ['nullable', 'array'],
+            'schedule_slots.*.day' => ['required_with:schedule_slots', 'string', 'max:20'],
+            'schedule_slots.*.start' => ['required_with:schedule_slots', 'string', 'max:20'],
+            'schedule_slots.*.end' => ['required_with:schedule_slots', 'string', 'max:20'],
             'timezone' => ['nullable', 'string', 'max:100'],
             'is_flexible' => ['nullable', 'boolean'],
             'tasks' => ['nullable', 'string'],
             'required_skills' => ['nullable', 'array'],
             'intern_gains' => ['nullable', 'string'],
             'required_documents' => ['nullable', 'array'],
+            'requires_resume' => ['sometimes', 'boolean'],
             'application_instructions' => ['nullable', 'string'],
             'contact_info' => ['nullable', 'string', 'max:500'],
         ]);
 
         $updates = array_filter($data, fn ($v) => $v !== null);
+        // Allow clearing optional host hours by sending null explicitly.
+        if (array_key_exists('host_required_hours', $data)) {
+            $updates['host_required_hours'] = $data['host_required_hours'];
+        }
+        if (array_key_exists('allowance', $data)) {
+            $updates['allowance'] = blank($data['allowance']) ? null : $data['allowance'];
+        }
         if (array_key_exists('work_setup', $data)) {
             $updates['work_setup'] = $this->normalizeWorkSetup($data['work_setup']);
         } elseif (array_key_exists('type', $data) && empty($internship->work_setup)) {
@@ -369,7 +398,14 @@ class InternshipController extends Controller
             $updates['city'] = $this->extractCityFromLocation($data['location']);
         }
 
-        $hasStructuredSchedule = collect(['schedule_type', 'weekly_hours', 'schedule_days', 'time_in', 'time_out', 'timezone', 'is_flexible'])
+        if (array_key_exists('required_documents', $data)) {
+            $updates['required_documents'] = InternshipDocumentRequirements::normalizeForStorage($data['required_documents']);
+        }
+
+        // Resume is never a posting requirement (Phase E). Keep column but force off on edit.
+        $updates['requires_resume'] = false;
+
+        $hasStructuredSchedule = collect(['schedule_type', 'weekly_hours', 'schedule_days', 'time_in', 'time_out', 'schedule_slots', 'timezone', 'is_flexible'])
             ->contains(fn ($key) => array_key_exists($key, $data));
 
         if ($hasStructuredSchedule || array_key_exists('schedule', $data)) {
@@ -380,6 +416,7 @@ class InternshipController extends Controller
                 'schedule_days' => $internship->schedule_days,
                 'time_in' => $internship->time_in,
                 'time_out' => $internship->time_out,
+                'schedule_slots' => $internship->schedule_slots,
                 'timezone' => $internship->timezone,
                 'is_flexible' => $internship->is_flexible,
             ], $data);
@@ -440,7 +477,8 @@ class InternshipController extends Controller
         $acceptedCount = (int) ($i->accepted_applications_count ?? 0);
         $slotsRemaining = max(0, $slotsAvailable - $acceptedCount);
         $city = trim((string) ($i->city ?: $this->extractCityFromLocation($i->location)));
-        $coverImage = $this->resolveCoverImageUrl($i, $hostType);
+        $visuals = $this->resolveOrganizationVisuals($i, $hostType);
+        $coverImage = $visuals['logoUrl'];
         $verified = $this->resolveVerifiedFlag($i, $hostType);
         $partnered = $this->resolvePartneredWithMySchool($i, $hostType, $viewerContext);
         $saved = $this->resolveSavedFlag($i, $viewerContext);
@@ -468,11 +506,17 @@ class InternshipController extends Controller
             'workSetup' => $workSetup,
             'type' => $i->type ?? $workSetup ?? '',
             'duration' => $i->duration ?? '',
+            'hostRequiredHours' => $i->host_required_hours !== null ? (int) $i->host_required_hours : null,
+            'host_required_hours' => $i->host_required_hours !== null ? (int) $i->host_required_hours : null,
             'slotsAvailable' => $slotsAvailable,
             'slots_available' => $slotsAvailable,
             'slots_remaining' => $slotsRemaining,
             'slotsRemaining' => $slotsRemaining,
             'eligibleCourses' => $this->resolveEligibleCourses($i, $hostType),
+            'filledSlots' => $acceptedCount,
+            'filled_slots' => $acceptedCount,
+            'previewPhotos' => $visuals['preview'],
+            'preview_photos' => $visuals['preview'],
             'eligible_courses' => $this->resolveEligibleCourses($i, $hostType),
             'requirements' => $i->requirements ?? [],
             'allowance' => $i->allowance,
@@ -488,6 +532,7 @@ class InternshipController extends Controller
             'scheduleDays' => $i->schedule_days ?? [],
             'timeIn' => $i->time_in,
             'timeOut' => $i->time_out,
+            'scheduleSlots' => $i->schedule_slots ?? [],
             'timezone' => $i->timezone ?? 'Asia/Manila',
             'isFlexible' => (bool) $i->is_flexible,
             'cover_image' => $coverImage,
@@ -498,7 +543,11 @@ class InternshipController extends Controller
             'tasks' => $i->tasks,
             'requiredSkills' => $i->required_skills ?? [],
             'internGains' => $i->intern_gains,
-            'requiredDocuments' => $i->required_documents ?? [],
+            // Effective checklist ignores legacy free-form required_documents (kept in DB).
+            'requiredDocuments' => InternshipDocumentRequirements::effectiveRequiredDocuments(),
+            'requiresResume' => false,
+            'requires_resume' => false,
+            'legacyRequiredDocuments' => $i->required_documents ?? [],
             'applicationInstructions' => $i->application_instructions,
             'contactInfo' => $i->contact_info,
             'approvalStatus' => $i->approval_status,
@@ -703,24 +752,42 @@ class InternshipController extends Controller
         return strtolower((string) ($internship->company?->verification_status ?? '')) === 'approved';
     }
 
-    private function resolveCoverImageUrl(Internship $internship, string $hostType): ?string
+    /**
+     * Cover is the host account profile picture. Preview photos are up to three
+     * organization-owned uploads, in stored order.
+     *
+     * @return array{logoUrl: ?string, preview: array<int, array<string, mixed>>}
+     */
+    private function resolveOrganizationVisuals(Internship $internship, string $hostType): array
     {
-        $cover = $this->resolveOrganizationMediaGallery($internship, $hostType)[0]['url'] ?? null;
+        $hostUser = $hostType === 'school'
+            ? $internship->school?->user
+            : $internship->company?->user;
 
-        return is_string($cover) ? $cover : null;
+        $preview = $this->organizationMediaForHost($internship, $hostType)
+            ->sortBy([['sort_order', 'asc'], ['id', 'asc']])
+            ->take(3)
+            ->values()
+            ->map(fn (OrganizationMedia $media) => $this->serializeOrganizationMedia($media))
+            ->all();
+
+        return [
+            'logoUrl' => ProfileAvatar::publicUrl($hostUser),
+            'preview' => $preview,
+        ];
     }
 
     /**
-     * @return array<int, array<string, mixed>>
+     * @return Collection<int, OrganizationMedia>
      */
-    private function resolveOrganizationMediaGallery(Internship $internship, string $hostType): array
+    private function organizationMediaForHost(Internship $internship, string $hostType): Collection
     {
         $organization = $hostType === 'school'
             ? $internship->school?->organization
             : $internship->company?->organization;
 
         if (! $organization) {
-            return [];
+            return collect();
         }
 
         if ($organization->relationLoaded('media')) {
@@ -733,23 +800,31 @@ class InternshipController extends Controller
         } else {
             $items = OrganizationMedia::query()
                 ->where('organization_id', $organization->id)
+                ->where('path', 'like', 'organization-media/'.$organization->id.'/%')
                 ->orderBy('sort_order')
                 ->orderBy('id')
                 ->get();
         }
 
-        // Prefer cover first for gallery UX, then remaining by sort_order.
-        $sorted = $items->sortBy(function (OrganizationMedia $media) {
-            return [(int) (! $media->is_cover), (int) $media->sort_order, (int) $media->id];
+        return $items->filter(function (OrganizationMedia $media) use ($organization) {
+            return (int) $media->organization_id === (int) $organization->id
+                && is_string($media->path)
+                && str_starts_with($media->path, 'organization-media/'.$organization->id.'/');
         })->values();
+    }
 
-        return $sorted->map(fn (OrganizationMedia $media) => [
+    /**
+     * @return array<string, mixed>
+     */
+    private function serializeOrganizationMedia(OrganizationMedia $media): array
+    {
+        return [
             'id' => (string) $media->id,
             'url' => $media->publicUrl(),
             'caption' => $media->caption,
             'sortOrder' => (int) $media->sort_order,
             'isCover' => (bool) $media->is_cover,
-        ])->all();
+        ];
     }
 
     private function normalizeWorkSetup(mixed $value): ?string
@@ -799,12 +874,55 @@ class InternshipController extends Controller
      */
     private function extractScheduleFields(array $data): array
     {
+        $slots = null;
+        if (isset($data['schedule_slots']) && is_array($data['schedule_slots']) && $data['schedule_slots'] !== []) {
+            $slots = $this->placementSchedules->normalizeAndValidateSlots($data['schedule_slots']);
+            $legacy = $this->placementSchedules->legacyFieldsFromSlots($slots);
+
+            return [
+                'schedule' => $legacy['schedule'],
+                'schedule_type' => $data['schedule_type'] ?? null,
+                'weekly_hours' => $data['weekly_hours'] ?? null,
+                'schedule_days' => $legacy['schedule_days'],
+                'time_in' => $legacy['time_in'],
+                'time_out' => $legacy['time_out'],
+                'schedule_slots' => $legacy['schedule_slots'],
+                'timezone' => $data['timezone'] ?? 'Asia/Manila',
+                'is_flexible' => (bool) ($data['is_flexible'] ?? false),
+            ];
+        }
+
         $scheduleDays = isset($data['schedule_days']) && is_array($data['schedule_days'])
             ? array_values(array_filter(array_map(fn ($day) => is_string($day) ? trim($day) : '', $data['schedule_days'])))
             : null;
         $timeIn = isset($data['time_in']) ? (string) $data['time_in'] : null;
         $timeOut = isset($data['time_out']) ? (string) $data['time_out'] : null;
         $legacySchedule = isset($data['schedule']) ? (string) $data['schedule'] : null;
+
+        if ($scheduleDays && $timeIn && $timeOut) {
+            $builtSlots = [];
+            foreach ($scheduleDays as $day) {
+                $builtSlots[] = ['day' => $day, 'start' => $timeIn, 'end' => $timeOut];
+            }
+            try {
+                $slots = $this->placementSchedules->normalizeAndValidateSlots($builtSlots);
+                $legacy = $this->placementSchedules->legacyFieldsFromSlots($slots);
+
+                return [
+                    'schedule' => $legacy['schedule'],
+                    'schedule_type' => $data['schedule_type'] ?? null,
+                    'weekly_hours' => $data['weekly_hours'] ?? null,
+                    'schedule_days' => $legacy['schedule_days'],
+                    'time_in' => $legacy['time_in'],
+                    'time_out' => $legacy['time_out'],
+                    'schedule_slots' => $legacy['schedule_slots'],
+                    'timezone' => $data['timezone'] ?? 'Asia/Manila',
+                    'is_flexible' => (bool) ($data['is_flexible'] ?? false),
+                ];
+            } catch (\Illuminate\Validation\ValidationException $e) {
+                throw $e;
+            }
+        }
 
         $built = $this->buildScheduleString($scheduleDays, $timeIn, $timeOut);
 
@@ -815,6 +933,7 @@ class InternshipController extends Controller
             'schedule_days' => $scheduleDays,
             'time_in' => $timeIn,
             'time_out' => $timeOut,
+            'schedule_slots' => null,
             'timezone' => $data['timezone'] ?? 'Asia/Manila',
             'is_flexible' => (bool) ($data['is_flexible'] ?? false),
         ];

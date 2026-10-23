@@ -33,6 +33,7 @@ import FormControl from '@/components/ui/form/FormControl.vue'
 import FormItem from '@/components/ui/form/FormItem.vue'
 import FormLabel from '@/components/ui/form/FormLabel.vue'
 import Input from '@/components/ui/input/Input.vue'
+import Select from '@/components/ui/select/Select.vue'
 import Skeleton from '@/components/ui/skeleton/Skeleton.vue'
 import Table from '@/components/ui/table/Table.vue'
 import TableBody from '@/components/ui/table/TableBody.vue'
@@ -41,11 +42,21 @@ import TableHead from '@/components/ui/table/TableHead.vue'
 import TableHeader from '@/components/ui/table/TableHeader.vue'
 import TableRow from '@/components/ui/table/TableRow.vue'
 import { caviteBarangaysByLocation, caviteLocationGroups } from '@/config/courseCatalog'
-import ApplicationAssessmentPanel from '@/components/ApplicationAssessmentPanel.vue'
-import ApplicationInterviewPanel from '@/components/ApplicationInterviewPanel.vue'
+import ApplicationTrackerPanel from '@/components/ApplicationTrackerPanel.vue'
+import ApplicationStatusStepper from '@/components/applications/ApplicationStatusStepper.vue'
+import ScheduleEditor from '@/components/ScheduleEditor.vue'
+import {
+  DAY_OPTIONS,
+  slotsFromLegacy,
+  type ScheduleSlot,
+  validateSlots,
+} from '@/utils/scheduleSlots'
 import { useToast } from '@/composables/useToast'
 import MainLayout from '@/layouts/MainLayout.vue'
+import { assignedPermissionAllows, routePermissionRequirements } from '@/layouts/navigation'
 import { subscribeCompanyApplications, updateApplicationStatus, type ApplicationRecord } from '@/services/applications'
+import { listAssessments, type AssessmentRecord } from '@/services/assessments'
+import { listInterviews, type InterviewRecord } from '@/services/interviews'
 import { fetchKpiReport, type KpiReport } from '@/services/kpi'
 import {
   createInternship,
@@ -54,7 +65,9 @@ import {
   updateInternship,
   type InternshipRecord,
 } from '@/services/internships'
+import { verificationStatusLabel } from '@/services/organizationVerification'
 import { useAuthStore } from '@/stores/auth'
+import { deriveApplicationStepper } from '@/utils/applicationStepper'
 
 type CompanyView = 'dashboard' | 'internships' | 'applications'
 type ApplicantAction = 'accepted' | 'rejected'
@@ -70,6 +83,7 @@ interface JobFormState {
   locationDetails: string
   type: string
   duration: string
+  hostRequiredHours: string
   slotsAvailable: number
   status: 'active' | 'draft' | 'closed'
   allowance: string
@@ -78,6 +92,7 @@ interface JobFormState {
   scheduleDays: string[]
   scheduleStartTime: string
   scheduleEndTime: string
+  scheduleSlots: ScheduleSlot[]
   scheduleType: string
   weeklyHours: string
   isFlexible: boolean
@@ -85,6 +100,7 @@ interface JobFormState {
   requiredSkillsText: string
   internGains: string
   requiredDocumentsText: string
+  requiresResume: boolean
   applicationInstructions: string
   contactInfo: string
   eligibleCoursesText: string
@@ -111,8 +127,46 @@ const jobEditorOpen = ref(false)
 const jobDetailsOpen = ref(false)
 const savingJob = ref(false)
 const applicantDialogOpen = ref(false)
+const applicantDialogMode = ref<'profile' | 'tracker'>('profile')
 const selectedJob = ref<(InternshipRecord & { applicationCount?: number }) | null>(null)
 const selectedApplicant = ref<ApplicationRecord | null>(null)
+const applicantInterviews = ref<InterviewRecord[]>([])
+const applicantAssessments = ref<AssessmentRecord[]>([])
+const applicantStepper = computed(() =>
+  selectedApplicant.value
+    ? deriveApplicationStepper({
+        status: selectedApplicant.value.status,
+        trackerStage: selectedApplicant.value.trackerStage,
+        interviews: applicantInterviews.value,
+        assessments: applicantAssessments.value,
+        audience: 'company',
+      })
+    : null,
+)
+
+async function loadApplicantExtras(applicationId?: string) {
+  const id = applicationId || selectedApplicant.value?.id
+  if (!id) return
+  const [interviews, assessments] = await Promise.all([
+    listInterviews(id).catch(() => [] as InterviewRecord[]),
+    listAssessments(id).catch(() => [] as AssessmentRecord[]),
+  ])
+  if (selectedApplicant.value?.id !== id) return
+  applicantInterviews.value = interviews
+  applicantAssessments.value = assessments
+}
+
+async function onTrackerUpdated() {
+  await refreshApplications()
+  await loadApplicantExtras()
+}
+
+watch(selectedApplicant, (applicant) => {
+  applicantInterviews.value = []
+  applicantAssessments.value = []
+  if (!applicant?.id) return
+  void loadApplicantExtras(applicant.id)
+})
 const pendingDeleteJobId = ref<string | null>(null)
 const deletingJobId = ref<string | null>(null)
 const processingApplicantId = ref<string | null>(null)
@@ -139,10 +193,16 @@ const pageTitle = computed(() => {
   return titles[currentView.value]
 })
 
+const isMunicipalHall = computed(
+  () => String(authStore.user?.activeOrganization?.type || '').toLowerCase() === 'municipal_hall',
+)
+
+const hostOrgLabel = computed(() => (isMunicipalHall.value ? 'Municipal Hall' : 'Company'))
+
 const companyName = computed(() => {
   const profile = authStore.user?.profile as Record<string, unknown> | undefined
   return (
-    String(profile?.companyName || profile?.name || authStore.user?.displayName || authStore.user?.email || 'Company')
+    String(profile?.companyName || profile?.name || authStore.user?.displayName || authStore.user?.email || hostOrgLabel.value)
       .trim()
   )
 })
@@ -169,9 +229,9 @@ const statusOptions = [
   { value: 'closed', label: 'Closed', description: 'No longer accepting applicants.' },
 ]
 const wizardSteps: Array<{ id: JobWizardStep; label: string; caption: string }> = [
-  { id: 'basic', label: 'Basic Information', caption: 'Title, company details, work setup, and Cavite location' },
+  { id: 'basic', label: 'Basic Information', caption: 'Title, organization details, work setup, and Cavite location' },
   { id: 'details', label: 'Internship Details', caption: 'Hours, slots, dates, schedule, and role overview' },
-  { id: 'programs', label: 'Accepted Programs', caption: 'Choose which courses from the company profile are accepted' },
+  { id: 'programs', label: 'Accepted Programs', caption: 'Choose which courses from the organization profile are accepted' },
   { id: 'requirements', label: 'Requirements', caption: 'Documents, how to apply, and contact details' },
 ]
 const weekdayOptions = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
@@ -205,7 +265,7 @@ const dashboardStats = computed(() => {
       label: 'Open Positions',
       value: openPositions,
       icon: BriefcaseBusiness,
-      iconClass: 'bg-emerald-100 text-emerald-700',
+      iconClass: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200',
       caption: 'Accepting applications',
     },
     {
@@ -238,10 +298,17 @@ const attentionApplicants = computed(() =>
     .slice(0, 5),
 )
 
+function canOpenRoute(routeName: string) {
+  const required = routePermissionRequirements(routeName)
+  const assigned = authStore.user?.memberships?.[0]?.permissions ?? []
+  return !required || assignedPermissionAllows(assigned, required)
+}
+
 const compactQuickActions = computed(() => [
   {
     label: 'Post a job',
     icon: Plus,
+    allowed: assignedPermissionAllows(authStore.user?.memberships?.[0]?.permissions ?? [], ['org.manage_internships', 'manage_internships']),
     action: () => {
       void openCreateJobDialog()
     },
@@ -249,19 +316,22 @@ const compactQuickActions = computed(() => [
   {
     label: 'Review applicants',
     icon: Users,
+    allowed: canOpenRoute('company-applicants'),
     action: () => handleMenuClick('applications'),
   },
   {
     label: 'Agreements',
     icon: FileText,
+    allowed: canOpenRoute('agreements'),
     action: () => router.push({ name: 'agreements' }),
   },
   {
     label: 'Messages',
     icon: MessageSquare,
+    allowed: true,
     action: () => window.dispatchEvent(new CustomEvent('chat:open')),
   },
-])
+].filter((item) => item.allowed))
 
 const jobRows = computed(() => {
   const query = searchJobs.value.trim().toLowerCase()
@@ -315,6 +385,7 @@ function defaultJobForm(): JobFormState {
     locationDetails: '',
     type: 'On-site',
     duration: '486 hours',
+    hostRequiredHours: '',
     slotsAvailable: 1,
     status: 'active',
     allowance: '',
@@ -323,6 +394,7 @@ function defaultJobForm(): JobFormState {
     scheduleDays: [],
     scheduleStartTime: '',
     scheduleEndTime: '',
+    scheduleSlots: [],
     scheduleType: 'fixed',
     weeklyHours: '',
     isFlexible: false,
@@ -330,6 +402,7 @@ function defaultJobForm(): JobFormState {
     requiredSkillsText: '',
     internGains: '',
     requiredDocumentsText: '',
+    requiresResume: true,
     applicationInstructions: '',
     contactInfo: '',
     eligibleCoursesText: '',
@@ -466,7 +539,23 @@ function buildLocation() {
   return parts.join(' - ')
 }
 
+function syncScheduleFromSlots(slots: ScheduleSlot[]) {
+  jobForm.value.scheduleSlots = slots
+  jobForm.value.scheduleDays = slots.map(
+    (s) => DAY_OPTIONS.find((d) => d.value === s.day)?.label || s.day,
+  )
+  const starts = new Set(slots.map((s) => s.start))
+  const ends = new Set(slots.map((s) => s.end))
+  jobForm.value.scheduleStartTime = starts.size === 1 ? slots[0]?.start || '' : slots[0]?.start || ''
+  jobForm.value.scheduleEndTime = ends.size === 1 ? slots[0]?.end || '' : slots[0]?.end || ''
+}
+
 function buildSchedule() {
+  if (jobForm.value.scheduleSlots.length) {
+    const days = jobForm.value.scheduleDays.join(', ')
+    const time = [jobForm.value.scheduleStartTime, jobForm.value.scheduleEndTime].filter(Boolean).join(' - ')
+    return [days, time].filter(Boolean).join(' | ')
+  }
   const days = jobForm.value.scheduleDays.join(', ')
   const time = [jobForm.value.scheduleStartTime, jobForm.value.scheduleEndTime].filter(Boolean).join(' - ')
   return [days, time].filter(Boolean).join(' | ')
@@ -544,6 +633,7 @@ function fillJobForm(job?: InternshipRecord) {
     locationDetails: locationParts.locationDetails,
     type: job.type || 'On-site',
     duration: job.duration || '486 hours',
+    hostRequiredHours: job.hostRequiredHours != null ? String(job.hostRequiredHours) : '',
     slotsAvailable: Number(job.slotsAvailable || 1),
     status: normalizeJobStatus(job.status),
     allowance: job.allowance || '',
@@ -552,6 +642,12 @@ function fillJobForm(job?: InternshipRecord) {
     scheduleDays: job.scheduleDays?.length ? [...job.scheduleDays] : scheduleParts.scheduleDays,
     scheduleStartTime: job.timeIn || scheduleParts.scheduleStartTime,
     scheduleEndTime: job.timeOut || scheduleParts.scheduleEndTime,
+    scheduleSlots: slotsFromLegacy({
+      scheduleSlots: job.scheduleSlots as ScheduleSlot[] | undefined,
+      scheduleDays: job.scheduleDays?.length ? job.scheduleDays : scheduleParts.scheduleDays,
+      timeIn: job.timeIn || scheduleParts.scheduleStartTime,
+      timeOut: job.timeOut || scheduleParts.scheduleEndTime,
+    }),
     scheduleType: job.scheduleType || 'fixed',
     weeklyHours: job.weeklyHours != null ? String(job.weeklyHours) : '',
     isFlexible: Boolean(job.isFlexible),
@@ -559,6 +655,7 @@ function fillJobForm(job?: InternshipRecord) {
     requiredSkillsText: (job.requiredSkills || job.requirements || []).join(', '),
     internGains: job.internGains || '',
     requiredDocumentsText: (job.requiredDocuments || []).join(', '),
+    requiresResume: job.requiresResume !== false,
     applicationInstructions: job.applicationInstructions || '',
     contactInfo: job.contactInfo || companyContactInfo.value,
     eligibleCoursesText: (job.eligibleCourses || companyAcceptedCourses.value).join(', '),
@@ -581,6 +678,11 @@ function closeJobEditor() {
 
 async function openCreateJobDialog() {
   fillJobForm()
+  // Editor is rendered on the Posted Jobs view — switch there first.
+  currentView.value = 'internships'
+  if (route.name !== 'company-internships') {
+    await router.push({ name: 'company-internships' })
+  }
   await openJobEditor()
 }
 
@@ -614,9 +716,17 @@ async function refreshApplications() {
 async function saveJob() {
   savingJob.value = true
   try {
+    const scheduleError = jobForm.value.scheduleSlots.length
+      ? validateSlots(jobForm.value.scheduleSlots)
+      : null
+    if (scheduleError) {
+      error(scheduleError)
+      savingJob.value = false
+      return
+    }
+    syncScheduleFromSlots(jobForm.value.scheduleSlots)
     const eligibleCourses = asList(jobForm.value.eligibleCoursesText)
     const requiredSkills = asList(jobForm.value.requiredSkillsText)
-    const requiredDocuments = asList(jobForm.value.requiredDocumentsText)
     const payload = {
       companyId: authStore.user?.uid || '',
       companyName: companyName.value,
@@ -626,11 +736,14 @@ async function saveJob() {
       location: buildLocation(),
       type: jobForm.value.type.trim(),
       duration: jobForm.value.duration.trim(),
+      hostRequiredHours: jobForm.value.hostRequiredHours.trim()
+        ? Number(jobForm.value.hostRequiredHours)
+        : null,
       slotsAvailable: Number(jobForm.value.slotsAvailable || 1),
       status: jobForm.value.status,
       eligibleCourses: eligibleCourses.length ? eligibleCourses : companyAcceptedCourses.value,
       requirements: requiredSkills,
-      allowance: jobForm.value.allowance.trim() || undefined,
+      allowance: jobForm.value.allowance.trim() || null,
       startDate: jobForm.value.startDate || undefined,
       endDate: jobForm.value.endDate || undefined,
       schedule: buildSchedule() || undefined,
@@ -639,11 +752,13 @@ async function saveJob() {
       scheduleDays: jobForm.value.scheduleDays,
       timeIn: jobForm.value.scheduleStartTime || undefined,
       timeOut: jobForm.value.scheduleEndTime || undefined,
+      scheduleSlots: jobForm.value.scheduleSlots,
       isFlexible: jobForm.value.isFlexible,
       tasks: jobForm.value.tasks.trim() || undefined,
       requiredSkills: requiredSkills,
       internGains: jobForm.value.internGains.trim() || undefined,
-      requiredDocuments: requiredDocuments,
+      requiredDocuments: ['Endorsement'],
+      requiresResume: false,
       applicationInstructions: jobForm.value.applicationInstructions.trim() || undefined,
       contactInfo: companyContactInfo.value || jobForm.value.contactInfo.trim() || undefined,
     }
@@ -685,8 +800,9 @@ async function confirmDeleteJob() {
   }
 }
 
-function openApplicantProfile(application: ApplicationRecord) {
+function openApplicantProfile(application: ApplicationRecord, mode: 'profile' | 'tracker' = 'profile') {
   selectedApplicant.value = application
+  applicantDialogMode.value = mode
   applicantDialogOpen.value = true
 }
 
@@ -781,15 +897,31 @@ watch(
     <div class="space-y-6">
       <template v-if="currentView === 'dashboard'">
         <section class="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-          <div class="border-b border-border bg-gradient-to-r from-emerald-50/80 via-card to-accent/60 px-6 py-6 sm:px-8">
+          <div class="border-b border-border bg-gradient-to-r from-emerald-50/80 dark:from-emerald-950/40 via-card to-accent/60 px-6 py-6 sm:px-8">
             <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div class="flex items-start gap-4">
-                <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700">
+                <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200">
                   <Building2 class="h-5 w-5" />
                 </div>
                 <div>
                   <p class="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">Overview</p>
-                  <h2 class="mt-1 text-2xl font-semibold tracking-tight text-foreground">{{ companyName }}</h2>
+                  <div class="mt-1 flex flex-wrap items-center gap-2">
+                    <h2 class="text-2xl font-semibold tracking-tight text-foreground">{{ companyName }}</h2>
+                    <Badge variant="secondary">
+                      {{ hostOrgLabel }}
+                    </Badge>
+                    <Badge
+                      :variant="
+                        String(authStore.user?.verificationStatus || '').toLowerCase() === 'approved'
+                          ? 'success'
+                          : String(authStore.user?.verificationStatus || '').toLowerCase() === 'rejected'
+                            ? 'destructive'
+                            : 'warning'
+                      "
+                    >
+                      {{ verificationStatusLabel(String(authStore.user?.verificationStatus || 'pending')) }}
+                    </Badge>
+                  </div>
                   <p class="mt-1 text-sm text-muted-foreground">
                     {{ dashboardStats[2]?.value || 0 }} applicant{{ (dashboardStats[2]?.value || 0) === 1 ? '' : 's' }} need review ·
                     {{ dashboardStats[0]?.value || 0 }} open position{{ (dashboardStats[0]?.value || 0) === 1 ? '' : 's' }}
@@ -871,8 +1003,8 @@ watch(
                       {{ item.internshipTitle || 'Untitled role' }} · {{ item.schoolName || 'School' }}
                     </p>
                   </div>
-                  <Button size="sm" variant="outline" class="shrink-0" @click="openApplicantProfile(item)">
-                    Review
+                  <Button size="sm" variant="outline" class="shrink-0" @click="openApplicantProfile(item, 'tracker')">
+                    Open tracker
                   </Button>
                 </div>
               </template>
@@ -890,7 +1022,7 @@ watch(
                 v-for="action in compactQuickActions"
                 :key="action.label"
                 type="button"
-                class="flex items-center gap-3 rounded-xl border border-border px-4 py-3 text-left transition hover:border-emerald-200 hover:bg-emerald-50/60"
+                class="flex items-center gap-3 rounded-xl border border-border px-4 py-3 text-left transition hover:border-emerald-800 hover:bg-emerald-950/30"
                 @click="action.action()"
               >
                 <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-foreground">
@@ -960,7 +1092,9 @@ watch(
                 <section v-if="currentJobStep === 'basic'" class="grid gap-4 rounded-2xl border border-border bg-card p-5 sm:grid-cols-2">
                   <div class="sm:col-span-2">
                     <p class="text-sm font-semibold text-foreground">Basic Information</p>
-                    <p class="mt-1 text-sm text-muted-foreground">Start with the subject or title, then confirm the company profile details and Cavite location.</p>
+                    <p class="mt-1 text-sm text-muted-foreground">
+                      Start with the subject or title, then confirm the {{ hostOrgLabel.toLowerCase() }} profile details and Cavite location.
+                    </p>
                   </div>
                   <FormItem class="sm:col-span-2">
                     <FormLabel for="jobTitle">Subject or Title</FormLabel>
@@ -969,13 +1103,13 @@ watch(
                     </FormControl>
                   </FormItem>
                   <FormItem>
-                    <FormLabel for="jobCompanyName">Company Name</FormLabel>
+                    <FormLabel for="jobCompanyName">{{ hostOrgLabel }} Name</FormLabel>
                     <FormControl>
                       <Input id="jobCompanyName" v-model="jobForm.companyName" readonly class="bg-muted text-muted-foreground" />
                     </FormControl>
                   </FormItem>
                   <FormItem>
-                    <FormLabel for="jobIndustry">Industry Based on Company Profile</FormLabel>
+                    <FormLabel for="jobIndustry">Industry Based on {{ hostOrgLabel }} Profile</FormLabel>
                     <FormControl>
                       <Input id="jobIndustry" v-model="jobForm.industry" readonly class="bg-muted text-muted-foreground" />
                     </FormControl>
@@ -1001,30 +1135,21 @@ watch(
                   <FormItem>
                     <FormLabel for="jobLocationArea">City or Municipality in Cavite</FormLabel>
                     <FormControl>
-                      <select
-                        id="jobLocationArea"
-                        v-model="jobForm.locationArea"
-                        class="flex h-12 w-full rounded-xl border border-input bg-background px-4 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                      >
+                      <Select id="jobLocationArea" v-model="jobForm.locationArea">
                         <option value="">Select a location</option>
                         <optgroup v-for="group in caviteLocationGroups" :key="group.label" :label="group.label">
                           <option v-for="option in group.options" :key="option" :value="option">{{ option }}</option>
                         </optgroup>
-                      </select>
+                      </Select>
                     </FormControl>
                   </FormItem>
                   <FormItem>
                     <FormLabel for="jobBarangay">Barangay</FormLabel>
                     <FormControl>
-                      <select
-                        id="jobBarangay"
-                        v-model="jobForm.barangay"
-                        class="flex h-12 w-full rounded-xl border border-input bg-background px-4 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                        :disabled="!jobForm.locationArea"
-                      >
+                      <Select id="jobBarangay" v-model="jobForm.barangay" :disabled="!jobForm.locationArea">
                         <option value="">{{ availableBarangays.length ? 'Select a barangay' : 'Select a city or municipality first' }}</option>
                         <option v-for="option in availableBarangays" :key="option" :value="option">{{ option }}</option>
-                      </select>
+                      </Select>
                     </FormControl>
                   </FormItem>
                   <FormItem class="sm:col-span-2">
@@ -1039,19 +1164,31 @@ watch(
                   <div class="grid gap-4 rounded-2xl border border-border bg-card p-5 sm:grid-cols-2 lg:grid-cols-3">
                   <div class="sm:col-span-2 lg:col-span-3">
                     <p class="text-sm font-semibold text-foreground">Internship Details</p>
-                    <p class="mt-1 text-sm text-muted-foreground">Keep the duration, slots, and allowance, but use guided date and schedule inputs to avoid repetitive typing.</p>
+                    <p class="mt-1 text-sm text-muted-foreground">Set the duration and slots. Allowance can be left blank.</p>
                   </div>
                   <FormItem>
                     <FormLabel for="jobDuration">Duration</FormLabel>
                     <FormControl>
-                      <select
-                        id="jobDuration"
-                        v-model="jobForm.duration"
-                        class="flex h-12 w-full rounded-xl border border-input bg-background px-4 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                      >
+                      <Select id="jobDuration" v-model="jobForm.duration">
                         <option v-for="option in commonDurationOptions" :key="option" :value="option">{{ option }}</option>
-                      </select>
+                      </Select>
                     </FormControl>
+                  </FormItem>
+                  <FormItem class="sm:col-span-2 lg:col-span-2">
+                    <FormLabel for="jobHostHours">Hours offered by {{ hostOrgLabel.toLowerCase() }} (optional)</FormLabel>
+                    <FormControl>
+                      <Input
+                        id="jobHostHours"
+                        v-model="jobForm.hostRequiredHours"
+                        type="number"
+                        min="1"
+                        max="10000"
+                        placeholder="e.g. 300"
+                      />
+                    </FormControl>
+                    <p class="mt-1 text-xs text-muted-foreground">
+                      Optional. If this differs from the student’s school course requirement, a hours agreement is created when they apply. Leave blank for no comparison. Max 10,000.
+                    </p>
                   </FormItem>
                   <FormItem>
                     <FormLabel for="jobSlots">Slots</FormLabel>
@@ -1060,10 +1197,13 @@ watch(
                     </FormControl>
                   </FormItem>
                   <FormItem>
-                    <FormLabel for="jobAllowance">Allowance</FormLabel>
+                    <FormLabel for="jobAllowance">Allowance (optional)</FormLabel>
                     <FormControl>
                       <Input id="jobAllowance" v-model="jobForm.allowance" placeholder="PHP 5,000 / month" />
                     </FormControl>
+                    <p class="mt-1 text-xs text-muted-foreground">
+                      Leave blank if this posting has no allowance.
+                    </p>
                   </FormItem>
                   <FormItem>
                     <FormLabel for="jobStartDate">Start Date</FormLabel>
@@ -1105,45 +1245,25 @@ watch(
 
                   <div class="grid gap-4 rounded-2xl border border-border bg-card p-5 sm:grid-cols-2">
                     <div class="sm:col-span-2">
-                      <p class="text-sm font-semibold text-foreground">Schedule</p>
-                      <p class="mt-1 text-sm text-muted-foreground">Pick the internship days and time range directly.</p>
+                      <p class="text-sm font-semibold text-foreground">Default schedule</p>
+                      <p class="mt-1 text-sm text-muted-foreground">
+                        Days and times copied to accepted students. Leave empty to show “Not set” on the posting.
+                      </p>
                     </div>
-                    <div class="sm:col-span-2 grid gap-3 md:grid-cols-4 xl:grid-cols-7">
-                      <button
-                        v-for="day in weekdayOptions"
-                        :key="day"
-                        type="button"
-                        class="rounded-2xl border px-4 py-3 text-sm font-medium transition"
-                        :class="jobForm.scheduleDays.includes(day) ? 'border-primary/40 bg-accent text-foreground' : 'border-border bg-muted text-foreground hover:border-border'"
-                        @click="toggleScheduleDay(day)"
-                      >
-                        {{ day }}
-                      </button>
+                    <div class="sm:col-span-2">
+                      <ScheduleEditor
+                        :model-value="jobForm.scheduleSlots"
+                        @update:model-value="syncScheduleFromSlots"
+                      />
                     </div>
-                    <FormItem>
-                      <FormLabel for="jobScheduleStart">Start Time</FormLabel>
-                      <FormControl>
-                        <Input id="jobScheduleStart" v-model="jobForm.scheduleStartTime" type="time" />
-                      </FormControl>
-                    </FormItem>
-                    <FormItem>
-                      <FormLabel for="jobScheduleEnd">End Time</FormLabel>
-                      <FormControl>
-                        <Input id="jobScheduleEnd" v-model="jobForm.scheduleEndTime" type="time" />
-                      </FormControl>
-                    </FormItem>
                     <FormItem>
                       <FormLabel for="jobScheduleType">Schedule Type</FormLabel>
                       <FormControl>
-                        <select
-                          id="jobScheduleType"
-                          v-model="jobForm.scheduleType"
-                          class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                        >
+                        <Select id="jobScheduleType" v-model="jobForm.scheduleType">
                           <option value="fixed">Fixed</option>
                           <option value="rotating">Rotating</option>
                           <option value="flexible">Flexible</option>
-                        </select>
+                        </Select>
                       </FormControl>
                     </FormItem>
                     <FormItem>
@@ -1243,13 +1363,15 @@ watch(
                 <section v-else-if="currentJobStep === 'programs'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
                   <div class="sm:col-span-2">
                     <p class="text-sm font-semibold text-foreground">Accepted Programs</p>
-                    <p class="mt-1 text-sm text-muted-foreground">These courses come from the company account so you only choose which of your accepted programs apply to this post.</p>
+                    <p class="mt-1 text-sm text-muted-foreground">
+                      These courses come from the {{ hostOrgLabel.toLowerCase() }} account so you only choose which of your accepted programs apply to this post.
+                    </p>
                   </div>
                   <div
                     v-if="companyAcceptedCourses.length"
                     class="rounded-2xl border border-border bg-accent px-4 py-3 text-sm text-foreground"
                   >
-                    Company profile courses: {{ companyAcceptedCourses.join(', ') }}
+                    {{ hostOrgLabel }} profile courses: {{ companyAcceptedCourses.join(', ') }}
                   </div>
                   <div v-if="companyAcceptedCourses.length" class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     <button
@@ -1266,8 +1388,8 @@ watch(
                       </p>
                     </button>
                   </div>
-                  <div v-else class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                    No accepted courses are saved on the company account yet. Add them in the company settings page first.
+                  <div v-else class="rounded-2xl border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 px-4 py-3 text-sm text-amber-900">
+                    No accepted courses are saved on the {{ hostOrgLabel.toLowerCase() }} account yet. Add them in settings first.
                   </div>
                   <div v-if="asList(jobForm.eligibleCoursesText).length" class="rounded-2xl border border-border bg-muted px-4 py-3 text-sm text-foreground">
                     Selected for this post: {{ asList(jobForm.eligibleCoursesText).join(', ') }}
@@ -1279,42 +1401,17 @@ watch(
                     <p class="text-sm font-semibold text-foreground">Requirements</p>
                     <p class="mt-1 text-sm text-muted-foreground">Document requirements, how to apply, and who schools or students should contact.</p>
                   </div>
-                  <FormItem class="sm:col-span-2">
-                    <FormLabel for="jobRequiredDocuments">Required Documents</FormLabel>
-                    <FormControl>
-                      <div class="space-y-4 rounded-2xl border border-amber-100 bg-amber-50/70 p-4">
-                        <div class="flex flex-col gap-3 sm:flex-row">
-                          <Input
-                            id="jobRequiredDocuments"
-                            v-model="chipInput.requiredDocument"
-                            class="bg-card"
-                            placeholder="Add a document like Resume, MOA, or Endorsement Letter"
-                            @keydown.enter.prevent="commitChipInput('requiredDocument')"
-                          />
-                          <Button type="button" variant="outline" class="shrink-0 bg-card" @click="commitChipInput('requiredDocument')">
-                            Add Document
-                          </Button>
-                        </div>
-                        <div v-if="asList(jobForm.requiredDocumentsText).length" class="flex flex-wrap gap-2">
-                          <span
-                            v-for="document in asList(jobForm.requiredDocumentsText)"
-                            :key="document"
-                            class="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-card px-3 py-1.5 text-xs font-semibold text-amber-700 shadow-sm"
-                          >
-                            {{ document }}
-                            <button
-                              type="button"
-                              class="rounded-full px-1 text-amber-700 transition hover:bg-amber-100 hover:text-amber-900"
-                              @click="removeListItem('requiredDocumentsText', document)"
-                            >
-                              x
-                            </button>
-                          </span>
-                        </div>
-                        <p v-else class="text-sm text-muted-foreground">No document requirements added yet.</p>
-                      </div>
-                    </FormControl>
-                  </FormItem>
+                  <div class="sm:col-span-2 rounded-2xl border border-border bg-muted px-4 py-4 text-sm text-foreground">
+                    <p class="font-semibold">Required document</p>
+                    <p class="mt-1 text-muted-foreground">
+                      Applicants must upload an <span class="font-medium text-foreground">Endorsement</span> letter.
+                      No other documents can be required on this posting. A student resume may still appear from their
+                      profile as optional information for your review.
+                    </p>
+                    <p class="mt-3 inline-flex rounded-full border border-border bg-background px-3 py-1 text-xs font-semibold">
+                      Endorsement
+                    </p>
+                  </div>
                   <FormItem class="sm:col-span-2">
                     <FormLabel for="jobApplicationInstructions">How to Apply</FormLabel>
                     <FormControl>
@@ -1477,27 +1574,16 @@ watch(
                     </TableCell>
                     <TableCell>
                       <div class="flex justify-end gap-2">
-                        <Button variant="ghost" class="gap-2" @click="openApplicantProfile(applicant)">
+                        <Button variant="ghost" class="gap-2" @click="openApplicantProfile(applicant, 'profile')">
                           <Eye class="h-4 w-4" />
                           View Profile
                         </Button>
                         <Button
-                          class="gap-2"
-                          :disabled="processingApplicantId === applicant.id || !canCompanyReview(applicant.status)"
-                          @click="updateApplicant(applicant.id, 'accepted')"
-                        >
-                          <LoaderCircle v-if="processingApplicantId === applicant.id && normalizeApplicationStatus(applicant.status) !== 'accepted'" class="h-4 w-4 animate-spin" />
-                          <CheckCircle2 v-else class="h-4 w-4" />
-                          Accept
-                        </Button>
-                        <Button
                           variant="outline"
                           class="gap-2"
-                          :disabled="processingApplicantId === applicant.id || !canCompanyReview(applicant.status)"
-                          @click="updateApplicant(applicant.id, 'rejected')"
+                          @click="openApplicantProfile(applicant, 'tracker')"
                         >
-                          <XCircle class="h-4 w-4" />
-                          Reject
+                          Open tracker
                         </Button>
                       </div>
                     </TableCell>
@@ -1518,11 +1604,21 @@ watch(
     <Dialog v-model:open="applicantDialogOpen">
       <template #default="{ close }">
         <DialogHeader>
-          <DialogTitle>Applicant Profile</DialogTitle>
-          <p class="text-sm text-muted-foreground">Review the applicant details before you decide how to move their application forward.</p>
+          <DialogTitle>{{ applicantDialogMode === 'profile' ? 'Applicant profile' : 'Application tracker' }}</DialogTitle>
+          <p class="text-sm text-muted-foreground">
+            {{
+              applicantDialogMode === 'profile'
+                ? 'Personal and school details for this applicant.'
+                : 'Progress stages for this application.'
+            }}
+          </p>
         </DialogHeader>
 
-        <div v-if="selectedApplicant" class="mt-6 grid gap-4 sm:grid-cols-2">
+        <div v-if="selectedApplicant && applicantDialogMode === 'tracker' && applicantStepper" class="mt-6 rounded-2xl border border-border/70 p-4">
+          <ApplicationStatusStepper :result="applicantStepper" />
+        </div>
+
+        <div v-if="selectedApplicant && applicantDialogMode === 'profile'" class="mt-6 grid gap-4 sm:grid-cols-2">
           <div class="rounded-2xl bg-muted p-4">
             <p class="text-sm font-medium text-muted-foreground">Intern Name</p>
             <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedApplicant.studentName || 'Not provided' }}</p>
@@ -1551,19 +1647,16 @@ watch(
           </div>
         </div>
 
-        <div v-if="selectedApplicant" class="mt-6 space-y-4">
-          <ApplicationInterviewPanel :application-id="selectedApplicant.id" mode="manage" />
-          <ApplicationAssessmentPanel :application-id="selectedApplicant.id" />
+        <div v-if="selectedApplicant && applicantDialogMode === 'tracker'" class="mt-6">
+          <ApplicationTrackerPanel
+            :application-id="selectedApplicant.id"
+            mode="manage"
+            @updated="onTrackerUpdated"
+          />
         </div>
 
         <div class="mt-6 flex justify-end gap-3">
           <Button variant="outline" @click="close">Close</Button>
-          <Button
-            :disabled="!selectedApplicant || processingApplicantId === selectedApplicant?.id || !canCompanyReview(selectedApplicant?.status)"
-            @click="selectedApplicant && updateApplicant(selectedApplicant.id, 'accepted'); close()"
-          >
-            Accept
-          </Button>
         </div>
       </template>
     </Dialog>
@@ -1578,7 +1671,7 @@ watch(
         <div v-if="selectedJob" class="mt-6 space-y-6">
           <div class="grid gap-4 sm:grid-cols-2">
             <div class="rounded-2xl bg-muted p-4">
-              <p class="text-sm font-medium text-muted-foreground">Company</p>
+              <p class="text-sm font-medium text-muted-foreground">{{ hostOrgLabel }}</p>
               <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedJob.companyName || 'Not provided' }}</p>
             </div>
             <div class="rounded-2xl bg-muted p-4">
@@ -1609,7 +1702,7 @@ watch(
             </div>
             <div class="rounded-2xl bg-muted p-4">
               <p class="text-sm font-medium text-muted-foreground">Allowance</p>
-              <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedJob.allowance || 'Not provided' }}</p>
+              <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedJob.allowance?.trim() || 'No allowance' }}</p>
             </div>
             <div class="rounded-2xl bg-muted p-4">
               <p class="text-sm font-medium text-muted-foreground">Start Date</p>
@@ -1641,7 +1734,7 @@ watch(
             </div>
             <div class="rounded-2xl bg-muted p-4 sm:col-span-2">
               <p class="text-sm font-medium text-muted-foreground">Required Documents</p>
-              <p class="mt-2 text-sm text-foreground">{{ (selectedJob.requiredDocuments || []).join(', ') || 'Not provided' }}</p>
+              <p class="mt-2 text-sm text-foreground">Endorsement</p>
             </div>
             <div class="rounded-2xl bg-muted p-4 sm:col-span-2">
               <p class="text-sm font-medium text-muted-foreground">Intern Gains</p>
@@ -1670,7 +1763,7 @@ watch(
     <AlertDialog
       :open="!!pendingDeleteJobId"
       title="Delete job posting?"
-      description="This will permanently remove the selected job posting from your company workspace."
+      description="This will permanently remove the selected job posting from your organization workspace."
       action-label="Delete"
       @update:open="(open) => { if (!open) pendingDeleteJobId = null }"
       @action="confirmDeleteJob"

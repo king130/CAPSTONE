@@ -1,6 +1,33 @@
 import { apiFetch, getToken } from './http'
 import { createSharedPollingResource } from './sharedPolling'
 
+export interface HoursAgreementRecord {
+  id: string
+  applicationId: string
+  status: 'pending' | 'agreed' | 'declined' | string
+  schoolRequiredHours: number
+  hostOfferedHours: number
+  proposedHours?: number | null
+  agreedHours?: number | null
+  proposedBySide?: string | null
+  schoolConfirmed?: boolean
+  hostConfirmed?: boolean
+  note?: string | null
+  hasApprovedDtr?: boolean
+  history?: Array<{
+    id: string
+    action: string
+    fromStatus?: string | null
+    toStatus?: string | null
+    proposedHours?: number | null
+    agreedHours?: number | null
+    changedByName?: string | null
+    changedBySide?: string | null
+    note?: string | null
+    createdAt?: string | null
+  }>
+}
+
 export interface ApplicationRecord {
   id: string
   internshipId: string
@@ -8,16 +35,59 @@ export interface ApplicationRecord {
   companyId?: string
   companyName?: string
   schoolName?: string
+  hostType?: string | null
+  hostName?: string | null
   internshipTitle?: string
   studentName?: string
   studentEmail?: string
   studentCourse?: string
   status: string
+  trackerStage?: string | null
   resume?: string | null
   documents?: string[] | null
   documentsPending?: boolean
+  requiredOjtHours?: number | null
+  effectiveRequiredHours?: number | null
+  hoursMismatch?: boolean
+  schoolRequiredHours?: number | null
+  hostRequiredHours?: number | null
+  hoursAgreement?: HoursAgreementRecord | null
   createdAt?: string
   updatedAt?: string
+}
+
+export async function fetchHoursAgreement(applicationId: string) {
+  return apiFetch<{ data: {
+    hoursMismatch: boolean
+    schoolRequiredHours: number | null
+    hostRequiredHours: number | null
+    effectiveRequiredHours: number | null
+    agreement: HoursAgreementRecord | null
+  } }>(`/applications/${applicationId}/hours-agreement`)
+}
+
+export async function proposeHoursAgreement(
+  applicationId: string,
+  payload: { hours: number; source?: 'school' | 'host' | 'custom'; note?: string; reason?: string },
+) {
+  return apiFetch<{ data: { agreement: HoursAgreementRecord | null } }>(
+    `/applications/${applicationId}/hours-agreement/propose`,
+    { method: 'POST', body: JSON.stringify(payload) },
+  )
+}
+
+export async function confirmHoursAgreement(applicationId: string, note?: string) {
+  return apiFetch<{ data: { agreement: HoursAgreementRecord | null } }>(
+    `/applications/${applicationId}/hours-agreement/confirm`,
+    { method: 'POST', body: JSON.stringify({ note }) },
+  )
+}
+
+export async function declineHoursAgreement(applicationId: string, note?: string) {
+  return apiFetch<{ data: { agreement: HoursAgreementRecord | null } }>(
+    `/applications/${applicationId}/hours-agreement/decline`,
+    { method: 'POST', body: JSON.stringify({ note }) },
+  )
 }
 
 async function loadAllApplications(): Promise<ApplicationRecord[]> {
@@ -95,12 +165,15 @@ export function subscribeCompanyApplicationsByInternships(
   })
 }
 
-export async function submitApplication(payload: Omit<ApplicationRecord, 'id'>): Promise<string> {
+export async function submitApplication(
+  payload: Omit<ApplicationRecord, 'id'> & { endorsementUrl?: string | null },
+): Promise<string> {
   const res = await apiFetch<{ data: { id: string } }>('/applications', {
     method: 'POST',
     body: JSON.stringify({
       internship_id: Number(payload.internshipId),
       resume_url: payload.resume ?? undefined,
+      endorsement_url: payload.endorsementUrl ?? undefined,
       documents: payload.documents ?? undefined,
     }),
   })

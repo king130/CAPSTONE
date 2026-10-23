@@ -15,10 +15,18 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        $this->call([
+        $seeders = [
             RbacSeeder::class,
             ContractTypeSeeder::class,
-            DemoAccountsSeeder::class,
-        ]);
+        ];
+
+        // Demo accounts (including Municipal Hall demo) are local/testing only.
+        if (app()->environment(['local', 'testing'])) {
+            $seeders[] = DemoAccountsSeeder::class;
+            $seeders[] = CaviteDirectorySeeder::class;
+            $seeders[] = PublicHolidaySeeder::class;
+        }
+
+        $this->call($seeders);
     }
 }

@@ -2,9 +2,11 @@
 
 namespace App\Services\Contracts;
 
+use App\Models\Company;
 use App\Models\Contract;
 use App\Models\ContractType;
 use App\Models\Organization;
+use App\Models\School;
 use App\Models\User;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Arr;
@@ -39,7 +41,7 @@ class ContractRequestService
 
         $dynamicFields = $this->normalizeDynamicFields($payload['dynamic_fields'] ?? []);
         $this->validateDynamicFields($contractType, $dynamicFields);
-        $this->assertNoPendingDuplicate($actor, $partner, $requesterRole);
+        $this->assertNoDuplicateRelationship($actor, $partner, $requesterRole);
 
         return DB::transaction(function () use ($actor, $partner, $requesterOrg, $partnerOrg, $requesterRole, $payload, $files, $dynamicFields, $contractType) {
             $contract = Contract::query()->create([
@@ -98,17 +100,41 @@ class ContractRequestService
             : (int) ($payload['school_id'] ?? $payload['schoolId'] ?? 0);
 
         $partnerRole = $appRole === 'school' ? 'company' : 'school';
+        $partnerRoles = $partnerRole === 'company'
+            ? \App\Support\OrganizationTypes::hostTypes()
+            : ['school'];
 
         $partner = User::query()
             ->with(['organizationMemberships.organization', 'school', 'company'])
             ->whereKey($partnerId)
-            ->where('role', $partnerRole)
+            ->whereIn('role', $partnerRoles)
             ->where('is_active', true)
             ->first();
 
         if (! $partner) {
             throw ValidationException::withMessages([
                 'partner' => 'The selected partner could not be found.',
+            ]);
+        }
+
+        $partnerOrg = $partner->activeOrganization();
+        $verificationStatus = null;
+        if ($partnerRole === 'school') {
+            $verificationStatus = $partner->organizationSchool()?->verification_status
+                ?? School::query()->where('organization_id', $partnerOrg?->id)->value('verification_status');
+        } else {
+            if ($partnerOrg && ! \App\Support\OrganizationTypes::isHostType($partnerOrg->type)) {
+                throw ValidationException::withMessages([
+                    'partner' => 'The selected partner could not be found.',
+                ]);
+            }
+            $verificationStatus = $partner->organizationCompany()?->verification_status
+                ?? Company::query()->where('organization_id', $partnerOrg?->id)->value('verification_status');
+        }
+
+        if (strtolower(trim((string) ($verificationStatus ?? 'pending'))) !== 'approved') {
+            throw ValidationException::withMessages([
+                'partner' => 'The selected partner organization is not approved yet.',
             ]);
         }
 
@@ -218,21 +244,32 @@ class ContractRequestService
         return $organization?->name ?? $fallback->name;
     }
 
-    private function assertNoPendingDuplicate(User $actor, User $partner, string $requesterRole): void
+    /**
+     * Block a new request when the same School↔Company pair already has a pending
+     * or active agreement (matches directory selectable rules; either request direction).
+     */
+    private function assertNoDuplicateRelationship(User $actor, User $partner, string $requesterRole): void
     {
         $schoolUserId = $requesterRole === 'school' ? $this->organizationOwnerId($actor->activeOrganization(), $actor) : $partner->id;
         $companyUserId = $requesterRole === 'company' ? $this->organizationOwnerId($actor->activeOrganization(), $actor) : $partner->id;
 
-        $exists = Contract::query()
+        $blocking = Contract::query()
             ->where('school_user_id', $schoolUserId)
             ->where('company_user_id', $companyUserId)
-            ->where('status', 'pending')
-            ->exists();
+            ->whereIn('status', ['pending', 'active'])
+            ->orderByRaw("CASE WHEN status = 'active' THEN 0 ELSE 1 END")
+            ->first(['id', 'status']);
 
-        if ($exists) {
-            throw ValidationException::withMessages([
-                'partner' => 'There is already a pending contract request between these organizations.',
-            ]);
+        if (! $blocking) {
+            return;
         }
+
+        $message = $blocking->status === 'active'
+            ? 'There is already an active agreement between these organizations.'
+            : 'There is already a pending contract request between these organizations.';
+
+        throw ValidationException::withMessages([
+            'partner' => $message,
+        ]);
     }
 }

@@ -1,13 +1,14 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { AUTH_DISABLED } from '@/config/auth'
+import { firstAllowedOrgPath, routePermissionRequirements } from '@/layouts/navigation'
 import { useAuthStore } from '@/stores/auth'
 import type { UserProfile, UserRole } from '@/services/auth'
 
 function needsOrganizationVerification(user: UserProfile | null | undefined): boolean {
   if (!user) return false
-  if (user.role !== 'school' && user.role !== 'company') return false
+  if (user.role !== 'school' && user.role !== 'company' && user.role !== 'municipal_hall') return false
   const status = String(user.verificationStatus || 'pending').toLowerCase()
-  return status === 'pending' || status === 'rejected'
+  return status === 'pending' || status === 'under_review' || status === 'rejected'
 }
 
 function isOrganizationVerificationAllowedRoute(name: string | symbol | null | undefined, path: string): boolean {
@@ -43,13 +44,15 @@ function getRoleDashboard(role: UserRole, user?: UserProfile | null): string {
     return '/organization-verification'
   }
 
+  if (role === 'school' || role === 'company' || role === 'municipal_hall') {
+    // Municipal Hall reuses the company host workspace/nav.
+    const navRole = role === 'municipal_hall' ? 'company' : role
+    return firstAllowedOrgPath(navRole, user?.memberships?.[0]?.permissions ?? [])
+  }
+
   switch (role) {
     case 'admin':
       return '/admin/overview'
-    case 'company':
-      return '/dashboard'
-    case 'school':
-      return '/school'
     case 'student':
       return '/intern'
     case 'guest':
@@ -89,7 +92,7 @@ const router = createRouter({
       path: '/internships/:id',
       name: 'internship-detail',
       component: () => import('@/views/InternshipDetail.vue'),
-      meta: { excludeRoles: ['school'] },
+      meta: { excludeRoles: [] },
     },
     {
       path: '/org/:id',
@@ -107,6 +110,8 @@ const router = createRouter({
     { path: '/settings', name: 'settings', component: () => import('@/views/Settings.vue'), meta: { requiresAuth: true, excludeRoles: ['guest'] } },
     { path: '/billing', name: 'organization-subscription', component: () => import('@/views/OrganizationSubscription.vue'), meta: { requiresAuth: true, excludeRoles: ['guest', 'student', 'admin'] } },
     { path: '/ojt-hours', name: 'ojt-hours', component: () => import('@/views/OJTHours.vue'), meta: { requiresAuth: true, excludeRoles: ['guest'] } },
+    { path: '/school/dtr', name: 'school-dtr', component: () => import('@/views/DtrSubmissions.vue'), meta: { requiresAuth: true, requiresRole: 'school' } },
+    { path: '/dashboard/dtr', name: 'company-dtr', component: () => import('@/views/DtrSubmissions.vue'), meta: { requiresAuth: true, requiresRole: 'company' } },
     {
       path: '/agreements',
       name: 'agreements',
@@ -141,9 +146,15 @@ const router = createRouter({
     // Role-specific dashboards
     { path: '/dashboard', name: 'dashboard', component: () => import('@/views/company/Company.vue'), meta: { requiresAuth: true, requiresRole: 'company' } },
     { path: '/dashboard/jobs', name: 'company-internships', component: () => import('@/views/company/Company.vue'), meta: { requiresAuth: true, requiresRole: 'company' } },
+    { path: '/dashboard/schools', name: 'company-opportunities', component: () => import('@/views/OpportunitiesDirectory.vue'), meta: { requiresAuth: true, requiresRole: 'company' } },
     { path: '/dashboard/applicants', name: 'company-applicants', component: () => import('@/views/company/Company.vue'), meta: { requiresAuth: true, requiresRole: 'company' } },
     { path: '/register/company', name: 'register-company', component: () => import('@/views/RegisterSimple.vue') },
     { path: '/register/school', name: 'register-school', component: () => import('@/views/RegisterSimple.vue') },
+    {
+      path: '/register/municipal-hall',
+      name: 'register-municipal-hall',
+      component: () => import('@/views/RegisterSimple.vue'),
+    },
     { path: '/school', name: 'school', component: () => import('@/views/school/School.vue'), meta: { requiresAuth: true, requiresRole: 'school' } },
     { path: '/school/interns', name: 'school-interns', component: () => import('@/views/school/School.vue'), meta: { requiresAuth: true, requiresRole: 'school' } },
     { path: '/school/opportunities', name: 'school-opportunities', component: () => import('@/views/school/School.vue'), meta: { requiresAuth: true, requiresRole: 'school' } },
@@ -205,6 +216,28 @@ const router = createRouter({
           meta: { requiresAuth: true, requiresRole: 'admin', layoutTitle: 'Subscription Plans', navKey: 'admin-subscriptions' },
         },
         {
+          path: 'organization-subscriptions',
+          name: 'admin-organization-subscriptions',
+          component: () => import('@/views/admin/OrganizationSubscriptions.vue'),
+          meta: {
+            requiresAuth: true,
+            requiresRole: 'admin',
+            layoutTitle: 'Org Subscriptions',
+            navKey: 'admin-organization-subscriptions',
+          },
+        },
+        {
+          path: 'holidays',
+          name: 'admin-holidays',
+          component: () => import('@/views/admin/PublicHolidays.vue'),
+          meta: {
+            requiresAuth: true,
+            requiresRole: 'admin',
+            layoutTitle: 'Public Holidays',
+            navKey: 'admin-holidays',
+          },
+        },
+        {
           path: 'settings',
           alias: 'pricing',
           name: 'admin-settings',
@@ -216,20 +249,22 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   // Auth disabled: allow all routes without checks
   if (AUTH_DISABLED) {
     return true
   }
 
   const authStore = useAuthStore()
-  
-  // CRITICAL: Block routing if auth is still initializing
+
+  // Wait for auth bootstrap instead of aborting (return false left a blank RouterView).
   if (authStore.initializing) {
-    console.warn('⚠️ Blocking navigation - auth still initializing')
-    return false
+    const deadline = Date.now() + 15_000
+    while (authStore.initializing && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 40))
+    }
   }
-  
+
   const isAuthenticated = !!authStore.user
   const userRole = authStore.user?.role
   const mustChangePassword = authStore.user?.mustChangePassword === true
@@ -257,13 +292,8 @@ router.beforeEach((to) => {
       return { name: 'organization-verification' }
     }
 
-    if (
-      !needsOrganizationVerification(authStore.user) &&
-      to.name === 'organization-verification' &&
-      (userRole === 'school' || userRole === 'company')
-    ) {
-      return { path: getRoleDashboard(userRole, authStore.user) }
-    }
+    // Approved organizations may still open verification for optional document upload
+    // (non-blocking missing-docs notice). Do not force-redirect them away.
 
     // Redirect authenticated users away from login/register
     if (to.name === 'login' || to.name === 'register') {
@@ -281,12 +311,25 @@ router.beforeEach((to) => {
       return { path: getRoleDashboard(userRole, authStore.user) }
     }
 
-    // Check if route excludes certain roles
-    if (to.meta.excludeRoles && userRole) {
+    // Check if route excludes certain roles.
+    // Authenticated users with null/undefined role are product Guests (API returns role: null).
+    if (to.meta.excludeRoles) {
       const excludedRoles = to.meta.excludeRoles as string[]
-      if (excludedRoles.includes(userRole)) {
-        console.log(`🚫 Access denied: ${userRole} is excluded from this route`)
-        return { path: getRoleDashboard(userRole, authStore.user) }
+      const roleForExclusion = !userRole || userRole === 'guest' ? 'guest' : userRole
+      if (excludedRoles.includes(roleForExclusion)) {
+        console.log(`🚫 Access denied: ${roleForExclusion} is excluded from this route`)
+        return { path: getRoleDashboard(userRole ?? null, authStore.user) }
+      }
+    }
+
+    if ((userRole === 'school' || userRole === 'company') && typeof to.name === 'string') {
+      const requiredPermissions = routePermissionRequirements(to.name)
+      const assigned = authStore.user?.memberships?.[0]?.permissions ?? []
+      if (requiredPermissions && !assigned.includes('*') && !requiredPermissions.some((key) => assigned.includes(key))) {
+        const fallback = getRoleDashboard(userRole, authStore.user)
+        if (to.path !== fallback) {
+          return { path: fallback }
+        }
       }
     }
 

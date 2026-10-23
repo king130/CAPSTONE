@@ -14,6 +14,8 @@ class ApplicationAssessment extends Model
         'rubric_scores',
         'overall_score',
         'comments',
+        'locked_at',
+        'lock_reason',
     ];
 
     protected function casts(): array
@@ -21,7 +23,13 @@ class ApplicationAssessment extends Model
         return [
             'rubric_scores' => 'array',
             'overall_score' => 'decimal:2',
+            'locked_at' => 'datetime',
         ];
+    }
+
+    public function isLocked(): bool
+    {
+        return $this->locked_at !== null;
     }
 
     public function application(): BelongsTo

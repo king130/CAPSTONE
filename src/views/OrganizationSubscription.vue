@@ -13,8 +13,12 @@ const authStore = useAuthStore()
 const router = useRouter()
 
 const role = computed<OrganizationRole>(() => (authStore.user?.role === 'company' ? 'company' : 'school'))
+const isMunicipalHall = computed(
+  () => String(authStore.user?.activeOrganization?.type || '').toLowerCase() === 'municipal_hall',
+)
 const title = computed(() => (role.value === 'school' ? 'Subscription' : 'Subscription'))
 const overages = computed(() => authStore.user?.subscription?.overages?.items ?? [])
+const seatHolds = computed(() => authStore.user?.subscription?.seatHolds ?? [])
 
 function goBack() {
   void router.push({ name: role.value === 'school' ? 'school' : 'dashboard' })
@@ -31,7 +35,9 @@ function goBack() {
             {{
               role === 'school'
                 ? 'Manage school plan limits, PayMongo upgrades, and verification.'
-                : 'Manage company plan limits, PayMongo upgrades, and verification.'
+                : isMunicipalHall
+                  ? 'Manage municipal hall plan limits, PayMongo upgrades, and verification.'
+                  : 'Manage company plan limits, PayMongo upgrades, and verification.'
             }}
           </p>
         </div>
@@ -40,7 +46,7 @@ function goBack() {
 
       <div
         v-if="overages.length"
-        class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+        class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
       >
         <p class="font-semibold">Usage over plan limits</p>
         <ul class="mt-2 list-disc space-y-1 pl-5">

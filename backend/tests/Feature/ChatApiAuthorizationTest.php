@@ -465,4 +465,151 @@ class ChatApiAuthorizationTest extends TestCase
             'peerUserId' => $company['companyUser']->id,
         ])->assertForbidden();
     }
+
+    public function test_company_can_open_conversation_with_endorsed_student(): void
+    {
+        $linked = $this->createLinkedStudentAndSchool();
+        $company = $this->createCompany();
+
+        Application::query()->create([
+            'internship_id' => $company['internship']->id,
+            'student_id' => $linked['student']->id,
+            'company_id' => $company['company']->id,
+            'status' => 'endorsed',
+            'internship_title' => 'Chat Internship',
+            'student_name' => $linked['studentUser']->name,
+            'student_email' => $linked['studentUser']->email,
+        ]);
+
+        Sanctum::actingAs($company['companyUser']);
+        $response = $this->postJson('/api/conversations', [
+            'peerUserId' => $linked['studentUser']->id,
+        ]);
+
+        $response->assertCreated();
+        $this->assertSame((string) $linked['studentUser']->id, $response->json('data.peer.id'));
+    }
+
+    public function test_school_can_open_conversation_with_its_student(): void
+    {
+        $linked = $this->createLinkedStudentAndSchool();
+        Sanctum::actingAs($linked['schoolUser']);
+
+        $response = $this->postJson('/api/conversations', [
+            'peerUserId' => $linked['studentUser']->id,
+        ]);
+
+        $response->assertCreated();
+        $this->assertSame((string) $linked['studentUser']->id, $response->json('data.peer.id'));
+    }
+
+    public function test_company_cannot_message_unrelated_student(): void
+    {
+        $linked = $this->createLinkedStudentAndSchool();
+        $company = $this->createCompany();
+
+        Sanctum::actingAs($company['companyUser']);
+        $before = Conversation::query()->count();
+
+        $this->postJson('/api/conversations', [
+            'peerUserId' => $linked['studentUser']->id,
+        ])->assertForbidden();
+
+        $this->assertSame($before, Conversation::query()->count());
+    }
+
+    public function test_school_cannot_message_unrelated_student(): void
+    {
+        $linked = $this->createLinkedStudentAndSchool();
+        $other = $this->createLinkedStudentAndSchool();
+
+        Sanctum::actingAs($linked['schoolUser']);
+        $before = Conversation::query()->count();
+
+        $this->postJson('/api/conversations', [
+            'peerUserId' => $other['studentUser']->id,
+        ])->assertForbidden();
+
+        $this->assertSame($before, Conversation::query()->count());
+    }
+
+    public function test_company_eligible_partners_include_endorsed_student_not_unrelated(): void
+    {
+        $linked = $this->createLinkedStudentAndSchool();
+        $unrelated = $this->createLinkedStudentAndSchool();
+        $company = $this->createCompany();
+
+        Application::query()->create([
+            'internship_id' => $company['internship']->id,
+            'student_id' => $linked['student']->id,
+            'company_id' => $company['company']->id,
+            'status' => 'accepted',
+            'internship_title' => 'Chat Internship',
+            'student_name' => $linked['studentUser']->name,
+            'student_email' => $linked['studentUser']->email,
+        ]);
+
+        Sanctum::actingAs($company['companyUser']);
+        $response = $this->getJson('/api/conversations/eligible-partners');
+        $response->assertOk();
+
+        $uids = collect($response->json('data'))->pluck('uid')->map(fn ($id) => (string) $id)->all();
+        $this->assertContains((string) $linked['studentUser']->id, $uids);
+        $this->assertNotContains((string) $unrelated['studentUser']->id, $uids);
+
+        $studentRow = collect($response->json('data'))->firstWhere('uid', (string) $linked['studentUser']->id);
+        $this->assertSame('student', $studentRow['role'] ?? null);
+    }
+
+    public function test_school_eligible_partners_include_own_student_and_agreement_company(): void
+    {
+        $linked = $this->createLinkedStudentAndSchool();
+        $company = $this->createCompany();
+        $unrelated = $this->createLinkedStudentAndSchool();
+
+        Contract::query()->create([
+            'school_user_id' => $linked['schoolUser']->id,
+            'school_name' => $linked['school']->institution_name,
+            'company_user_id' => $company['companyUser']->id,
+            'company_name' => $company['company']->company_name,
+            'requested_by_role' => 'school',
+            'requester_organization_id' => $linked['schoolOrg']->id,
+            'partner_organization_id' => $company['companyOrg']->id,
+            'status' => 'active',
+            'subject' => 'MOA',
+        ]);
+
+        Sanctum::actingAs($linked['schoolUser']);
+        $response = $this->getJson('/api/conversations/eligible-partners');
+        $response->assertOk();
+
+        $uids = collect($response->json('data'))->pluck('uid')->map(fn ($id) => (string) $id)->all();
+        $this->assertContains((string) $linked['studentUser']->id, $uids);
+        $this->assertContains((string) $company['companyUser']->id, $uids);
+        $this->assertNotContains((string) $unrelated['studentUser']->id, $uids);
+    }
+
+    public function test_student_eligible_partners_still_include_school_and_endorsed_company(): void
+    {
+        $linked = $this->createLinkedStudentAndSchool();
+        $company = $this->createCompany();
+
+        Application::query()->create([
+            'internship_id' => $company['internship']->id,
+            'student_id' => $linked['student']->id,
+            'company_id' => $company['company']->id,
+            'status' => 'endorsed',
+            'internship_title' => 'Chat Internship',
+            'student_name' => $linked['studentUser']->name,
+            'student_email' => $linked['studentUser']->email,
+        ]);
+
+        Sanctum::actingAs($linked['studentUser']);
+        $response = $this->getJson('/api/conversations/eligible-partners');
+        $response->assertOk();
+
+        $uids = collect($response->json('data'))->pluck('uid')->map(fn ($id) => (string) $id)->all();
+        $this->assertContains((string) $linked['schoolUser']->id, $uids);
+        $this->assertContains((string) $company['companyUser']->id, $uids);
+    }
 }

@@ -12,6 +12,8 @@ class Document extends Model
         'category',
         'file_name',
         'file_url',
+        'file_path',
+        'disk',
         'file_type',
         'file_size',
         'storage_provider',

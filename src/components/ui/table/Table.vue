@@ -8,7 +8,7 @@ const tableClass = computed(() => cn('w-full caption-bottom text-sm', props.clas
 </script>
 
 <template>
-  <div class="relative w-full overflow-auto">
+  <div class="relative isolate w-full overflow-auto">
     <table :class="tableClass">
       <slot />
     </table>

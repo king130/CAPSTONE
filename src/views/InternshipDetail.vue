@@ -9,9 +9,11 @@ import {
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
+import ApplicationCapacity from '@/components/internships/ApplicationCapacity.vue'
 import SaveInternshipButton from '@/components/internships/SaveInternshipButton.vue'
-import MediaGallery from '@/components/media/MediaGallery.vue'
 import PublicSiteHeader from '@/components/PublicSiteHeader.vue'
+import MainLayout from '@/layouts/MainLayout.vue'
+import type { LayoutRole } from '@/layouts/navigation'
 import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
 import Card from '@/components/ui/card/Card.vue'
@@ -22,30 +24,43 @@ import {
   listEligibleInternshipIds,
   type InternshipRecord,
 } from '@/services/internships'
-import { listOrganizationMedia } from '@/services/organizationMedia'
 import { useAuthStore } from '@/stores/auth'
-import { matchCourseProgram, type CourseMatchLevel } from '@/utils/courseMatch'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 
+const appRole = computed((): LayoutRole | null => {
+  const role = authStore.user?.role
+  if (role === 'student' || role === 'school' || role === 'company') return role
+  return null
+})
+
+const listingsTo = computed(() => {
+  if (appRole.value === 'school') return '/school/opportunities'
+  if (appRole.value === 'company') return '/dashboard/schools'
+  if (appRole.value === 'student') return '/intern/opportunities'
+  return '/find-internships'
+})
+
+const pageShell = computed(() => (appRole.value ? MainLayout : 'div'))
+const pageShellProps = computed(() =>
+  appRole.value
+    ? { role: appRole.value, title: appRole.value === 'student' ? 'Companies' : 'Browse', activeItem: 'opportunities' }
+    : { class: 'min-h-screen bg-background text-foreground' },
+)
+
 const loading = ref(true)
 const notFound = ref(false)
 const errorMessage = ref('')
 const internship = ref<InternshipRecord | null>(null)
-const gallery = ref<Array<{ id: string; url: string; caption?: string | null }>>([])
+const previewPhotos = computed(() => (internship.value?.previewPhotos ?? internship.value?.organizationMedia ?? []).slice(0, 3))
 const eligibleIds = ref<Set<string>>(new Set())
 
 const isAuthenticatedStudent = computed(() => authStore.user?.role === 'student')
 const isGuestOrPublic = computed(
   () => !authStore.user || authStore.user.role === 'guest' || authStore.user.role === null,
 )
-const studentCourse = computed(() => {
-  const profile = (authStore.user?.profile as Record<string, unknown> | undefined) ?? {}
-  return String(profile.course ?? '').trim()
-})
-
 const partnered = computed(() => {
   const item = internship.value
   if (!item) return false
@@ -71,23 +86,6 @@ const deadlinePassed = computed(() => {
 
 const isClosed = computed(() => deadlinePassed.value || slotsLeft.value <= 0 || internship.value?.status === 'closed')
 
-const courseMatch = computed(() => matchCourseProgram(studentCourse.value || null, internship.value?.eligibleCourses))
-
-function courseMatchLabel(level: CourseMatchLevel): string {
-  switch (level) {
-    case 'strong':
-      return 'Matches your course'
-    case 'related':
-      return 'Related to your course'
-    case 'open':
-      return 'Open to all courses'
-    case 'unknown':
-      return 'Course fit unavailable'
-    default:
-      return 'Check course fit'
-  }
-}
-
 const orgProfileTo = computed(() => {
   const orgId = internship.value?.organizationId
   return orgId ? { name: 'organization-public', params: { id: orgId } } : null
@@ -96,13 +94,16 @@ const orgProfileTo = computed(() => {
 const applyLabel = computed(() => {
   if (isClosed.value) return 'Closed'
   if (isGuestOrPublic.value) return 'Log in to Apply'
-  if (isAuthenticatedStudent.value && !partnered.value) return 'Not yet available'
+  if (!isAuthenticatedStudent.value) return 'Students can apply'
+  if (!partnered.value) return 'Not yet available'
   return 'Apply'
 })
 
 const applyDisabled = computed(() => {
   if (isClosed.value) return true
-  if (isAuthenticatedStudent.value && !partnered.value) return true
+  if (isGuestOrPublic.value) return false
+  if (!isAuthenticatedStudent.value) return true
+  if (!partnered.value) return true
   return false
 })
 
@@ -142,26 +143,10 @@ async function loadDetail() {
     if (!item) {
       notFound.value = true
       internship.value = null
-      gallery.value = []
       return
     }
 
     internship.value = item
-
-    if (item.organizationMedia?.length) {
-      gallery.value = item.organizationMedia.map((media) => ({
-        id: media.id,
-        url: media.url,
-        caption: media.caption,
-      }))
-    } else if (item.organizationId) {
-      const media = await listOrganizationMedia(item.organizationId).catch(() => [])
-      gallery.value = media.map((row) => ({ id: row.id, url: row.url, caption: row.caption }))
-    } else if (item.coverImage) {
-      gallery.value = [{ id: 'cover', url: item.coverImage, caption: item.title }]
-    } else {
-      gallery.value = []
-    }
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : 'Unable to load internship.'
     internship.value = null
@@ -193,10 +178,10 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-background text-foreground">
-    <PublicSiteHeader active="opportunities" />
+  <component :is="pageShell" v-bind="pageShellProps">
+    <PublicSiteHeader v-if="!appRole" active="opportunities" />
 
-    <main class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 lg:pb-12">
+    <div :class="appRole ? 'pb-20 lg:pb-0' : 'mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 lg:pb-12'">
       <div v-if="loading" class="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div class="space-y-4">
           <Skeleton class="aspect-[16/10] w-full rounded-xl" />
@@ -211,7 +196,7 @@ onMounted(() => {
           <h1 class="text-2xl font-semibold text-foreground">Internship not found</h1>
           <p class="text-sm text-muted-foreground">This posting may have been removed or is no longer public.</p>
           <RouterLink
-            to="/find-internships"
+            :to="listingsTo"
             class="inline-flex h-10 items-center justify-center rounded-md border border-border bg-background px-4 text-sm font-medium text-foreground hover:bg-accent"
           >
             Back to listings
@@ -229,10 +214,31 @@ onMounted(() => {
 
       <div v-else-if="internship" class="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div class="space-y-6">
-          <MediaGallery
-            :images="gallery"
-            :alt-fallback="`${internship.title || 'Internship'} photo`"
-          />
+          <div class="overflow-hidden rounded-xl border border-border bg-muted">
+            <img
+              v-if="internship.coverImage"
+              :src="internship.coverImage"
+              :alt="`${internship.companyName || internship.hostName || 'Company'} logo`"
+              class="aspect-[16/9] w-full object-contain p-8 sm:aspect-[16/7]"
+            />
+            <div v-else class="flex aspect-[16/9] w-full items-center justify-center text-sm text-muted-foreground sm:aspect-[16/7]">
+              No company logo
+            </div>
+          </div>
+
+          <section v-if="previewPhotos.length" class="space-y-2">
+            <h2 class="text-sm font-medium text-foreground">Company preview</h2>
+            <div class="grid grid-cols-3 gap-2">
+              <img
+                v-for="photo in previewPhotos"
+                :key="photo.id"
+                :src="photo.url"
+                :alt="photo.caption || `${internship.companyName || 'Company'} photo`"
+                class="aspect-[4/3] w-full rounded-lg border border-border bg-muted object-cover"
+                loading="lazy"
+              />
+            </div>
+          </section>
 
           <div class="space-y-3">
             <div class="flex flex-wrap items-center gap-2">
@@ -272,7 +278,7 @@ onMounted(() => {
               </span>
               <span class="inline-flex items-center gap-1.5">
                 <Wallet class="h-3.5 w-3.5" />
-                {{ internship.allowance?.trim() || 'Allowance TBA' }}
+                {{ internship.allowance?.trim() || 'No allowance' }}
               </span>
               <span class="inline-flex items-center gap-1.5">
                 <CalendarDays class="h-3.5 w-3.5" />
@@ -304,16 +310,8 @@ onMounted(() => {
           </section>
 
           <section class="space-y-2">
-            <h2 class="text-lg font-semibold text-foreground">Eligible courses</h2>
-            <p class="text-xs text-muted-foreground">Course-based decision support</p>
+            <h2 class="text-lg font-semibold text-foreground">Accepted courses</h2>
             <div class="flex flex-wrap gap-2">
-              <Badge
-                v-if="isAuthenticatedStudent || studentCourse"
-                :variant="courseMatch.level === 'strong' ? 'success' : courseMatch.level === 'related' || courseMatch.level === 'open' ? 'secondary' : 'outline'"
-                title="Course-based decision support"
-              >
-                {{ courseMatchLabel(courseMatch.level) }}
-              </Badge>
               <Badge v-for="course in internship.eligibleCourses || []" :key="course" variant="outline">
                 {{ course }}
               </Badge>
@@ -330,9 +328,12 @@ onMounted(() => {
               <p class="font-medium text-foreground">Application deadline</p>
               <p class="mt-1">{{ formatDate(internship.applicationDeadline) }}</p>
             </div>
-            <div class="rounded-xl border border-border bg-card p-4">
-              <p class="font-medium text-foreground">Slots left</p>
-              <p class="mt-1">{{ slotsLeft }}</p>
+            <div class="rounded-xl border border-border bg-card p-4 sm:col-span-2">
+              <ApplicationCapacity
+                :slots-available="internship.slotsAvailable"
+                :slots-remaining="internship.slotsRemaining"
+                :filled-slots="internship.filledSlots"
+              />
             </div>
             <div class="rounded-xl border border-border bg-card p-4">
               <p class="font-medium text-foreground">Duration</p>
@@ -343,10 +344,11 @@ onMounted(() => {
 
         <aside class="hidden lg:block">
           <div class="sticky top-6 space-y-4 rounded-xl border border-border bg-card p-5 shadow-sm">
-            <div>
-              <p class="text-sm text-muted-foreground">Slots left</p>
-              <p class="text-2xl font-semibold text-foreground">{{ slotsLeft }}</p>
-            </div>
+            <ApplicationCapacity
+              :slots-available="internship.slotsAvailable"
+              :slots-remaining="internship.slotsRemaining"
+              :filled-slots="internship.filledSlots"
+            />
             <p v-if="isClosed" class="text-sm text-muted-foreground">
               {{ deadlinePassed ? 'The application deadline has passed.' : 'No slots remaining.' }}
             </p>
@@ -376,17 +378,17 @@ onMounted(() => {
           </div>
         </aside>
       </div>
-    </main>
+    </div>
 
     <div
       v-if="internship && !loading"
-      class="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-card/95 p-3 backdrop-blur lg:hidden"
+      class="fixed inset-x-0 bottom-0 z-header border-t border-border bg-card/95 p-3 backdrop-blur lg:hidden"
     >
       <div class="mx-auto flex max-w-7xl items-center gap-3">
         <div class="min-w-0 flex-1">
           <p class="truncate text-sm font-medium text-foreground">{{ internship.title }}</p>
           <p class="truncate text-xs text-muted-foreground">
-            {{ isClosed ? 'Closed' : `${slotsLeft} slot${slotsLeft === 1 ? '' : 's'} left` }}
+            {{ isClosed ? 'Closed' : `${slotsLeft} slot${slotsLeft === 1 ? '' : 's'} remaining` }}
           </p>
         </div>
         <SaveInternshipButton
@@ -398,5 +400,5 @@ onMounted(() => {
         <Button :disabled="applyDisabled" @click="onApply">{{ applyLabel }}</Button>
       </div>
     </div>
-  </div>
+  </component>
 </template>

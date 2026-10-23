@@ -22,7 +22,6 @@ import { getSubscriptionPlans, type SubscriptionPlan } from '@/services/subscrip
 import {
   cancelPendingUpgrade,
   createPaymongoCheckoutSession,
-  switchToFreePlan,
   verifyPaymongoCheckoutSession,
 } from '@/services/subscriptions'
 import { useAuthStore } from '@/stores/auth'
@@ -41,40 +40,48 @@ const actionPlanId = ref<string | null>(null)
 const verifying = ref(false)
 const cancelling = ref(false)
 
-const roleLabel = computed(() => (props.role === 'school' ? 'School' : 'Company'))
+const isMunicipalHall = computed(
+  () => String(authStore.user?.activeOrganization?.type || '').toLowerCase() === 'municipal_hall',
+)
+const roleLabel = computed(() =>
+  props.role === 'school' ? 'School' : isMunicipalHall.value ? 'Municipal Hall' : 'Company',
+)
 const roleIcon = computed(() => (props.role === 'school' ? GraduationCap : Building2))
 const roleTheme = computed(() =>
   props.role === 'school'
     ? {
-        badge: 'bg-sky-100 text-sky-700',
+        badge: 'bg-sky-100 text-sky-800 dark:bg-sky-950/50 dark:text-sky-200',
         button: 'bg-sky-600 hover:bg-sky-700',
-        ring: 'ring-sky-200',
-        soft: 'bg-sky-100 text-sky-700',
-        panel: 'border-sky-200 bg-sky-50/80',
+        ring: 'ring-sky-300 dark:ring-sky-700',
+        soft: 'bg-sky-100 text-sky-800 dark:bg-sky-950/50 dark:text-sky-200',
+        panel: 'border-sky-200 bg-sky-50 dark:border-sky-900 dark:bg-sky-950/30',
       }
     : {
-        badge: 'bg-emerald-100 text-emerald-700',
+        badge: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200',
         button: 'bg-emerald-600 hover:bg-emerald-700',
-        ring: 'ring-emerald-200',
-        soft: 'bg-emerald-100 text-emerald-700',
-        panel: 'border-emerald-200 bg-emerald-50/80',
+        ring: 'ring-emerald-300 dark:ring-emerald-700',
+        soft: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200',
+        panel: 'border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30',
       },
 )
 
 const currentSubscription = computed(() => authStore.user?.subscription ?? null)
+const subscriptionAccess = computed(() => authStore.user?.subscriptionAccess ?? null)
+const paymentConnected = computed(() => Boolean(authStore.user?.paymentConnected))
 const currentPlanId = computed(() => normalizePlanId(currentSubscription.value?.plan))
 const pendingChange = computed(() => currentSubscription.value?.pendingChange ?? null)
 const currentPlan = computed(() => plans.value.find((plan) => plan.id === currentPlanId.value) ?? null)
-const recommendedPlanId = computed(() => plans.value.find((plan) => plan.id === 'standard')?.id ?? plans.value[0]?.id ?? 'free')
+const recommendedPlanId = computed(() => plans.value.find((plan) => plan.id === 'standard')?.id ?? plans.value[0]?.id ?? 'standard')
+const selectablePlans = computed(() => plans.value.filter((plan) => plan.id !== 'free' && plan.isSelectable !== false))
 
 const statusTone = computed(() => {
   switch (currentSubscription.value?.status) {
     case 'active':
-      return 'bg-emerald-100 text-emerald-700'
+      return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200'
     case 'pending':
-      return 'bg-amber-100 text-amber-700'
+      return 'bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200'
     default:
-      return 'bg-slate-200 text-slate-700'
+      return 'bg-muted text-muted-foreground'
   }
 })
 
@@ -134,7 +141,7 @@ async function loadPlans() {
 }
 
 function normalizePlanId(plan: string | undefined): string {
-  return (plan ?? 'free').toString().trim().toLowerCase()
+  return (plan ?? 'standard').toString().trim().toLowerCase()
 }
 
 function priceForRole(plan: SubscriptionPlan): number {
@@ -178,18 +185,25 @@ function badgeLabel(plan: SubscriptionPlan): string | null {
 
 async function handlePlanAction(plan: SubscriptionPlan) {
   if (!authStore.user?.uid || isCurrentPlan(plan)) return
+  if (plan.id === 'free') {
+    await Swal.fire({
+      icon: 'info',
+      title: 'Free plan unavailable',
+      text: 'New organizations start on a trial, then choose a paid plan. The free plan is no longer offered.',
+      confirmButtonColor: props.role === 'school' ? '#0284c7' : '#059669',
+    })
+    return
+  }
 
   const amount = priceForRole(plan)
   actionPlanId.value = plan.id
 
   try {
-    if (amount === 0) {
-      await switchToFreePlan(authStore.user.uid)
-      await authStore.refreshUser()
+    if (!paymentConnected.value) {
       await Swal.fire({
-        icon: 'success',
-        title: 'Plan updated',
-        text: 'Your workspace is now on the free plan.',
+        icon: 'info',
+        title: 'Payment not connected',
+        text: 'Online checkout is not configured on this environment. Ask a platform admin to activate a paid plan manually, or continue on your trial while it lasts.',
         confirmButtonColor: props.role === 'school' ? '#0284c7' : '#059669',
       })
       return
@@ -218,12 +232,23 @@ async function handlePlanAction(plan: SubscriptionPlan) {
 
     window.open(result.checkoutUrl, '_blank', 'noopener,noreferrer')
   } catch (error) {
+    // Failed checkout must never look like payment success; refresh to confirm plan unchanged.
+    await authStore.refreshUser().catch(() => null)
     const message = error instanceof Error ? error.message : 'Unable to start checkout right now.'
+    const paymongoUnavailable =
+      /paymongo.*(not configured|unavailable)|paid checkout is currently unavailable/i.test(message)
+
     await Swal.fire({
-      icon: 'error',
-      title: 'Checkout unavailable',
-      text: message,
-      confirmButtonColor: '#dc2626',
+      icon: paymongoUnavailable ? 'info' : 'error',
+      title: paymongoUnavailable ? 'Paid checkout unavailable' : 'Checkout unavailable',
+      text: paymongoUnavailable
+        ? `${message} No paid plan was activated. Free remains available, and any already-active paid plan stays unchanged.`
+        : message,
+      confirmButtonColor: paymongoUnavailable
+        ? props.role === 'school'
+          ? '#0284c7'
+          : '#059669'
+        : '#dc2626',
     })
   } finally {
     actionPlanId.value = null
@@ -268,21 +293,38 @@ async function verifyPendingPayment() {
       confirmButtonColor: '#0f766e',
     })
   } catch (error) {
+    await authStore.refreshUser().catch(() => null)
     const message = error instanceof Error ? error.message : 'Unable to verify payment right now.'
+    const paymongoUnavailable =
+      /paymongo.*(not configured|unavailable)|paid checkout is currently unavailable/i.test(message)
     await Swal.fire({
-      icon: 'error',
-      title: 'Verification failed',
-      text: message,
-      confirmButtonColor: '#dc2626',
+      icon: paymongoUnavailable ? 'info' : 'error',
+      title: paymongoUnavailable ? 'Paid verification unavailable' : 'Verification failed',
+      text: paymongoUnavailable
+        ? `${message} No paid plan was activated from this attempt.`
+        : message,
+      confirmButtonColor: paymongoUnavailable
+        ? props.role === 'school'
+          ? '#0284c7'
+          : '#059669'
+        : '#dc2626',
     })
   } finally {
     verifying.value = false
   }
 }
 
-function reopenCheckout() {
-  if (!pendingChange.value?.checkoutUrl) return
-  window.open(pendingChange.value.checkoutUrl, '_blank', 'noopener,noreferrer')
+async function reopenCheckout() {
+  const pending = pendingChange.value
+  if (!authStore.user?.uid || !pending) return
+
+  const plan = plans.value.find((item) => item.id === normalizePlanId(pending.targetPlan))
+  if (!plan) {
+    if (pending.checkoutUrl) window.open(pending.checkoutUrl, '_blank', 'noopener,noreferrer')
+    return
+  }
+
+  await handlePlanAction(plan)
 }
 
 async function cancelPendingCheckout() {
@@ -327,19 +369,19 @@ async function cancelPendingCheckout() {
 
 <template>
   <div class="space-y-5">
-    <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div class="border-b border-slate-100 bg-gradient-to-r from-slate-50 via-white to-slate-50 px-5 py-5 sm:px-6">
+    <section class="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+      <div class="border-b border-border bg-muted/60 px-5 py-5 sm:px-6">
         <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div class="flex items-start gap-3">
             <div :class="['flex h-11 w-11 items-center justify-center rounded-2xl', roleTheme.soft]">
               <component :is="roleIcon" class="h-5 w-5" />
             </div>
             <div>
-              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{{ roleLabel }} billing</p>
-              <h2 class="mt-1 text-2xl font-semibold tracking-tight text-slate-950">
+              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{{ roleLabel }} billing</p>
+              <h2 class="mt-1 text-2xl font-semibold tracking-tight text-foreground">
                 {{ currentPlan ? `${currentPlan.name} plan` : 'Choose a plan' }}
               </h2>
-              <p class="mt-1 text-sm text-slate-600">
+              <p class="mt-1 text-sm text-muted-foreground">
                 Manage capacity and upgrades with PayMongo checkout.
               </p>
             </div>
@@ -350,24 +392,24 @@ async function cancelPendingCheckout() {
         </div>
 
         <div v-if="summaryMetrics.length" class="mt-5 grid gap-3 sm:grid-cols-3">
-          <div v-for="metric in summaryMetrics" :key="metric.label" class="rounded-xl border border-slate-200 bg-white px-4 py-3">
-            <p class="text-xs font-medium uppercase tracking-wide text-slate-500">{{ metric.label }}</p>
-            <p class="mt-1 text-xl font-semibold text-slate-950">{{ metric.value }}</p>
+          <div v-for="metric in summaryMetrics" :key="metric.label" class="rounded-xl border border-border bg-card px-4 py-3">
+            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{{ metric.label }}</p>
+            <p class="mt-1 text-xl font-semibold text-foreground">{{ metric.value }}</p>
           </div>
         </div>
       </div>
 
-      <div v-if="pendingChange" class="border-b border-amber-100 bg-amber-50 px-5 py-4 sm:px-6">
+      <div v-if="pendingChange" class="border-b border-amber-100 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 px-5 py-4 sm:px-6">
         <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div class="flex items-start gap-3">
-            <div class="rounded-xl bg-amber-100 p-2.5 text-amber-700">
+            <div class="rounded-xl bg-amber-100 p-2.5 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
               <RefreshCcw class="h-4 w-4" />
             </div>
             <div>
-              <p class="text-sm font-semibold text-slate-950">
+              <p class="text-sm font-semibold text-foreground">
                 Pending {{ capitalize(pendingChange.targetPlan) }} upgrade
               </p>
-              <p class="mt-1 text-sm text-slate-600">
+              <p class="mt-1 text-sm text-muted-foreground">
                 Finish PayMongo payment, then verify here — or cancel to pick another plan.
               </p>
             </div>
@@ -399,62 +441,82 @@ async function cancelPendingCheckout() {
 
       <div class="grid gap-3 px-5 py-4 sm:grid-cols-2 sm:px-6">
         <div :class="['rounded-xl border p-4', roleTheme.panel]">
-          <div class="flex items-center gap-2 text-sm font-semibold text-slate-950">
+          <div class="flex items-center gap-2 text-sm font-semibold text-foreground">
             <CreditCard class="h-4 w-4" />
             PayMongo checkout
           </div>
-          <p class="mt-2 text-sm text-slate-600">
-            Paid upgrades open an external PayMongo session, then return here for verification.
+          <p class="mt-2 text-sm text-muted-foreground">
+            Checkout asks PayMongo for GCash, Maya, GrabPay, ShopeePay, card, and related options. Only methods enabled on the PayMongo account appear on the payment page. QR “scan to pay” shows when wallets are not enabled there. PayPal is not supported.
           </p>
         </div>
-        <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
-          <div class="flex items-center gap-2 text-sm font-semibold text-slate-950">
+        <div class="rounded-xl border border-border bg-muted p-4">
+          <div class="flex items-center gap-2 text-sm font-semibold text-foreground">
             <BadgeCheck class="h-4 w-4" />
             Activation
           </div>
-          <p class="mt-2 text-sm text-slate-600">
-            Plan limits unlock after payment is verified — unpaid pending accounts stay on free limits.
+          <p class="mt-2 text-sm text-muted-foreground">
+            New organizations start on a time-limited trial with Standard plan limits. Paid limits apply only after a real PayMongo payment is verified — or after a platform admin activates a plan manually.
           </p>
         </div>
+      </div>
+
+      <div
+        v-if="!paymentConnected"
+        class="border-t border-border bg-muted/40 px-5 py-3 text-sm text-muted-foreground sm:px-6"
+        data-testid="payment-not-connected"
+      >
+        Payment is not connected on this environment. Online checkout is unavailable; ask a platform admin to activate a paid plan if your trial ends.
+      </div>
+
+      <div
+        v-if="subscriptionAccess"
+        class="border-t border-border px-5 py-3 text-sm sm:px-6"
+        data-testid="subscription-access-summary"
+      >
+        <span class="font-medium text-foreground">Access:</span>
+        {{ subscriptionAccess.status }}
+        <template v-if="subscriptionAccess.daysRemaining != null">
+          · {{ subscriptionAccess.daysRemaining }} day(s) remaining
+        </template>
       </div>
     </section>
 
     <div v-if="loading" class="grid gap-4 lg:grid-cols-3">
-      <Card v-for="index in 3" :key="index" class="border-slate-200 shadow-sm">
+      <Card v-for="index in 3" :key="index" class="border-border shadow-sm">
         <CardContent class="space-y-4 p-6">
-          <div class="h-4 w-24 animate-pulse rounded bg-slate-200" />
-          <div class="h-9 w-40 animate-pulse rounded bg-slate-200" />
-          <div class="h-3 animate-pulse rounded bg-slate-200" />
-          <div class="h-3 w-5/6 animate-pulse rounded bg-slate-200" />
+          <div class="h-4 w-24 animate-pulse rounded bg-muted" />
+          <div class="h-9 w-40 animate-pulse rounded bg-muted" />
+          <div class="h-3 animate-pulse rounded bg-muted" />
+          <div class="h-3 w-5/6 animate-pulse rounded bg-muted" />
         </CardContent>
       </Card>
     </div>
 
     <div v-else class="grid gap-4 xl:grid-cols-3">
       <Card
-        v-for="plan in plans"
+        v-for="plan in selectablePlans"
         :key="plan.id"
         :class="[
-          'border-slate-200 shadow-sm',
-          isCurrentPlan(plan) ? 'ring-2 ring-emerald-200' : '',
-          isPendingPlan(plan) ? 'ring-2 ring-amber-200' : '',
+          'border-border shadow-sm',
+          isCurrentPlan(plan) ? 'ring-2 ring-emerald-300 dark:ring-emerald-700' : '',
+          isPendingPlan(plan) ? 'ring-2 ring-amber-300 dark:ring-amber-700' : '',
           plan.id === recommendedPlanId && !isCurrentPlan(plan) && !isPendingPlan(plan) ? `ring-2 ${roleTheme.ring}` : '',
         ].filter(Boolean).join(' ')"
       >
         <CardHeader class="space-y-3 p-5">
           <div class="flex items-start justify-between gap-3">
             <div>
-              <p class="text-lg font-semibold text-slate-950">{{ plan.name }}</p>
-              <p class="mt-1 text-sm text-slate-600">{{ plan.description }}</p>
+              <p class="text-lg font-semibold text-foreground">{{ plan.name }}</p>
+              <p class="mt-1 text-sm text-muted-foreground">{{ plan.description }}</p>
             </div>
             <span
               v-if="badgeLabel(plan)"
               class="inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
               :class="
                 isCurrentPlan(plan)
-                  ? 'bg-emerald-100 text-emerald-700'
+                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200'
                   : isPendingPlan(plan)
-                    ? 'bg-amber-100 text-amber-700'
+                    ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200'
                     : roleTheme.badge
               "
             >
@@ -464,36 +526,36 @@ async function cancelPendingCheckout() {
 
           <div>
             <template v-if="priceForRole(plan) === 0">
-              <p class="text-3xl font-semibold text-slate-950">{{ formatPrice(0) }}</p>
+              <p class="text-3xl font-semibold text-foreground">{{ formatPrice(0) }}</p>
             </template>
             <div v-else class="flex items-end gap-2">
-              <span class="text-xs font-semibold uppercase tracking-wide text-slate-500">PHP</span>
-              <p class="text-3xl font-semibold leading-none text-slate-950">{{ formatPriceAmount(priceForRole(plan)) }}</p>
-              <span class="pb-0.5 text-sm text-slate-500">/mo</span>
+              <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">PHP</span>
+              <p class="text-3xl font-semibold leading-none text-foreground">{{ formatPriceAmount(priceForRole(plan)) }}</p>
+              <span class="pb-0.5 text-sm text-muted-foreground">/mo</span>
             </div>
           </div>
         </CardHeader>
 
         <CardContent class="space-y-4 p-5 pt-0">
-          <div class="grid grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <div class="grid grid-cols-2 gap-2 rounded-xl border border-border bg-muted p-3">
             <template v-if="props.role === 'school'">
               <div>
-                <p class="text-xs text-slate-500">Coordinators</p>
-                <p class="font-semibold text-slate-950">{{ formatLimit(plan.limits.school.coordinators) }}</p>
+                <p class="text-xs text-muted-foreground">Coordinators</p>
+                <p class="font-semibold text-foreground">{{ formatLimit(plan.limits.school.coordinators) }}</p>
               </div>
               <div>
-                <p class="text-xs text-slate-500">Students</p>
-                <p class="font-semibold text-slate-950">{{ formatLimit(plan.limits.school.students) }}</p>
+                <p class="text-xs text-muted-foreground">Students</p>
+                <p class="font-semibold text-foreground">{{ formatLimit(plan.limits.school.students) }}</p>
               </div>
             </template>
             <template v-else>
               <div>
-                <p class="text-xs text-slate-500">Accounts</p>
-                <p class="font-semibold text-slate-950">{{ formatLimit(plan.limits.company.accounts) }}</p>
+                <p class="text-xs text-muted-foreground">Accounts</p>
+                <p class="font-semibold text-foreground">{{ formatLimit(plan.limits.company.accounts) }}</p>
               </div>
               <div>
-                <p class="text-xs text-slate-500">Internships</p>
-                <p class="font-semibold text-slate-950">{{ formatLimit(plan.limits.company.internships) }}</p>
+                <p class="text-xs text-muted-foreground">Internships</p>
+                <p class="font-semibold text-foreground">{{ formatLimit(plan.limits.company.internships) }}</p>
               </div>
             </template>
           </div>
@@ -502,7 +564,7 @@ async function cancelPendingCheckout() {
             <li
               v-for="feature in compactFeatures[plan.id] ?? []"
               :key="feature"
-              class="flex items-start gap-2 text-sm text-slate-700"
+              class="flex items-start gap-2 text-sm text-muted-foreground"
             >
               <BadgeCheck class="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
               <span>{{ feature }}</span>
@@ -532,16 +594,16 @@ async function cancelPendingCheckout() {
       </Card>
     </div>
 
-    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-      <h3 class="text-base font-semibold text-slate-950">How upgrades work</h3>
-      <ol class="mt-3 grid gap-3 text-sm text-slate-600 sm:grid-cols-3">
-        <li class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">1. Choose a paid plan and open PayMongo checkout.</li>
-        <li class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">2. Complete payment in the PayMongo window.</li>
-        <li class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">3. Return here and verify to activate the plan.</li>
+    <section class="rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-6">
+      <h3 class="text-base font-semibold text-foreground">How upgrades work</h3>
+      <ol class="mt-3 grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
+        <li class="rounded-xl border border-border bg-muted px-4 py-3">1. Choose a paid plan and open PayMongo checkout.</li>
+        <li class="rounded-xl border border-border bg-muted px-4 py-3">2. Complete payment in the PayMongo window.</li>
+        <li class="rounded-xl border border-border bg-muted px-4 py-3">3. Return here and verify to activate the plan.</li>
       </ol>
-      <p v-if="currentSubscription?.subscriptionCode" class="mt-4 text-sm text-slate-500">
+      <p v-if="currentSubscription?.subscriptionCode" class="mt-4 text-sm text-muted-foreground">
         Subscription code:
-        <span class="font-medium text-slate-800">{{ currentSubscription.subscriptionCode }}</span>
+        <span class="font-medium text-foreground">{{ currentSubscription.subscriptionCode }}</span>
       </p>
     </section>
   </div>

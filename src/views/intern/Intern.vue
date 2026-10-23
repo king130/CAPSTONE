@@ -5,21 +5,22 @@ import {
   BriefcaseBusiness,
   Building2,
   CalendarDays,
-  CheckCircle2,
-  CircleDashed,
   Edit3,
   FileText,
   GraduationCap,
   LoaderCircle,
   Mail,
   MapPin,
-  Search,
   UserCircle2,
-  XCircle,
 } from 'lucide-vue-next'
 
 import ApplicationStatusStepper from '@/components/applications/ApplicationStatusStepper.vue'
-import ApplicationInterviewPanel from '@/components/ApplicationInterviewPanel.vue'
+import ApplicationCapacity from '@/components/internships/ApplicationCapacity.vue'
+import OrganizationDirectory from '@/components/opportunities/OrganizationDirectory.vue'
+import ApplicationTrackerPanel from '@/components/ApplicationTrackerPanel.vue'
+import HoursAgreementPanel from '@/components/HoursAgreementPanel.vue'
+import PlacementSchedulePanel from '@/components/PlacementSchedulePanel.vue'
+import OjtCalendarPanel from '@/components/OjtCalendarPanel.vue'
 import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
 import Card from '@/components/ui/card/Card.vue'
@@ -47,16 +48,30 @@ import { listDocuments, uploadDocuments, type DocumentRecord } from '@/services/
 import { buildProfileAvatarUrl } from '@/services/profileMedia'
 import { getInternship, subscribeEligibleInternships, type InternshipRecord } from '@/services/internships'
 import { listInterviews, type InterviewRecord } from '@/services/interviews'
-import { listInternOJTLogs, type OJTLog } from '@/services/ojtService'
+import { listAssessments, type AssessmentRecord } from '@/services/assessments'
+import {
+  dtrStatusLabel,
+  isRejectedOrRevision,
+  listDtrPlacements,
+  listDtrSubmissions,
+  resubmitDtr,
+  submitDtr,
+  type DtrPlacement,
+  type DtrSubmission,
+} from '@/services/dtrService'
+import { extractDtrSuggestions } from '@/utils/dtrExtract'
+import { fetchOJTProgress, listInternOJTLogs, type OJTLog } from '@/services/ojtService'
+import {
+  listCertificates,
+  printCertificateHtml,
+  viewCertificateHtml,
+  type CertificateRecord,
+} from '@/services/certificates'
 import { listSavedInternships } from '@/services/savedInternships'
 import { updateCurrentUserProfile } from '@/services/auth'
 import { useAuthStore } from '@/stores/auth'
 import { deriveApplicationStepper } from '@/utils/applicationStepper'
-import {
-  matchCourseProgram,
-  stableSortByCourseMatchLevel,
-  type CourseMatchLevel,
-} from '@/utils/courseMatch'
+import { findInternshipIdForFocus, resolveInternshipFocusId } from '@/utils/internshipFocus'
 
 type InternView = 'settings' | 'opportunities' | 'documents' | 'internship' | 'placement' | 'dashboard' | 'saved'
 
@@ -74,6 +89,7 @@ interface ApplicationDialogState {
   title: string
   hostName: string
   requiredDocuments: string[]
+  requiresResume: boolean
 }
 
 const authStore = useAuthStore()
@@ -86,8 +102,26 @@ const internships = ref<InternshipRecord[]>([])
 const savedDocuments = ref<DocumentRecord[]>([])
 const savedInternships = ref<InternshipRecord[]>([])
 const interviewsByApplication = ref<Record<string, InterviewRecord[]>>({})
+const assessmentsByApplication = ref<Record<string, AssessmentRecord[]>>({})
+const dtrsByApplication = ref<Record<string, DtrSubmission[]>>({})
+const dtrPlacements = ref<DtrPlacement[]>([])
+const allDtrs = ref<DtrSubmission[]>([])
+const dtrSubmitting = ref(false)
+const dtrApplicationId = ref('')
+const dtrPeriodStart = ref('')
+const dtrPeriodEnd = ref('')
+const dtrHours = ref('')
+const dtrRemarks = ref('')
+const dtrFile = ref<File | null>(null)
+const dtrReadingFile = ref(false)
+const dtrFileMessage = ref('')
+const dtrResubmitTarget = ref<DtrSubmission | null>(null)
+const ojtRequiredHours = ref<number | null>(null)
 const ojtLogsByApplication = ref<Record<string, OJTLog[]>>({})
 const coverByInternship = ref<Record<string, string | null>>({})
+const certificates = ref<CertificateRecord[]>([])
+const certificatesLoading = ref(false)
+const certificateActionId = ref<string | null>(null)
 const applicationsLoading = ref(true)
 const internshipsLoading = ref(true)
 const savedInternshipsLoading = ref(false)
@@ -96,7 +130,6 @@ const documentsLoading = ref(true)
 const profileDialogOpen = ref(false)
 const savingProfile = ref(false)
 const applyingInternshipId = ref<string | null>(null)
-const searchOpportunities = ref('')
 const applicationDialogOpen = ref(false)
 const selectedOpportunity = ref<ApplicationDialogState | null>(null)
 const applicationResume = ref('')
@@ -104,11 +137,17 @@ const selectedDocuments = ref<string[]>([])
 const selectedRequirementDocuments = ref<string[]>([])
 const selectedSavedDocumentIds = ref<string[]>([])
 const selectedSavedResumeId = ref('')
+const selectedSavedEndorsementId = ref('')
+const endorsementFile = ref<File | null>(null)
+const endorsementPreviewUrl = ref<string | null>(null)
+const endorsementUploadProgress = ref(0)
+const endorsementDragOver = ref(false)
 const resumeFile = ref<File | null>(null)
 const supportingFiles = ref<File[]>([])
 const documentUploadFiles = ref<File[]>([])
 const documentUploadCategory = ref('general')
 const uploadingSavedDocuments = ref(false)
+const uploadingEndorsement = ref(false)
 const profileForm = ref<ProfileForm>({
   displayName: '',
   email: '',
@@ -135,9 +174,11 @@ function startSubscriptions(userId?: string) {
     applications.value = []
     internships.value = []
     savedDocuments.value = []
+    certificates.value = []
     applicationsLoading.value = false
     internshipsLoading.value = false
     documentsLoading.value = false
+    certificatesLoading.value = false
     return
   }
 
@@ -176,20 +217,66 @@ async function loadSavedInternshipsList() {
   }
 }
 
+async function loadCertificates() {
+  certificatesLoading.value = true
+  try {
+    certificates.value = await listCertificates()
+  } catch {
+    certificates.value = []
+  } finally {
+    certificatesLoading.value = false
+  }
+}
+
+async function openStudentCertificate(certificateId: string) {
+  certificateActionId.value = certificateId
+  try {
+    await viewCertificateHtml(certificateId)
+  } catch (caughtError) {
+    error(caughtError, { fallback: 'Unable to open your certificate.' })
+  } finally {
+    certificateActionId.value = null
+  }
+}
+
+async function printStudentCertificate(certificateId: string) {
+  certificateActionId.value = certificateId
+  try {
+    await printCertificateHtml(certificateId)
+  } catch (caughtError) {
+    error(caughtError, { fallback: 'Unable to open the print dialog for your certificate.' })
+  } finally {
+    certificateActionId.value = null
+  }
+}
+
 async function loadApplicationExtras() {
   if (!applications.value.length) {
     interviewsByApplication.value = {}
+    assessmentsByApplication.value = {}
+    dtrsByApplication.value = {}
+    allDtrs.value = []
+    dtrPlacements.value = []
     ojtLogsByApplication.value = {}
     coverByInternship.value = {}
+    void loadCertificates()
     return
   }
 
   applicationExtrasLoading.value = true
   try {
-    const [interviews, logs] = await Promise.all([
+    const [interviews, logs, assessments, dtrs, placements, progress] = await Promise.all([
       listInterviews().catch(() => [] as InterviewRecord[]),
       listInternOJTLogs().catch(() => [] as OJTLog[]),
+      listAssessments().catch(() => [] as AssessmentRecord[]),
+      listDtrSubmissions().catch(() => [] as DtrSubmission[]),
+      listDtrPlacements().catch(() => [] as DtrPlacement[]),
+      fetchOJTProgress().catch(() => null),
     ])
+    allDtrs.value = dtrs
+    dtrPlacements.value = placements
+    void loadCertificates()
+    ojtRequiredHours.value = progress?.requiredHours ?? null
 
     const interviewMap: Record<string, InterviewRecord[]> = {}
     for (const interview of interviews) {
@@ -198,6 +285,22 @@ async function loadApplicationExtras() {
       interviewMap[key].push(interview)
     }
     interviewsByApplication.value = interviewMap
+
+    const assessmentMap: Record<string, AssessmentRecord[]> = {}
+    for (const assessment of assessments) {
+      const key = String(assessment.applicationId)
+      if (!assessmentMap[key]) assessmentMap[key] = []
+      assessmentMap[key].push(assessment)
+    }
+    assessmentsByApplication.value = assessmentMap
+
+    const dtrMap: Record<string, DtrSubmission[]> = {}
+    for (const submission of dtrs) {
+      const key = String(submission.applicationId)
+      if (!dtrMap[key]) dtrMap[key] = []
+      dtrMap[key].push(submission)
+    }
+    dtrsByApplication.value = dtrMap
 
     const logMap: Record<string, OJTLog[]> = {}
     for (const log of logs) {
@@ -227,10 +330,18 @@ const applicationCards = computed(() =>
   [...applications.value]
     .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
     .map((application) => {
+      const applicationId = String(application.id)
+      const dtrs = dtrsByApplication.value[applicationId] ?? []
       const stepper = deriveApplicationStepper({
         status: application.status,
-        interviews: interviewsByApplication.value[String(application.id)] ?? [],
-        ojtLogs: ojtLogsByApplication.value[String(application.id)] ?? [],
+        trackerStage: application.trackerStage,
+        interviews: interviewsByApplication.value[applicationId] ?? [],
+        assessments: assessmentsByApplication.value[applicationId] ?? [],
+        ojtLogs: ojtLogsByApplication.value[applicationId] ?? [],
+        requiredHours: ojtRequiredHours.value,
+        dtrApproved: dtrs.filter((item) => item.status === 'approved').length,
+        dtrPending: dtrs.filter((item) => item.status === 'submitted').length,
+        certificateIssued: certificates.value.some((item) => String(item.applicationId || '') === applicationId),
       })
       return {
         application,
@@ -243,7 +354,7 @@ const applicationCards = computed(() =>
 const pageTitle = computed(() => {
   const titles: Record<InternView, string> = {
     settings: 'My Profile',
-    opportunities: 'Opportunities',
+    opportunities: 'Companies',
     saved: 'Saved',
     documents: 'My Documents',
     internship: 'My Applications',
@@ -286,63 +397,29 @@ function isResumeCategory(document: DocumentRecord) {
   return ['application-resume', 'internship-application'].includes(String(document.category || '').toLowerCase())
 }
 
+function isEndorsementCategory(document: DocumentRecord) {
+  return ['application-endorsement', 'endorsement', 'endorsement-letter'].includes(
+    String(document.category || '').toLowerCase(),
+  )
+}
+
 const approvedDocuments = computed(() => savedDocuments.value.filter((document) => document.status === 'approved'))
 
 const approvedResumeDocuments = computed(() => approvedDocuments.value.filter((document) => isResumeCategory(document)))
 
-const approvedSupportingDocuments = computed(() =>
-  approvedDocuments.value.filter((document) => !isResumeCategory(document)),
+const approvedEndorsementDocuments = computed(() =>
+  approvedDocuments.value.filter((document) => isEndorsementCategory(document)),
 )
 
-function courseMatchBadge(level: CourseMatchLevel): {
-  label: string
-  variant: 'success' | 'secondary' | 'outline'
-} {
-  switch (level) {
-    case 'strong':
-      return { label: 'Matches your course', variant: 'success' }
-    case 'related':
-      return { label: 'Related to your course', variant: 'secondary' }
-    case 'open':
-      return { label: 'Open to all courses', variant: 'secondary' }
-    case 'unknown':
-      return { label: 'Course fit unavailable', variant: 'outline' }
-    case 'weak':
-    default:
-      return { label: 'Check course fit', variant: 'outline' }
+const approvedSupportingDocuments = computed(() =>
+  approvedDocuments.value.filter((document) => !isResumeCategory(document) && !isEndorsementCategory(document)),
+)
+
+const endorsementChecklistStatus = computed(() => {
+  if (endorsementFile.value || selectedSavedEndorsementId.value || selectedRequirementDocuments.value.includes('Endorsement')) {
+    return 'uploaded' as const
   }
-}
-
-const opportunityRows = computed(() => {
-  const query = searchOpportunities.value.trim().toLowerCase()
-  const studentCourse = currentCourse.value || null
-
-  const rows = internships.value.map((internship) => {
-    const eligibleCourses = internship.eligibleCourses
-    const match = matchCourseProgram(studentCourse, eligibleCourses)
-    const badge = courseMatchBadge(match.level)
-
-    return {
-      id: internship.id,
-      title: internship.title || 'Untitled opportunity',
-      hostName: internship.companyName || internship.hostName || internship.schoolName || 'Host not set',
-      hostType: internship.hostType === 'school' ? 'School-hosted' : 'Company-hosted',
-      location: internship.location || 'Location not set',
-      duration: internship.duration || 'TBA',
-      programs: (eligibleCourses || []).join(', ') || 'Open to multiple programs',
-      courseMatchLevel: match.level,
-      courseMatchLabel: badge.label,
-      courseMatchVariant: badge.variant,
-    }
-  })
-
-  return stableSortByCourseMatchLevel(rows, (row) => row.courseMatchLevel).filter(
-    (row) =>
-      !query ||
-      [row.title, row.hostName, row.hostType, row.location, row.programs].some((value) =>
-        value.toLowerCase().includes(query),
-      ),
-  )
+  return 'missing' as const
 })
 
 const placementSummary = computed(() => {
@@ -358,68 +435,106 @@ const placementSummary = computed(() => {
   }
 })
 
+async function onDtrFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const next = input.files?.[0] ?? null
+  dtrFile.value = next
+  dtrFileMessage.value = ''
+  if (!next) return
+
+  dtrHours.value = ''
+  dtrPeriodStart.value = ''
+  dtrPeriodEnd.value = ''
+  dtrReadingFile.value = true
+  try {
+    const suggestion = await extractDtrSuggestions(next)
+    const found = suggestion.hours != null || suggestion.periodStart || suggestion.periodEnd
+    if (!found) {
+      dtrFileMessage.value = 'This file could not be read. Enter the hours and dates manually.'
+      return
+    }
+    if (suggestion.hours != null) dtrHours.value = String(suggestion.hours)
+    if (suggestion.periodStart) dtrPeriodStart.value = suggestion.periodStart
+    if (suggestion.periodEnd) dtrPeriodEnd.value = suggestion.periodEnd
+    dtrFileMessage.value = 'Suggested from the file. Review and correct the hours and dates before submitting.'
+  } catch {
+    dtrHours.value = ''
+    dtrPeriodStart.value = ''
+    dtrPeriodEnd.value = ''
+    dtrFileMessage.value = 'This file could not be read. Enter the hours and dates manually.'
+  } finally {
+    dtrReadingFile.value = false
+  }
+}
+
+function startDtrResubmit(row: DtrSubmission) {
+  dtrResubmitTarget.value = row
+  dtrApplicationId.value = String(row.applicationId)
+  dtrPeriodStart.value = row.periodStart
+  dtrPeriodEnd.value = row.periodEnd
+  dtrHours.value = String(row.submittedHours)
+  dtrRemarks.value = row.remarks ?? ''
+  dtrFile.value = null
+  dtrFileMessage.value = ''
+}
+
+function resetDtrForm() {
+  dtrResubmitTarget.value = null
+  dtrApplicationId.value = ''
+  dtrPeriodStart.value = ''
+  dtrPeriodEnd.value = ''
+  dtrHours.value = ''
+  dtrRemarks.value = ''
+  dtrFile.value = null
+  dtrFileMessage.value = ''
+}
+
+async function submitStudentDtr() {
+  if (!dtrFile.value || !dtrApplicationId.value || !dtrPeriodStart.value || !dtrPeriodEnd.value || !dtrHours.value) {
+    error('Choose a placement, period, hours, and DTR file.')
+    return
+  }
+  dtrSubmitting.value = true
+  try {
+    const payload = {
+      applicationId: Number(dtrApplicationId.value),
+      periodStart: dtrPeriodStart.value,
+      periodEnd: dtrPeriodEnd.value,
+      submittedHours: Number(dtrHours.value),
+      remarks: dtrRemarks.value,
+      file: dtrFile.value,
+    }
+    if (dtrResubmitTarget.value) {
+      await resubmitDtr(dtrResubmitTarget.value.id, payload)
+      success('DTR resubmitted. Status is Submitted.')
+    } else {
+      await submitDtr(payload)
+      success('DTR uploaded. Status is Submitted.')
+    }
+    resetDtrForm()
+    await loadApplicationExtras()
+  } catch (caught) {
+    error(caught, { fallback: 'Unable to upload the DTR.' })
+  } finally {
+    dtrSubmitting.value = false
+  }
+}
+
+const placementCertificates = computed(() =>
+  [...certificates.value].sort((a, b) => {
+    const aTime = new Date(a.issuedAt || a.createdAt || 0).getTime()
+    const bTime = new Date(b.issuedAt || b.createdAt || 0).getTime()
+    return bTime - aTime
+  }),
+)
+
 const appliedInternshipIds = computed(() => new Set(applications.value.map((application) => String(application.internshipId))))
 
-const statusSteps = computed(() => {
-  const normalized = String(latestApplication.value?.status || '').trim().toLowerCase()
-
-  if (!latestApplication.value) {
-    return [
-      { label: 'Applied', active: true, complete: false, tone: 'pending', description: 'Submit an internship application to start tracking your progress.' },
-      { label: 'Endorsed', active: false, complete: false, tone: 'pending', description: 'Your school endorsement will appear here once available.' },
-      { label: 'Under Review', active: false, complete: false, tone: 'pending', description: 'Company review status will update once your application is assessed.' },
-      { label: 'Accepted / Rejected', active: false, complete: false, tone: 'pending', description: 'Final decision will be shown after review.' },
-    ]
-  }
-
-  const accepted = ['accepted', 'approved', 'active'].includes(normalized)
-  const companyRejected = ['rejected', 'declined', 'cancelled'].includes(normalized)
-  const schoolRejected = normalized === 'school_rejected'
-  const endorsed = ['endorsed', 'accepted', 'approved', 'active', 'rejected', 'declined', 'cancelled'].includes(normalized)
-  const underReview = ['endorsed'].includes(normalized)
-
-  return [
-    {
-      label: 'Applied',
-      active: ['submitted', 'pending', ''].includes(normalized),
-      complete: true,
-      tone: 'success',
-      description: `Application submitted for ${latestApplication.value.internshipTitle || 'your target role'}.`,
-    },
-    {
-      label: 'Endorsed',
-      active: underReview,
-      complete: endorsed,
-      tone: schoolRejected ? 'destructive' : endorsed ? 'success' : 'pending',
-      description: schoolRejected
-        ? 'Your school did not endorse this application.'
-        : latestApplication.value.schoolName
-          ? `${latestApplication.value.schoolName} endorsed your application to the company.`
-          : 'School endorsement details are being prepared.',
-    },
-    {
-      label: 'Under Review',
-      active: underReview,
-      complete: accepted || companyRejected,
-      tone: accepted ? 'success' : companyRejected ? 'destructive' : underReview ? 'warning' : 'pending',
-      description: latestApplication.value.companyName
-        ? `${latestApplication.value.companyName} is reviewing your application.`
-        : 'The company review stage will appear here.',
-    },
-    {
-      label: 'Accepted / Rejected',
-      active: accepted || companyRejected || schoolRejected,
-      complete: accepted || companyRejected || schoolRejected,
-      tone: accepted ? 'success' : companyRejected || schoolRejected ? 'destructive' : 'pending',
-      description: accepted
-        ? 'Congratulations, your application has been accepted.'
-        : companyRejected
-          ? 'This application was not selected. You can keep applying to other roles.'
-          : schoolRejected
-            ? 'Your school rejected this application before it reached company review.'
-          : 'Awaiting a final decision.',
-    },
-  ]
+const latestStepper = computed(() => {
+  const latest = latestApplication.value
+  if (!latest) return null
+  return applicationCards.value.find((card) => card.application.id === latest.id)?.stepper
+    ?? deriveApplicationStepper({ status: latest.status })
 })
 
 function formatDate(value?: string) {
@@ -495,17 +610,49 @@ function openApplicationDialog(opportunityId: string) {
     internshipId: String(opportunity.id),
     title: opportunity.title || 'Untitled opportunity',
     hostName: opportunity.companyName || opportunity.hostName || opportunity.schoolName || 'Host',
-    requiredDocuments: opportunity.requiredDocuments || [],
+    requiredDocuments: ['Endorsement'],
+    requiresResume: false,
   }
-  applicationResume.value = ''
+  const savedResume = savedDocuments.value.find((document) => isResumeCategory(document) && document.fileUrl)
+  applicationResume.value = savedResume?.fileUrl || ''
   selectedDocuments.value = []
   selectedRequirementDocuments.value = []
   selectedSavedDocumentIds.value = []
   selectedSavedResumeId.value = ''
+  selectedSavedEndorsementId.value = ''
+  const savedEndorsement = approvedEndorsementDocuments.value.find((document) => document.fileUrl)
+  if (savedEndorsement) {
+    selectedSavedEndorsementId.value = savedEndorsement.id
+    selectedRequirementDocuments.value = ['Endorsement']
+  }
   resumeFile.value = null
+  endorsementFile.value = null
+  if (endorsementPreviewUrl.value) URL.revokeObjectURL(endorsementPreviewUrl.value)
+  endorsementPreviewUrl.value = null
   supportingFiles.value = []
 
   applicationDialogOpen.value = true
+}
+
+/** Tracks which `?focus=` internship id was already opened so async reloads do not reopen it. */
+const consumedOpportunityFocusId = ref<string | null>(null)
+
+function tryFocusOpportunityFromQuery() {
+  if (activeView.value !== 'opportunities') return
+
+  const focusId = resolveInternshipFocusId(route.query.focus)
+  if (!focusId) {
+    consumedOpportunityFocusId.value = null
+    return
+  }
+
+  if (consumedOpportunityFocusId.value === focusId) return
+
+  const matchedId = findInternshipIdForFocus(internships.value, focusId)
+  if (!matchedId) return
+
+  consumedOpportunityFocusId.value = focusId
+  openApplicationDialog(matchedId)
 }
 
 function toggleRequirementDocument(documentName: string) {
@@ -540,14 +687,11 @@ function selectSavedResume(documentId: string) {
 
 const applicationRequirementsComplete = computed(() => {
   if (!selectedOpportunity.value) return false
-
-  const requiresResume = selectedOpportunity.value.requiredDocuments.some((item) => item.toLowerCase().includes('resume'))
-  const hasResume = !requiresResume || applicationResume.value.trim().length > 0 || !!resumeFile.value
-  const hasAllDocuments = selectedOpportunity.value.requiredDocuments.every((item) =>
-    selectedRequirementDocuments.value.includes(item),
+  return (
+    !!endorsementFile.value ||
+    !!selectedSavedEndorsementId.value ||
+    selectedRequirementDocuments.value.includes('Endorsement')
   )
-
-  return hasResume && hasAllDocuments
 })
 
 function handleResumeFileChange(event: Event) {
@@ -556,6 +700,55 @@ function handleResumeFileChange(event: Event) {
   if (resumeFile.value) {
     selectedSavedResumeId.value = ''
   }
+}
+
+function selectSavedEndorsement(documentId: string) {
+  if (selectedSavedEndorsementId.value === documentId) {
+    selectedSavedEndorsementId.value = ''
+    selectedRequirementDocuments.value = selectedRequirementDocuments.value.filter((item) => item !== 'Endorsement')
+    return
+  }
+  selectedSavedEndorsementId.value = documentId
+  endorsementFile.value = null
+  if (endorsementPreviewUrl.value) URL.revokeObjectURL(endorsementPreviewUrl.value)
+  endorsementPreviewUrl.value = null
+  if (!selectedRequirementDocuments.value.includes('Endorsement')) {
+    selectedRequirementDocuments.value = [...selectedRequirementDocuments.value, 'Endorsement']
+  }
+}
+
+function handleEndorsementFile(file: File | null) {
+  endorsementFile.value = file
+  if (endorsementPreviewUrl.value) URL.revokeObjectURL(endorsementPreviewUrl.value)
+  endorsementPreviewUrl.value = null
+  if (!file) {
+    selectedRequirementDocuments.value = selectedRequirementDocuments.value.filter((item) => item !== 'Endorsement')
+    return
+  }
+  selectedSavedEndorsementId.value = ''
+  if (file.type.startsWith('image/')) {
+    endorsementPreviewUrl.value = URL.createObjectURL(file)
+  }
+  if (!selectedRequirementDocuments.value.includes('Endorsement')) {
+    selectedRequirementDocuments.value = [...selectedRequirementDocuments.value, 'Endorsement']
+  }
+}
+
+function handleEndorsementFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  handleEndorsementFile(input.files?.[0] ?? null)
+  input.value = ''
+}
+
+function onEndorsementDrop(event: DragEvent) {
+  event.preventDefault()
+  endorsementDragOver.value = false
+  handleEndorsementFile(event.dataTransfer?.files?.[0] ?? null)
+}
+
+function clearEndorsementSelection() {
+  handleEndorsementFile(null)
+  selectedSavedEndorsementId.value = ''
 }
 
 function handleSupportingFilesChange(event: Event) {
@@ -605,12 +798,9 @@ async function uploadSavedDocumentFiles() {
 async function saveProfile() {
   savingProfile.value = true
   try {
+    // School-managed identity/enrollment fields are read-only; only contact may be updated.
     const updatedProfile = await updateCurrentUserProfile({
-      displayName: profileForm.value.displayName,
       profile: {
-        schoolName: profileForm.value.schoolName,
-        course: profileForm.value.course,
-        yearLevel: profileForm.value.yearLevel,
         contactNumber: profileForm.value.contactNumber,
       },
       profileSetupComplete: true,
@@ -618,7 +808,7 @@ async function saveProfile() {
     authStore.setUserProfile(updatedProfile)
     profileDialogOpen.value = false
     success('Profile updated.', {
-      description: 'Your intern information has been saved.',
+      description: 'Your contact information has been saved.',
     })
   } catch (caughtError) {
     error(caughtError, {
@@ -643,9 +833,33 @@ async function requestOpportunity(opportunityId: string) {
   applyingInternshipId.value = String(opportunity.id)
   try {
     let resumeValue = applicationResume.value.trim() || null
-    let documentValues = approvedSupportingDocuments.value
-      .filter((document) => selectedSavedDocumentIds.value.includes(document.id))
-      .map((document) => document.fileUrl)
+    let endorsementUrl =
+      approvedEndorsementDocuments.value.find((document) => document.id === selectedSavedEndorsementId.value)?.fileUrl ||
+      null
+
+    if (endorsementFile.value) {
+      uploadingEndorsement.value = true
+      endorsementUploadProgress.value = 20
+      const tick = window.setInterval(() => {
+        endorsementUploadProgress.value = Math.min(90, endorsementUploadProgress.value + 15)
+      }, 160)
+      try {
+        const [uploadedEndorsement] = await uploadDocuments({
+          files: [endorsementFile.value],
+          category: 'application-endorsement',
+        })
+        endorsementUrl = uploadedEndorsement?.fileUrl || endorsementUrl
+        endorsementUploadProgress.value = 100
+      } finally {
+        window.clearInterval(tick)
+        uploadingEndorsement.value = false
+      }
+    }
+
+    if (!endorsementUrl) {
+      error('An endorsement letter is required before you can submit.')
+      return
+    }
 
     if (resumeFile.value) {
       const [uploadedResume] = await uploadDocuments({
@@ -655,17 +869,7 @@ async function requestOpportunity(opportunityId: string) {
       resumeValue = uploadedResume?.fileUrl || resumeValue
     }
 
-    if (supportingFiles.value.length) {
-      const uploadedSupportingDocuments = await uploadDocuments({
-        files: supportingFiles.value,
-        category: 'application-supporting',
-      })
-      documentValues = [
-        ...documentValues,
-        ...uploadedSupportingDocuments.map((document) => document.fileUrl),
-      ]
-    }
-
+    const documentValues = [endorsementUrl]
     selectedDocuments.value = documentValues
 
     await submitApplication({
@@ -680,6 +884,7 @@ async function requestOpportunity(opportunityId: string) {
       studentCourse: currentCourse.value,
       status: 'submitted',
       resume: resumeValue,
+      endorsementUrl,
       documents: documentValues,
       documentsPending: false,
     })
@@ -770,6 +975,7 @@ watch(
     activeView.value = internViewFromRouteName(name)
     if (activeView.value === 'saved') void loadSavedInternshipsList()
     if (activeView.value === 'internship') void loadApplicationExtras()
+    tryFocusOpportunityFromQuery()
   },
 )
 
@@ -779,6 +985,14 @@ watch(
     hydrateProfileForm()
     startSubscriptions(userId)
   },
+)
+
+watch(
+  [() => route.query.focus, internships, activeView],
+  () => {
+    tryFocusOpportunityFromQuery()
+  },
+  { flush: 'post' },
 )
 </script>
 
@@ -849,98 +1063,14 @@ watch(
       </Card>
 
       <Card v-else-if="activeView === 'opportunities'" class="border-border/80 shadow-sm">
-        <CardHeader class="space-y-4">
-          <div>
-            <h2 class="text-2xl font-semibold text-foreground">Opportunities</h2>
-            <p class="text-sm text-muted-foreground">Browse internship posts that are already available to you through your school.</p>
-          </div>
-          <div class="relative max-w-md">
-            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input v-model="searchOpportunities" placeholder="Search opportunities..." class="pl-9" />
-          </div>
+        <CardHeader class="space-y-2">
+          <h2 class="text-2xl font-semibold text-foreground">Companies</h2>
+          <p class="text-sm text-muted-foreground">
+            Discover companies that publish OJT opportunities. Open a company profile to view roles and apply.
+          </p>
         </CardHeader>
-        <CardContent class="space-y-4">
-          <div class="rounded-2xl border border-border bg-accent p-4 text-sm text-foreground">
-            <p class="font-medium">Eligible internship posts</p>
-            <p class="mt-2">
-              {{
-                currentCourse
-                  ? `Showing school-hosted and partner company posts available to your school. Matches for ${currentCourse} are highlighted so you can compare them quickly.`
-                  : 'Set your course in your profile to get better matching for eligible internship posts.'
-              }}
-            </p>
-          </div>
-
-          <div class="rounded-xl border border-border bg-card">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Opportunity</TableHead>
-                  <TableHead>Host</TableHead>
-                  <TableHead>Programs</TableHead>
-                  <TableHead>Course Match</TableHead>
-                  <TableHead>Duration</TableHead>
-                  <TableHead>Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <template v-if="internshipsLoading">
-                  <TableRow v-for="index in 4" :key="index">
-                    <TableCell><Skeleton class="h-5 w-36" /></TableCell>
-                    <TableCell><Skeleton class="h-5 w-36" /></TableCell>
-                    <TableCell><Skeleton class="h-5 w-40" /></TableCell>
-                    <TableCell><Skeleton class="h-5 w-28" /></TableCell>
-                    <TableCell><Skeleton class="h-5 w-24" /></TableCell>
-                    <TableCell><Skeleton class="h-9 w-32" /></TableCell>
-                  </TableRow>
-                </template>
-                <template v-else-if="opportunityRows.length">
-                  <TableRow v-for="opportunity in opportunityRows" :key="opportunity.id">
-                    <TableCell>
-                      <div class="space-y-1">
-                        <p class="font-medium text-foreground">{{ opportunity.title }}</p>
-                        <p class="text-sm text-muted-foreground">{{ opportunity.location }}</p>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div class="space-y-1">
-                        <p class="text-foreground">{{ opportunity.hostName }}</p>
-                        <p class="text-sm text-muted-foreground">{{ opportunity.hostType }}</p>
-                      </div>
-                    </TableCell>
-                    <TableCell class="text-foreground">{{ opportunity.programs }}</TableCell>
-                    <TableCell>
-                      <Badge :variant="opportunity.courseMatchVariant">
-                        {{ opportunity.courseMatchLabel }}
-                      </Badge>
-                    </TableCell>
-                    <TableCell class="text-foreground">{{ opportunity.duration }}</TableCell>
-                    <TableCell>
-                      <Button
-                        variant="outline"
-                        class="gap-2"
-                        :disabled="applyingInternshipId === opportunity.id || appliedInternshipIds.has(String(opportunity.id))"
-                        @click="openApplicationDialog(opportunity.id)"
-                      >
-                        <LoaderCircle v-if="applyingInternshipId === opportunity.id" class="h-4 w-4 animate-spin" />
-                        <BriefcaseBusiness v-else class="h-4 w-4" />
-                        {{
-                          appliedInternshipIds.has(String(opportunity.id))
-                            ? 'Requested'
-                            : 'Apply Directly'
-                        }}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                </template>
-                <TableRow v-else>
-                  <TableCell colspan="6" class="py-10 text-center text-muted-foreground">
-                    No eligible internship posts are available yet.
-                  </TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
-          </div>
+        <CardContent>
+          <OrganizationDirectory kind="company" />
         </CardContent>
       </Card>
 
@@ -953,20 +1083,20 @@ watch(
         </CardHeader>
         <CardContent class="space-y-6">
           <div class="grid gap-4 md:grid-cols-3">
-            <div class="rounded-2xl border border-border bg-accent p-4">
+            <div class="rounded-2xl border border-border bg-muted/60 p-4">
               <p class="text-sm font-medium text-foreground">Saved files</p>
               <p class="mt-3 text-3xl font-semibold text-foreground">{{ savedDocuments.length }}</p>
               <p class="mt-2 text-sm text-muted-foreground">Documents ready to reuse in future applications.</p>
             </div>
-            <div class="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
-              <p class="text-sm font-medium text-emerald-900">Resume ready</p>
+            <div class="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-800 dark:bg-emerald-950/40">
+              <p class="text-sm font-medium text-emerald-900 dark:text-emerald-200">Resume ready</p>
               <p class="mt-3 text-3xl font-semibold text-foreground">
                 {{ savedDocuments.some((document) => ['application-resume', 'internship-application'].includes(String(document.category || '').toLowerCase())) ? 'Yes' : 'No' }}
               </p>
               <p class="mt-2 text-sm text-muted-foreground">A saved resume can auto-fill your next application.</p>
             </div>
-            <div class="rounded-2xl border border-violet-100 bg-violet-50 p-4">
-              <p class="text-sm font-medium text-violet-900">Pending review</p>
+            <div class="rounded-2xl border border-violet-200 bg-violet-50 p-4 dark:border-violet-800 dark:bg-violet-950/40">
+              <p class="text-sm font-medium text-violet-900 dark:text-violet-200">Pending review</p>
               <p class="mt-3 text-3xl font-semibold text-foreground">
                 {{ savedDocuments.filter((document) => document.status === 'pending').length }}
               </p>
@@ -974,9 +1104,9 @@ watch(
             </div>
           </div>
 
-          <div class="overflow-hidden rounded-3xl border border-border bg-gradient-to-br from-accent via-card to-muted">
+          <div class="overflow-hidden rounded-3xl border border-border bg-card">
             <div class="grid gap-0 lg:grid-cols-[1.2fr_0.8fr]">
-              <div class="space-y-4 p-6">
+              <div class="space-y-4 bg-muted/40 p-6 dark:bg-muted/20">
                 <div>
                   <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">Document Hub</p>
                   <h3 class="mt-2 text-2xl font-semibold text-foreground">Keep your application files ready</h3>
@@ -993,7 +1123,7 @@ watch(
                       type="file"
                       multiple
                       accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
-                      class="block w-full rounded-2xl border border-border bg-card px-4 py-4 text-sm shadow-sm file:mr-4 file:rounded-xl file:border-0 file:bg-primary file:px-4 file:py-2 file:text-sm file:font-medium file:text-primary-foreground hover:file:bg-primary/90"
+                      class="block w-full rounded-2xl border border-border bg-background px-4 py-4 text-sm text-foreground shadow-sm file:mr-4 file:rounded-xl file:border-0 file:bg-primary file:px-4 file:py-2 file:text-sm file:font-medium file:text-primary-foreground hover:file:bg-primary/90"
                       @change="handleSavedDocumentFilesChange"
                     />
                   </FormControl>
@@ -1018,20 +1148,20 @@ watch(
                 </div>
               </div>
 
-              <div class="border-t border-border bg-foreground px-6 py-6 text-background lg:border-l lg:border-t-0">
-                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-background/70">Quick Guide</p>
+              <div class="border-t border-border bg-primary px-6 py-6 text-primary-foreground lg:border-l lg:border-t-0">
+                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary-foreground/70">Quick Guide</p>
                 <div class="mt-4 space-y-4">
-                  <div class="rounded-2xl bg-background/10 p-4">
+                  <div class="rounded-2xl bg-primary-foreground/10 p-4">
                     <p class="font-medium">1. Upload your resume</p>
-                    <p class="mt-2 text-sm text-background/70">Use `Application Resume` so the system can find it first when you apply.</p>
+                    <p class="mt-2 text-sm text-primary-foreground/70">Use `Application Resume` so the system can find it first when you apply.</p>
                   </div>
-                  <div class="rounded-2xl bg-background/10 p-4">
+                  <div class="rounded-2xl bg-primary-foreground/10 p-4">
                     <p class="font-medium">2. Add school requirements</p>
-                    <p class="mt-2 text-sm text-background/70">Store endorsement forms, portfolio files, and supporting documents here.</p>
+                    <p class="mt-2 text-sm text-primary-foreground/70">Store endorsement forms, portfolio files, and supporting documents here.</p>
                   </div>
-                  <div class="rounded-2xl bg-background/10 p-4">
+                  <div class="rounded-2xl bg-primary-foreground/10 p-4">
                     <p class="font-medium">3. Apply faster</p>
-                    <p class="mt-2 text-sm text-background/70">Saved files are reused during internship applications whenever possible.</p>
+                    <p class="mt-2 text-sm text-primary-foreground/70">Saved files are reused during internship applications whenever possible.</p>
                   </div>
                 </div>
               </div>
@@ -1137,8 +1267,8 @@ watch(
                 <img
                   v-if="item.coverImage"
                   :src="item.coverImage"
-                  :alt="`${item.title} cover`"
-                  class="h-full w-full object-cover"
+                  :alt="`${item.companyName || item.hostName || 'Company'} logo`"
+                  class="h-full w-full object-contain p-4"
                   loading="lazy"
                 />
                 <div v-else class="flex h-full items-center justify-center text-muted-foreground">
@@ -1150,6 +1280,12 @@ watch(
                   <p class="text-sm text-muted-foreground">{{ item.companyName || item.hostName || 'Host organization' }}</p>
                   <h3 class="font-semibold text-foreground">{{ item.title }}</h3>
                 </div>
+                <ApplicationCapacity
+                  :slots-available="item.slotsAvailable"
+                  :slots-remaining="item.slotsRemaining"
+                  :filled-slots="item.filledSlots"
+                  compact
+                />
                 <div class="flex flex-wrap gap-2">
                   <Button size="sm" :disabled="!isPartneredForSaved(item)" @click="applyFromSaved(item)">
                     {{ isPartneredForSaved(item) ? 'Apply' : 'Not yet available' }}
@@ -1196,8 +1332,8 @@ watch(
                   <img
                     v-if="card.coverImage"
                     :src="card.coverImage"
-                    :alt="`${card.application.internshipTitle || 'Internship'} cover`"
-                    class="h-full w-full object-cover"
+                  :alt="`${card.application.companyName || 'Company'} logo`"
+                  class="h-full w-full object-contain p-4"
                     loading="lazy"
                   />
                   <div v-else class="flex h-full min-h-36 items-center justify-center text-muted-foreground">
@@ -1264,6 +1400,151 @@ watch(
               This area is ready for supervisor details, required internship hours, school endorsement status, and school-based placement records such as BSED practice teaching assignments.
             </p>
           </div>
+
+          <div class="rounded-2xl border border-border p-4 sm:col-span-2 xl:col-span-4">
+            <p class="text-sm font-medium text-foreground">Daily Time Record (DTR)</p>
+            <Badge variant="warning" class="mt-2">Draft</Badge>
+            <p class="mt-1 text-sm text-muted-foreground">
+              The form stays a draft until you upload. After upload the status is Submitted on your page, the host page, and the school page.
+            </p>
+            <div v-if="dtrPlacements.length" class="mt-4 grid gap-3 md:grid-cols-2">
+              <label class="space-y-1 text-sm">
+                <span class="font-medium text-foreground">Accepted placement</span>
+                <Select v-model="dtrApplicationId" :disabled="Boolean(dtrResubmitTarget)">
+                  <option value="">Select placement</option>
+                  <option
+                    v-for="placement in dtrPlacements"
+                    :key="placement.applicationId"
+                    :value="String(placement.applicationId)"
+                  >
+                    {{ placement.internshipTitle }}{{ placement.companyName ? ` — ${placement.companyName}` : '' }}
+                  </option>
+                </Select>
+              </label>
+              <label class="space-y-1 text-sm">
+                <span class="font-medium text-foreground">Hours</span>
+                <Input v-model="dtrHours" type="number" min="0.25" max="500" step="0.25" />
+              </label>
+              <label class="space-y-1 text-sm">
+                <span class="font-medium text-foreground">Period start</span>
+                <Input v-model="dtrPeriodStart" type="date" />
+              </label>
+              <label class="space-y-1 text-sm">
+                <span class="font-medium text-foreground">Period end</span>
+                <Input v-model="dtrPeriodEnd" type="date" />
+              </label>
+              <label class="space-y-1 text-sm md:col-span-2">
+                <span class="font-medium text-foreground">DTR file (PDF, JPG, PNG)</span>
+                <input
+                  class="flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                  :disabled="dtrReadingFile"
+                  @change="onDtrFileChange"
+                />
+                <p v-if="dtrReadingFile" class="text-sm text-muted-foreground">Reading the file…</p>
+                <p v-else-if="dtrFileMessage" class="text-sm text-muted-foreground">{{ dtrFileMessage }}</p>
+              </label>
+              <label class="space-y-1 text-sm md:col-span-2">
+                <span class="font-medium text-foreground">Remarks</span>
+                <Input v-model="dtrRemarks" placeholder="Optional note" />
+              </label>
+              <div class="flex gap-2 md:col-span-2">
+                <Button :disabled="dtrSubmitting || dtrReadingFile" @click="submitStudentDtr">
+                  <LoaderCircle v-if="dtrSubmitting" class="mr-2 h-4 w-4 animate-spin" />
+                  {{ dtrResubmitTarget ? 'Resubmit DTR' : 'Upload DTR' }}
+                </Button>
+                <Button v-if="dtrResubmitTarget" variant="outline" @click="resetDtrForm">Cancel</Button>
+              </div>
+            </div>
+            <p v-else class="mt-3 text-sm text-muted-foreground">
+              DTR upload becomes available after you have an accepted placement.
+            </p>
+            <ul v-if="allDtrs.length" class="mt-4 space-y-2">
+              <li
+                v-for="row in allDtrs"
+                :key="row.id"
+                class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-muted/40 px-3 py-2 text-sm"
+              >
+                <div>
+                  <p class="font-medium text-foreground">{{ row.internshipTitle || 'Internship' }}</p>
+                  <p class="text-xs text-muted-foreground">
+                    {{ row.periodStart }} – {{ row.periodEnd }} · {{ row.submittedHours }} hrs ·
+                    {{ dtrStatusLabel(row.status) }}
+                  </p>
+                </div>
+                <Button
+                  v-if="isRejectedOrRevision(row.status)"
+                  size="sm"
+                  variant="outline"
+                  @click="startDtrResubmit(row)"
+                >
+                  Correct and resubmit
+                </Button>
+              </li>
+            </ul>
+          </div>
+
+          <div class="rounded-2xl border border-border p-4 sm:col-span-2 xl:col-span-4">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p class="text-sm font-medium text-foreground">Certificate of completion</p>
+                <p class="mt-1 text-sm text-muted-foreground">
+                  When your school issues a certificate for a completed placement, open the HTML certificate here. Use Print / Save as PDF in your browser to keep a copy.
+                </p>
+              </div>
+              <Badge v-if="placementCertificates.length" variant="secondary">
+                {{ placementCertificates.length }} issued
+              </Badge>
+            </div>
+
+            <div v-if="certificatesLoading" class="mt-4 space-y-2">
+              <Skeleton class="h-16 w-full rounded-xl" />
+            </div>
+            <div
+              v-else-if="!placementCertificates.length"
+              class="mt-4 rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
+            >
+              No certificate has been issued for your placements yet.
+            </div>
+            <ul v-else class="mt-4 space-y-3">
+              <li
+                v-for="certificate in placementCertificates"
+                :key="certificate.id"
+                class="flex flex-col gap-3 rounded-xl border border-border bg-muted/40 p-4 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div class="min-w-0 space-y-1">
+                  <p class="text-sm font-medium text-foreground">
+                    {{ certificate.internshipTitle || placementSummary.role }}
+                  </p>
+                  <p class="text-xs text-muted-foreground">
+                    {{ certificate.certificateNumber }}
+                    <span v-if="certificate.issuedAt"> · Issued {{ formatDate(certificate.issuedAt) }}</span>
+                  </p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    :disabled="certificateActionId === certificate.id"
+                    @click="openStudentCertificate(certificate.id)"
+                  >
+                    <LoaderCircle v-if="certificateActionId === certificate.id" class="mr-2 h-4 w-4 animate-spin" />
+                    View Certificate
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    :disabled="certificateActionId === certificate.id"
+                    @click="printStudentCertificate(certificate.id)"
+                  >
+                    Print / Save as PDF
+                  </Button>
+                </div>
+              </li>
+            </ul>
+          </div>
         </CardContent>
       </Card>
 
@@ -1273,52 +1554,18 @@ watch(
           <p class="text-sm text-muted-foreground">Follow each milestone from initial application through the final decision.</p>
         </CardHeader>
         <CardContent class="space-y-4">
-          <div class="space-y-4">
-            <div
-              v-for="(step, index) in statusSteps"
-              :key="step.label"
-              class="relative rounded-2xl border border-border bg-muted p-5"
-            >
-              <div v-if="index < statusSteps.length - 1" class="absolute left-[1.7rem] top-[4.4rem] h-10 w-px bg-border" />
-              <div class="flex gap-4">
-                <div
-                  class="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
-                  :class="
-                    step.tone === 'success'
-                      ? 'bg-emerald-100 text-emerald-700'
-                      : step.tone === 'destructive'
-                        ? 'bg-red-100 text-red-700'
-                        : step.tone === 'warning'
-                          ? 'bg-amber-100 text-amber-700'
-                          : 'bg-border text-muted-foreground'
-                  "
-                >
-                  <CheckCircle2 v-if="step.complete && step.tone !== 'destructive'" class="h-5 w-5" />
-                  <XCircle v-else-if="step.tone === 'destructive' && step.active" class="h-5 w-5" />
-                  <CircleDashed v-else class="h-5 w-5" />
-                </div>
-                <div class="min-w-0 flex-1">
-                  <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <h3 class="text-lg font-semibold text-foreground">{{ step.label }}</h3>
-                    <Badge
-                      :variant="
-                        step.tone === 'success'
-                          ? 'success'
-                          : step.tone === 'destructive'
-                            ? 'destructive'
-                            : step.tone === 'warning'
-                              ? 'warning'
-                              : 'outline'
-                      "
-                    >
-                      {{ step.complete ? 'Completed' : step.active ? 'In Progress' : 'Waiting' }}
-                    </Badge>
-                  </div>
-                  <p class="mt-2 text-sm leading-6 text-muted-foreground">{{ step.description }}</p>
-                </div>
-              </div>
-            </div>
+          <div v-if="latestStepper" class="rounded-2xl border border-border bg-card p-4">
+            <p class="mb-4 text-sm font-medium text-foreground">
+              {{ latestApplication?.internshipTitle || 'Application' }}
+              <span v-if="latestApplication?.companyName" class="font-normal text-muted-foreground">
+                · {{ latestApplication.companyName }}
+              </span>
+            </p>
+            <ApplicationStatusStepper :result="latestStepper" />
           </div>
+          <p v-else class="rounded-2xl border border-dashed border-border p-6 text-sm text-muted-foreground">
+            Submit an internship application to start tracking your progress.
+          </p>
 
           <div class="rounded-2xl border border-border bg-accent p-4 text-sm text-foreground">
             <div class="flex items-center gap-2 font-medium">
@@ -1330,8 +1577,33 @@ watch(
             </p>
           </div>
 
-          <ApplicationInterviewPanel
+          <div v-if="latestApplication?.hoursMismatch" class="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm">
+            <p class="font-semibold text-foreground">Hours differ from your school requirement</p>
+            <p class="mt-1 text-muted-foreground">
+              School {{ latestApplication.schoolRequiredHours ?? '—' }}h · Host {{ latestApplication.hostRequiredHours ?? '—' }}h
+            </p>
+          </div>
+          <HoursAgreementPanel
             v-if="latestApplication?.id"
+            :application-id="latestApplication.id"
+            mode="student"
+            :hours-mismatch="!!latestApplication.hoursMismatch"
+            :school-required-hours="latestApplication.schoolRequiredHours"
+            :host-required-hours="latestApplication.hostRequiredHours"
+          />
+          <ApplicationTrackerPanel
+            v-if="latestApplication?.id"
+            :application-id="latestApplication.id"
+            mode="student"
+          />
+          <PlacementSchedulePanel
+            v-if="latestApplication?.id"
+            :application-id="latestApplication.id"
+            mode="student"
+            :accepted="String(latestApplication.status || '').toLowerCase() === 'accepted'"
+          />
+          <OjtCalendarPanel
+            v-if="latestApplication?.id && String(latestApplication.status || '').toLowerCase() === 'accepted'"
             :application-id="latestApplication.id"
             mode="student"
           />
@@ -1343,20 +1615,22 @@ watch(
       <template #default="{ close }">
         <DialogHeader>
           <DialogTitle>Edit Profile</DialogTitle>
-          <p class="text-sm text-muted-foreground">Update the details that schools and companies will see in your intern workspace.</p>
+          <p class="text-sm text-muted-foreground">
+            School-managed details are read-only. You can update your contact number here; change your password in Settings.
+          </p>
         </DialogHeader>
 
         <div class="mt-6 grid gap-4 sm:grid-cols-2">
           <FormItem class="sm:col-span-2">
             <FormLabel for="profileName">Full Name</FormLabel>
             <FormControl>
-              <Input id="profileName" v-model="profileForm.displayName" placeholder="Enter your full name" />
+              <Input id="profileName" v-model="profileForm.displayName" readonly disabled />
             </FormControl>
           </FormItem>
           <FormItem>
             <FormLabel for="profileEmail">Email</FormLabel>
             <FormControl>
-              <Input id="profileEmail" v-model="profileForm.email" disabled />
+              <Input id="profileEmail" v-model="profileForm.email" readonly disabled />
             </FormControl>
           </FormItem>
           <FormItem>
@@ -1368,25 +1642,22 @@ watch(
           <FormItem>
             <FormLabel for="profileSchool">School Name</FormLabel>
             <FormControl>
-              <Input id="profileSchool" v-model="profileForm.schoolName" placeholder="Enter your school name" />
+              <Input id="profileSchool" v-model="profileForm.schoolName" readonly disabled />
             </FormControl>
           </FormItem>
           <FormItem>
             <FormLabel for="profileCourse">Course</FormLabel>
             <FormControl>
-              <Input id="profileCourse" v-model="profileForm.course" placeholder="Enter your course" />
+              <Input id="profileCourse" v-model="profileForm.course" readonly disabled />
             </FormControl>
           </FormItem>
           <FormItem class="sm:col-span-2">
             <FormLabel for="profileYearLevel">Year Level</FormLabel>
             <FormControl>
-              <Select id="profileYearLevel" v-model="profileForm.yearLevel">
+              <Select id="profileYearLevel" v-model="profileForm.yearLevel" disabled>
                 <option value="">Select year level</option>
-                <option value="1st Year">1st Year</option>
-                <option value="2nd Year">2nd Year</option>
                 <option value="3rd Year">3rd Year</option>
                 <option value="4th Year">4th Year</option>
-                <option value="5th Year">5th Year</option>
               </Select>
             </FormControl>
           </FormItem>
@@ -1405,188 +1676,98 @@ watch(
     <Dialog v-model:open="applicationDialogOpen">
       <template #default="{ close }">
         <DialogHeader>
-          <DialogTitle>Application File Kit</DialogTitle>
+          <DialogTitle>Apply with endorsement</DialogTitle>
         </DialogHeader>
 
         <div v-if="selectedOpportunity" class="mt-6 space-y-6">
-          <div class="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-            <div class="rounded-3xl border border-border bg-card p-5 shadow-sm">
-              <div class="flex items-center justify-between gap-3">
-                <div>
-                  <h4 class="text-lg font-semibold text-foreground">Use Approved Documents</h4>
-                  <p class="mt-1 text-sm text-muted-foreground">Choose from the documents already approved in your document hub.</p>
-                </div>
-                <Badge variant="outline">{{ approvedDocuments.length }} ready</Badge>
-              </div>
+          <div class="rounded-2xl border border-border bg-muted px-4 py-3 text-sm text-foreground">
+            <p class="font-semibold">Required document: Endorsement</p>
+            <p class="mt-1 text-muted-foreground">
+              Accepted: PDF, JPG, PNG. Max 10 MB. Drag and drop or tap to upload (camera or file picker on mobile).
+              Your profile resume is optional information for the host — it is not required here.
+            </p>
+          </div>
 
-              <div class="mt-5 space-y-4">
-                <div>
-                  <p class="text-sm font-medium text-foreground">Approved resume</p>
-                  <div v-if="approvedResumeDocuments.length" class="mt-3 grid gap-3">
-                    <button
-                      v-for="document in approvedResumeDocuments"
-                      :key="document.id"
-                      type="button"
-                      class="w-full rounded-2xl border p-4 text-left transition"
-                      :class="
-                        selectedSavedResumeId === document.id
-                          ? 'border-primary bg-accent shadow-sm'
-                          : 'border-border bg-muted hover:border-border hover:bg-card'
-                      "
-                      @click="selectSavedResume(document.id)"
-                    >
-                      <div class="flex items-start justify-between gap-3">
-                        <div>
-                          <p class="font-medium text-foreground">{{ document.fileName }}</p>
-                          <p class="mt-1 text-sm text-muted-foreground">{{ document.category }}</p>
-                        </div>
-                        <Badge variant="success">Approved</Badge>
-                      </div>
-                    </button>
-                  </div>
-                  <p v-else class="mt-3 rounded-2xl border border-dashed border-border bg-muted px-4 py-4 text-sm text-muted-foreground">
-                    No approved resume yet. You can import one below for this application.
-                  </p>
-                </div>
-
-                <div>
-                  <p class="text-sm font-medium text-foreground">Approved supporting files</p>
-                  <div v-if="approvedSupportingDocuments.length" class="mt-3 grid gap-3 md:grid-cols-2">
-                    <button
-                      v-for="document in approvedSupportingDocuments"
-                      :key="document.id"
-                      type="button"
-                      class="rounded-2xl border p-4 text-left transition"
-                      :class="
-                        selectedSavedDocumentIds.includes(document.id)
-                          ? 'border-emerald-300 bg-emerald-50 shadow-sm'
-                          : 'border-border bg-muted hover:border-emerald-500/40 hover:bg-card'
-                      "
-                      @click="toggleSavedDocument(document.id)"
-                    >
-                      <div class="flex items-start justify-between gap-3">
-                        <div class="min-w-0">
-                          <p class="truncate font-medium text-foreground">{{ document.fileName }}</p>
-                          <p class="mt-1 text-sm text-muted-foreground">{{ document.category }}</p>
-                        </div>
-                        <Badge variant="success">{{ selectedSavedDocumentIds.includes(document.id) ? 'Selected' : 'Approved' }}</Badge>
-                      </div>
-                    </button>
-                  </div>
-                  <p v-else class="mt-3 rounded-2xl border border-dashed border-border bg-muted px-4 py-4 text-sm text-muted-foreground">
-                    No approved supporting files yet. You can still import new documents below.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div class="space-y-6">
-              <div class="rounded-3xl border border-border bg-card p-5 shadow-sm">
-                <div class="flex items-center justify-between gap-3">
-                  <div>
-                    <h4 class="text-lg font-semibold text-foreground">Requirement Checklist</h4>
-                  </div>
-                  <Badge variant="outline">
-                    {{ selectedRequirementDocuments.length }}/{{ selectedOpportunity.requiredDocuments.length || 0 }}
-                  </Badge>
-                </div>
-
-                <div
-                  v-if="selectedOpportunity.requiredDocuments.length"
-                  class="mt-5 space-y-3"
-                >
-                  <label
-                    v-for="document in selectedOpportunity.requiredDocuments"
-                    :key="document"
-                    class="flex items-center gap-3 rounded-2xl border border-border bg-muted px-4 py-4 text-sm text-foreground transition hover:border-border hover:bg-card"
-                  >
-                    <input
-                      type="checkbox"
-                      :checked="selectedRequirementDocuments.includes(document)"
-                      @change="toggleRequirementDocument(document)"
-                    />
-                    <span class="font-medium text-foreground">{{ document }}</span>
-                  </label>
-                </div>
-                <p v-else class="mt-5 rounded-2xl border border-dashed border-border bg-muted px-4 py-4 text-sm text-muted-foreground">
-                  This opportunity has no additional required documents listed.
+          <div
+            class="rounded-2xl border border-border bg-card p-4"
+            :class="endorsementDragOver ? 'border-primary bg-primary/5' : ''"
+            @dragover.prevent="endorsementDragOver = true"
+            @dragleave="endorsementDragOver = false"
+            @drop="onEndorsementDrop"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p class="text-sm font-semibold text-foreground">Endorsement letter</p>
+                <p class="text-xs text-muted-foreground">
+                  Status:
+                  {{ endorsementChecklistStatus === 'uploaded' ? 'Uploaded' : 'Missing' }}
                 </p>
               </div>
+              <Badge :variant="endorsementChecklistStatus === 'uploaded' ? 'success' : 'outline'">
+                {{ endorsementChecklistStatus === 'uploaded' ? 'Uploaded' : 'Missing' }}
+              </Badge>
+            </div>
 
-              <div class="rounded-3xl border border-emerald-100 bg-emerald-50/70 p-5">
-                <h4 class="text-lg font-semibold text-foreground">Application Summary</h4>
-                <div class="mt-4 space-y-3 text-sm text-foreground">
-                  <div class="flex items-center justify-between gap-4">
-                    <span>Resume source</span>
-                    <span class="font-medium text-foreground">
-                      {{ resumeFile ? 'Imported now' : selectedSavedResumeId ? 'Approved document' : applicationResume ? 'Resume link added' : 'Missing' }}
-                    </span>
-                  </div>
-                  <div class="flex items-center justify-between gap-4">
-                    <span>Approved files selected</span>
-                    <span class="font-medium text-foreground">{{ selectedSavedDocumentIds.length }}</span>
-                  </div>
-                  <div class="flex items-center justify-between gap-4">
-                    <span>New files imported</span>
-                    <span class="font-medium text-foreground">{{ supportingFiles.length }}</span>
-                  </div>
-                </div>
-              </div>
+            <div v-if="approvedEndorsementDocuments.length" class="mt-4 space-y-2">
+              <p class="text-xs font-medium text-muted-foreground">Reuse a saved endorsement</p>
+              <button
+                v-for="document in approvedEndorsementDocuments"
+                :key="document.id"
+                type="button"
+                class="flex w-full items-center justify-between rounded-xl border border-border px-3 py-2 text-left text-sm"
+                :class="selectedSavedEndorsementId === document.id ? 'border-primary bg-accent' : 'bg-background'"
+                @click="selectSavedEndorsement(document.id)"
+              >
+                <span class="truncate text-foreground">{{ document.fileName }}</span>
+                <Badge variant="outline">{{ selectedSavedEndorsementId === document.id ? 'Selected' : 'Reuse' }}</Badge>
+              </button>
+            </div>
+
+            <label class="mt-4 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border px-4 py-8 text-sm text-muted-foreground">
+              <span>Drop endorsement here or tap to upload</span>
+              <input
+                class="sr-only"
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png,image/*,application/pdf"
+                capture="environment"
+                @change="handleEndorsementFileChange"
+              />
+            </label>
+
+            <div v-if="endorsementFile || selectedSavedEndorsementId" class="mt-3 flex flex-wrap items-center gap-2 text-sm">
+              <p class="text-foreground">
+                {{
+                  endorsementFile?.name ||
+                  approvedEndorsementDocuments.find((d) => d.id === selectedSavedEndorsementId)?.fileName ||
+                  'Endorsement selected'
+                }}
+              </p>
+              <Button size="sm" variant="ghost" type="button" @click="clearEndorsementSelection">Remove</Button>
+            </div>
+            <img
+              v-if="endorsementPreviewUrl"
+              :src="endorsementPreviewUrl"
+              alt="Endorsement preview"
+              class="mt-3 max-h-40 rounded-md object-contain"
+            />
+            <div v-if="uploadingEndorsement" class="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
+              <div class="h-full bg-primary transition-all" :style="{ width: `${endorsementUploadProgress}%` }" />
             </div>
           </div>
 
-          <div class="rounded-3xl border border-border bg-gradient-to-br from-card via-accent/70 to-muted p-5 shadow-sm">
-            <div>
-              <h4 class="text-lg font-semibold text-foreground">Import New Files</h4>
-            </div>
-
-            <div class="mt-5 grid gap-4 lg:grid-cols-2">
-              <FormItem class="lg:col-span-2">
-                <FormLabel for="applicationResumeFile">Import Resume File</FormLabel>
-                <FormControl>
-                  <input
-                    id="applicationResumeFile"
-                    type="file"
-                    accept=".pdf,.doc,.docx"
-                    class="block w-full rounded-2xl border border-border bg-card px-4 py-4 text-sm shadow-sm transition file:mr-4 file:rounded-xl file:border-0 file:bg-primary file:px-4 file:py-2.5 file:text-sm file:font-semibold file:text-primary-foreground hover:border-primary/40 hover:file:bg-primary/90"
-                    @change="handleResumeFileChange"
-                  />
-                </FormControl>
-                <p v-if="resumeFile" class="mt-2 text-sm text-muted-foreground">Selected: {{ resumeFile.name }}</p>
-              </FormItem>
-
-              <FormItem class="lg:col-span-2">
-                <FormLabel for="applicationSupportingFiles">Import Supporting Files</FormLabel>
-                <FormControl>
-                  <input
-                    id="applicationSupportingFiles"
-                    type="file"
-                    multiple
-                    accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
-                    class="block w-full rounded-2xl border border-border bg-card px-4 py-4 text-sm shadow-sm transition file:mr-4 file:rounded-xl file:border-0 file:bg-primary file:px-4 file:py-2.5 file:text-sm file:font-semibold file:text-primary-foreground hover:border-primary/40 hover:file:bg-primary/90"
-                    @change="handleSupportingFilesChange"
-                  />
-                </FormControl>
-                <p v-if="supportingFiles.length" class="mt-2 text-sm text-muted-foreground">
-                  {{ supportingFiles.length }} file{{ supportingFiles.length === 1 ? '' : 's' }} selected
-                </p>
-              </FormItem>
-
-              <FormItem class="lg:col-span-2">
-                <FormLabel for="applicationResume">Resume Link or File Reference</FormLabel>
-                <FormControl>
-                  <Input
-                    id="applicationResume"
-                    v-model="applicationResume"
-                    placeholder="Paste a resume link if you are not importing a file"
-                  />
-                </FormControl>
-              </FormItem>
-            </div>
+          <div class="rounded-2xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+            <p class="font-medium text-foreground">Optional profile resume</p>
+            <p class="mt-1">
+              {{
+                applicationResume || approvedResumeDocuments.length
+                  ? 'A resume from your profile can be shown to the host. It is not required to submit.'
+                  : 'No profile resume on file. You can still submit with only the endorsement.'
+              }}
+            </p>
           </div>
 
           <div class="flex justify-end gap-3">
-            <Button variant="outline" @click="close">Cancel</Button>
+            <Button variant="outline" @click="close">Cancel / save progress</Button>
             <Button
               :disabled="!applicationRequirementsComplete || !selectedOpportunity || applyingInternshipId === selectedOpportunity.internshipId"
               @click="selectedOpportunity && requestOpportunity(selectedOpportunity.internshipId)"

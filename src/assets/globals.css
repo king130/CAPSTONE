@@ -4,6 +4,16 @@
 
 @layer base {
   :root {
+    color-scheme: light;
+    /* Stacking scale. In-page sticky content stays below the shell. */
+    --z-base: 0;
+    --z-sticky: 10;
+    --z-header: 30;
+    --z-sidebar: 40;
+    --z-dropdown: 50;
+    --z-sheet: 60;
+    --z-modal: 70;
+    --z-toast: 80;
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;
     --card: 0 0% 100%;
@@ -27,6 +37,7 @@
   }
 
   .dark {
+    color-scheme: dark;
     --background: 222.2 47% 7%;
     --foreground: 210 40% 98%;
     --card: 217.2 33% 12%;
@@ -54,5 +65,9 @@
 
   body {
     @apply bg-background text-foreground;
+  }
+
+  [data-sonner-toaster] {
+    z-index: var(--z-toast) !important;
   }
 }

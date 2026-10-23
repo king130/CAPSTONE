@@ -94,11 +94,11 @@ class StudentSchoolAttachmentSecurityTest extends TestCase
             ],
         ]);
 
-        $response->assertOk();
+        $response->assertStatus(422);
         $context['student']->refresh();
         $this->assertNull($context['student']->school_id);
         $this->assertNull($context['student']->organization_id);
-        $this->assertSame('BSCS', $context['student']->course);
+        $this->assertSame('BSIT', $context['student']->course);
     }
 
     public function test_student_cannot_switch_school_via_profile_school_id(): void
@@ -115,7 +115,7 @@ class StudentSchoolAttachmentSecurityTest extends TestCase
             ],
         ]);
 
-        $response->assertOk();
+        $response->assertStatus(422);
         $context['student']->refresh();
         $this->assertSame($schoolA['school']->id, $context['student']->school_id);
         $this->assertSame($schoolA['organization']->id, $context['student']->organization_id);
@@ -135,7 +135,7 @@ class StudentSchoolAttachmentSecurityTest extends TestCase
             ],
         ]);
 
-        $response->assertOk();
+        $response->assertStatus(422);
         $context['student']->refresh();
         $this->assertNull($context['student']->school_id);
         $this->assertNull($context['student']->organization_id);
@@ -154,7 +154,7 @@ class StudentSchoolAttachmentSecurityTest extends TestCase
             ],
         ]);
 
-        $response->assertOk();
+        $response->assertStatus(422);
         $context['student']->refresh();
         $this->assertNull($context['student']->school_id);
         $this->assertNull($context['student']->organization_id);
@@ -174,11 +174,11 @@ class StudentSchoolAttachmentSecurityTest extends TestCase
             ],
         ]);
 
-        $response->assertOk();
+        $response->assertStatus(422);
         $context['student']->refresh();
         $this->assertNull($context['student']->school_id);
         $this->assertNull($context['student']->organization_id);
-        $this->assertSame('Exact Match University', $context['student']->school_name);
+        $this->assertNull($context['student']->school_name);
         $this->assertSame($target['school']->id, School::query()->where('institution_name', 'Exact Match University')->value('id'));
     }
 

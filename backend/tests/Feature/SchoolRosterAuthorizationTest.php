@@ -181,6 +181,7 @@ class SchoolRosterAuthorizationTest extends TestCase
         Sanctum::actingAs($context['user']);
 
         $email = 'invite.'.uniqid('', true).'@example.com';
+        // Canonical stored value is "3rd Year"; API also accepts alias "3" via StudentYearLevel::normalize.
         $response = $this->postJson('/api/school-students', [
             'email' => $email,
             'studentName' => 'Invited Student',
@@ -190,6 +191,10 @@ class SchoolRosterAuthorizationTest extends TestCase
 
         $response->assertCreated();
         $this->assertDatabaseHas('users', ['email' => $email, 'role' => 'student']);
+        $this->assertDatabaseHas('students', [
+            'user_id' => User::query()->where('email', $email)->value('id'),
+            'year_level' => '3rd Year',
+        ]);
     }
 
     public function test_student_cannot_access_school_roster(): void

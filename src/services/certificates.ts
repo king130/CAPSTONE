@@ -43,3 +43,44 @@ export async function downloadCertificate(certificateId: string): Promise<Blob> 
   }
   return response.blob()
 }
+
+/** Open the existing HTML certificate in a new tab (authenticated fetch; not a public URL). */
+export async function viewCertificateHtml(certificateId: string): Promise<void> {
+  const blob = await downloadCertificate(certificateId)
+  const htmlBlob = blob.type.includes('html') ? blob : new Blob([blob], { type: 'text/html;charset=UTF-8' })
+  const objectUrl = URL.createObjectURL(htmlBlob)
+  const opened = window.open(objectUrl, '_blank', 'noopener,noreferrer')
+  if (!opened) {
+    URL.revokeObjectURL(objectUrl)
+    throw new Error('Unable to open certificate. Allow pop-ups and try again.')
+  }
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
+}
+
+/** Open HTML certificate and invoke the browser print dialog (Print / Save as PDF via the browser). */
+export async function printCertificateHtml(certificateId: string): Promise<void> {
+  const blob = await downloadCertificate(certificateId)
+  const htmlBlob = blob.type.includes('html') ? blob : new Blob([blob], { type: 'text/html;charset=UTF-8' })
+  const objectUrl = URL.createObjectURL(htmlBlob)
+  const opened = window.open(objectUrl, '_blank', 'noopener,noreferrer')
+  if (!opened) {
+    URL.revokeObjectURL(objectUrl)
+    throw new Error('Unable to open certificate. Allow pop-ups and try again.')
+  }
+
+  let printed = false
+  const triggerPrint = () => {
+    if (printed || opened.closed) return
+    printed = true
+    try {
+      opened.focus()
+      opened.print()
+    } finally {
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
+    }
+  }
+
+  opened.addEventListener('load', triggerPrint, { once: true })
+  // Fallback if load already fired for blob URLs in some browsers.
+  window.setTimeout(triggerPrint, 500)
+}

@@ -113,7 +113,7 @@ class GuestProfileRolePromotionTest extends TestCase
             'role' => 'school',
         ]);
 
-        $response->assertOk();
+        $response->assertStatus(422);
 
         $student->refresh();
         $this->assertSame('student', $student->role);

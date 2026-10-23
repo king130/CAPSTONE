@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted } from 'vue'
+import Select from '@/components/ui/select/Select.vue'
 import { useAuthStore } from '@/stores/auth'
 import { buildProfileAvatarUrl } from '@/services/profileMedia'
 import { subscribeActiveInternships, getInternship, type InternshipRecord } from '@/services/internships'
@@ -445,13 +446,13 @@ function getInitials(company: string | undefined): string {
         <!-- Duration Filter -->
         <div class="filter-group">
           <label class="filter-label">Duration</label>
-          <select v-model="duration" class="filter-select">
+          <Select v-model="duration">
             <option value="">All Durations</option>
             <option value="1-3">1-3 Months</option>
             <option value="4-6">4-6 Months</option>
             <option value="6+">6+ Months</option>
             <option value="weeks">Weeks</option>
-          </select>
+          </Select>
         </div>
 
         <!-- Filter Actions -->

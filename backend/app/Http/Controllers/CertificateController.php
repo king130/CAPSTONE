@@ -4,16 +4,20 @@ namespace App\Http\Controllers;
 
 use App\Models\Application;
 use App\Models\Certificate;
+use App\Models\OjtDtrSubmission;
 use App\Models\OjtLog;
 use App\Services\PermissionGate;
+use App\Services\RequiredOjtHoursAccessor;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Storage;
 
 class CertificateController extends Controller
 {
-    public function __construct(private readonly PermissionGate $permissions)
-    {
+    public function __construct(
+        private readonly PermissionGate $permissions,
+        private readonly RequiredOjtHoursAccessor $requiredOjtHours,
+    ) {
     }
 
     public function index(Request $request)
@@ -85,12 +89,23 @@ class CertificateController extends Controller
             return response()->json(['message' => 'Certificate requires an accepted application.'], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
-        $requiredHours = OjtLogController::requiredHoursForOrg($user->activeOrganization());
-        $approvedHours = (float) OjtLog::query()
+        // Agreed hours-agreement wins via RequiredOjtHoursAccessor; else application snapshot; else org default.
+        $requiredHours = (int) ($this->requiredOjtHours->forApplication($application)
+            ?: OjtLogController::requiredHoursForOrg($user->activeOrganization()));
+
+        $logHours = (float) OjtLog::query()
             ->where('student_id', $application->student_id)
             ->where('application_id', $application->id)
             ->where('status', 'approved')
             ->sum('hours');
+
+        // DTR is the primary hours path for placements; keep ojt_logs for legacy entries.
+        $dtrHours = (float) OjtDtrSubmission::query()
+            ->where('application_id', $application->id)
+            ->where('status', OjtDtrSubmission::STATUS_APPROVED)
+            ->sum('submitted_hours');
+
+        $approvedHours = max($logHours, $dtrHours);
 
         if ($approvedHours < $requiredHours) {
             return response()->json([
@@ -229,11 +244,11 @@ class CertificateController extends Controller
         float $approvedHours,
         int $requiredHours
     ): string {
-        $issuedAt = now()->toFormattedDateString();
+        $issuedAt = now()->format('F j, Y');
         $escapedName = e($studentName);
-        $escapedTitle = e($internshipTitle);
-        $escapedHost = e($hostName);
         $escapedNumber = e($certificateNumber);
+        // Internship/host/hours stay in certificate metadata; Canva visual uses brand copy only.
+        unset($internshipTitle, $hostName, $approvedHours, $requiredHours);
 
         return <<<HTML
 <!DOCTYPE html>
@@ -242,27 +257,181 @@ class CertificateController extends Controller
   <meta charset="UTF-8" />
   <title>Certificate {$escapedNumber}</title>
   <style>
-    body { font-family: Georgia, serif; margin: 0; padding: 48px; background: #f8fafc; color: #0f172a; }
-    .sheet { max-width: 800px; margin: 0 auto; background: #fff; border: 8px double #1e3a5f; padding: 56px 48px; text-align: center; }
-    h1 { letter-spacing: 0.12em; font-size: 28px; margin: 0 0 8px; text-transform: uppercase; }
-    .subtitle { color: #475569; margin-bottom: 32px; }
-    .name { font-size: 36px; margin: 24px 0; border-bottom: 1px solid #cbd5e1; display: inline-block; padding: 0 16px 8px; }
-    .meta { margin-top: 40px; font-size: 14px; color: #64748b; }
+    @page { size: landscape; margin: 0; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #dfe7f0;
+      color: #0b2c4d;
+      font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .sheet {
+      position: relative;
+      width: min(1100px, 100%);
+      aspect-ratio: 11 / 8.5;
+      margin: 0 auto;
+      background: #ffffff;
+      overflow: hidden;
+      box-shadow: 0 16px 36px rgba(11, 44, 77, 0.16);
+    }
+    .corner {
+      position: absolute;
+      z-index: 0;
+      width: 22%;
+      height: 34%;
+      pointer-events: none;
+    }
+    .corner--tl { top: 0; left: 0; }
+    .corner--br { right: 0; bottom: 0; transform: rotate(180deg); }
+    .corner svg { display: block; width: 100%; height: 100%; }
+    .content {
+      position: relative;
+      z-index: 2;
+      height: 100%;
+      padding: 9% 14% 8%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      text-align: center;
+    }
+    .title {
+      position: relative;
+      z-index: 3;
+      margin: 0 auto;
+      max-width: 78%;
+      font-size: clamp(26px, 3.6vw, 44px);
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #0b2c4d;
+      line-height: 1.15;
+    }
+    .diamond {
+      width: 12px;
+      height: 12px;
+      margin: 16px auto 20px;
+      background: #c9a227;
+      transform: rotate(45deg);
+    }
+    .presented {
+      margin: 0;
+      color: #0b2c4d;
+      font-size: clamp(15px, 1.55vw, 19px);
+      font-weight: 500;
+    }
+    .name {
+      margin: 14px 0 12px;
+      font-size: clamp(36px, 5.2vw, 58px);
+      font-weight: 800;
+      color: #1a6b7a;
+      line-height: 1.1;
+      max-width: 92%;
+      text-transform: uppercase;
+    }
+    .body-copy {
+      margin: 0;
+      color: #0b2c4d;
+      font-size: clamp(14px, 1.5vw, 18px);
+      max-width: 68%;
+      line-height: 1.45;
+      font-weight: 500;
+    }
+    .ribbon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 22px;
+      min-width: min(380px, 62%);
+      padding: 11px 48px;
+      background: #0b2c4d;
+      color: #fff;
+      font-weight: 700;
+      font-size: clamp(16px, 1.9vw, 21px);
+      letter-spacing: 0.03em;
+      border: 2px solid #c9a227;
+      clip-path: polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%);
+    }
+    .date {
+      margin: 18px 0 0;
+      color: #0b2c4d;
+      font-size: clamp(14px, 1.4vw, 17px);
+      font-weight: 500;
+    }
+    .signatures {
+      width: min(640px, 78%);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 80px;
+      margin-top: 36px;
+    }
+    .sig { text-align: center; }
+    .sig-line {
+      border-top: 1.5px solid #0b2c4d;
+      margin: 0 8px 10px;
+    }
+    .sig-label {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #0b2c4d;
+    }
+    .meta {
+      position: absolute;
+      left: 50%;
+      bottom: 14px;
+      transform: translateX(-50%);
+      font-size: 10px;
+      color: #94a3b8;
+    }
+    @media print {
+      body { background: #fff; padding: 0; }
+      .sheet { box-shadow: none; width: 100%; height: 100vh; aspect-ratio: auto; }
+      .meta { display: none; }
+    }
   </style>
 </head>
 <body>
   <div class="sheet">
-    <h1>Certificate of Completion</h1>
-    <p class="subtitle">This certifies that</p>
-    <div class="name">{$escapedName}</div>
-    <p>has successfully completed the internship program</p>
-    <p><strong>{$escapedTitle}</strong></p>
-    <p>at <strong>{$escapedHost}</strong></p>
-    <p>with {$approvedHours} of {$requiredHours} required approved OJT hours.</p>
-    <div class="meta">
-      <div>Certificate No: {$escapedNumber}</div>
-      <div>Issued: {$issuedAt}</div>
+    <div class="corner corner--tl" aria-hidden="true">
+      <svg viewBox="0 0 360 420" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
+        <polygon points="0,0 250,0 0,280" fill="#0b2c4d"/>
+        <polygon points="0,0 168,0 0,210" fill="#1a6b7a"/>
+        <polygon points="0,0 250,0 0,280" fill="none" stroke="#c9a227" stroke-width="5"/>
+      </svg>
     </div>
+    <div class="corner corner--br" aria-hidden="true">
+      <svg viewBox="0 0 360 420" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
+        <polygon points="0,0 250,0 0,280" fill="#0b2c4d"/>
+        <polygon points="0,0 168,0 0,210" fill="#1a6b7a"/>
+        <polygon points="0,0 250,0 0,280" fill="none" stroke="#c9a227" stroke-width="5"/>
+      </svg>
+    </div>
+    <div class="content">
+      <div>
+        <h1 class="title">Certificate of Completion</h1>
+        <div class="diamond" aria-hidden="true"></div>
+        <p class="presented">This certificate is presented to</p>
+        <div class="name">{$escapedName}</div>
+        <p class="body-copy">for successfully completing the OJT Intern Path internship program</p>
+        <div class="ribbon">OJT Intern Path</div>
+        <p class="date">Date: {$issuedAt}</p>
+      </div>
+      <div class="signatures">
+        <div class="sig">
+          <div class="sig-line"></div>
+          <p class="sig-label">Project Adviser</p>
+        </div>
+        <div class="sig">
+          <div class="sig-line"></div>
+          <p class="sig-label">Program Chair</p>
+        </div>
+      </div>
+    </div>
+    <div class="meta">Certificate No: {$escapedNumber}</div>
   </div>
 </body>
 </html>
