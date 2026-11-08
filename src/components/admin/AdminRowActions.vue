@@ -11,12 +11,16 @@ withDefaults(
     rejectLabel?: string
     showApprove?: boolean
     showReject?: boolean
+    approveDisabled?: boolean
+    rejectDisabled?: boolean
   }>(),
   {
     approveLabel: 'Approve',
     rejectLabel: 'Reject',
     showApprove: true,
     showReject: true,
+    approveDisabled: false,
+    rejectDisabled: false,
   },
 )
 
@@ -41,11 +45,20 @@ const emit = defineEmits<{
         <Eye class="h-4 w-4" />
         <span>View</span>
       </DropdownMenuItem>
-      <DropdownMenuItem v-if="showApprove" @click="emit('approve'); close()">
+      <DropdownMenuItem
+        v-if="showApprove"
+        :disabled="approveDisabled"
+        @click="emit('approve'); close()"
+      >
         <Check class="h-4 w-4" />
         <span>{{ approveLabel }}</span>
       </DropdownMenuItem>
-      <DropdownMenuItem v-if="showReject" class="text-red-600 hover:text-red-600" @click="emit('reject'); close()">
+      <DropdownMenuItem
+        v-if="showReject"
+        class="text-red-600 hover:text-red-600"
+        :disabled="rejectDisabled"
+        @click="emit('reject'); close()"
+      >
         <X class="h-4 w-4" />
         <span>{{ rejectLabel }}</span>
       </DropdownMenuItem>

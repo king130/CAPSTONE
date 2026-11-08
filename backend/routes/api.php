@@ -94,6 +94,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('admin/holidays/{publicHoliday}', [PublicHolidayController::class, 'update']);
     Route::delete('admin/holidays/{publicHoliday}', [PublicHolidayController::class, 'destroy']);
     Route::get('admin/users/{user}/verification-documents', [OrganizationVerificationDocumentController::class, 'adminIndex']);
+    Route::post('admin/verification-documents/{organizationVerificationDocument}/mark-viewed', [OrganizationVerificationDocumentController::class, 'markAdminViewed'])
+        ->whereNumber('organizationVerificationDocument');
     Route::get('admin/verification-documents/{organizationVerificationDocument}/file', [OrganizationVerificationDocumentController::class, 'download'])
         ->whereNumber('organizationVerificationDocument');
     Route::patch('admin/verification-documents/{organizationVerificationDocument}', [OrganizationVerificationDocumentController::class, 'adminReview'])

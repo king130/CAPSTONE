@@ -20,6 +20,8 @@ export interface OrganizationVerificationDocument {
   uploadedAt?: string | null
   reviewedBy?: string | null
   reviewedAt?: string | null
+  adminViewedAt?: string | null
+  adminViewedByUserId?: string | null
   history?: Array<{
     id: string
     fileName: string
@@ -319,6 +321,16 @@ export async function reviewAdminVerificationDocument(
     method: 'PATCH',
     body: JSON.stringify({ status, reason: reason || null }),
   })
+  return res.data
+}
+
+export async function markAdminVerificationDocumentViewed(
+  id: string,
+): Promise<OrganizationVerificationDocument> {
+  const res = await apiFetch<{ data: OrganizationVerificationDocument }>(
+    `/admin/verification-documents/${id}/mark-viewed`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
   return res.data
 }
 

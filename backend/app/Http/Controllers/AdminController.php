@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Models\Company;
 use App\Models\Notification;
+use App\Models\Organization;
+use App\Models\OrganizationVerificationDocument;
 use App\Models\School;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -74,7 +76,9 @@ class AdminController extends Controller
                         'cityMunicipality' => $company->city_municipality,
                         'lguType' => $company->lgu_type,
                         'organizationType' => $primaryMembership?->organization?->type
-                            ?? ($company->lgu_type ? 'municipal_hall' : 'company'),
+                            ?? ((string) $company->company_type === 'municipal_hall' || $company->lgu_type
+                                ? 'municipal_hall'
+                                : 'company'),
                         'verificationStatus' => $company->verification_status,
                         'verificationRejectionReason' => $primaryMembership?->organization?->settings['verification_rejection_reason'] ?? null,
                     ] : null,
@@ -137,7 +141,6 @@ class AdminController extends Controller
                 $organization = $user->school->organization;
                 $ownerUserId = $organization?->owner_user_id ?? $user->school->user_id;
                 $orgLabel = $user->school->institution_name ?: 'your school';
-                $user->school()->update(['verification_status' => $nextStatus]);
             }
 
             if ($user->company) {
@@ -149,6 +152,25 @@ class AdminController extends Controller
                     ?? ($user->company->lgu_type ? 'municipal_hall' : 'company');
                 $orgLabel = $user->company->company_name
                     ?: ($orgType === 'municipal_hall' ? 'your municipal hall' : 'your company');
+            }
+
+            if (in_array($nextStatus, ['approved', 'rejected'], true)) {
+                $gate = $this->organizationDocumentViewGate($organization, $nextStatus);
+                if ($gate !== null) {
+                    return response()->json([
+                        'message' => $gate,
+                        'errors' => [
+                            'verificationStatus' => [$gate],
+                        ],
+                    ], Response::HTTP_UNPROCESSABLE_ENTITY);
+                }
+            }
+
+            if ($user->school) {
+                $user->school()->update(['verification_status' => $nextStatus]);
+            }
+
+            if ($user->company) {
                 $user->company()->update(['verification_status' => $nextStatus]);
             }
 
@@ -243,6 +265,39 @@ class AdminController extends Controller
         ]);
 
         return response()->json($auth->formatUserProfile($fresh));
+    }
+
+    /**
+     * Gate org Approve/Reject on admin document viewing.
+     * Zero docs: Approve blocked, Reject allowed.
+     * With docs: both blocked until every current row has admin_viewed_at.
+     */
+    private function organizationDocumentViewGate(?Organization $organization, string $nextStatus): ?string
+    {
+        if (! $organization) {
+            return null;
+        }
+
+        $documents = OrganizationVerificationDocument::query()
+            ->where('organization_id', $organization->id)
+            ->get(['id', 'admin_viewed_at']);
+
+        if ($documents->isEmpty()) {
+            if ($nextStatus === 'approved') {
+                return 'Approve is blocked until verification documents are uploaded and viewed.';
+            }
+
+            return null;
+        }
+
+        $unviewed = $documents->filter(fn (OrganizationVerificationDocument $doc) => $doc->admin_viewed_at === null);
+        if ($unviewed->isNotEmpty()) {
+            $viewed = $documents->count() - $unviewed->count();
+
+            return 'View all documents to enable actions ('.$viewed.'/'.$documents->count().' viewed).';
+        }
+
+        return null;
     }
 
     private function canManageUsers(?User $user): bool

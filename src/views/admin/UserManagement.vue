@@ -17,6 +17,7 @@ import {
   documentTypeLabel,
   downloadOrganizationVerificationDocument,
   listAdminVerificationDocuments,
+  markAdminVerificationDocumentViewed,
   reviewAdminVerificationDocument,
   verificationStatusLabel,
   type OrganizationVerificationDocument,
@@ -72,6 +73,8 @@ const docReviewReason = ref('')
 const docReviewSubmitting = ref(false)
 const statusFilter = ref<StatusFilter>('all')
 const orgSort = ref<OrgSort>('newest')
+/** Per org-owner userId: document view progress after details were opened. */
+const docViewProgressByUserId = ref<Record<string, { total: number; viewed: number }>>({})
 
 const mode = computed<ManagementMode>(() => {
   if (route.name === 'admin-manage-schools') return 'schools'
@@ -261,6 +264,15 @@ async function handleInternDecision(row: InternRow, status: 'approved' | 'reject
 }
 
 function openOrganizationRejectDialog(row: OrganizationRow) {
+  const actions = organizationActionConfig(row.status)
+  const gates = organizationDecisionGates(row.userId, actions.requiresDocumentViews)
+  if (gates.rejectDisabled) {
+    error(new Error('View all documents to enable actions.'), {
+      fallback: 'View all documents to enable actions.',
+    })
+    void openOrganizationDetails(row)
+    return
+  }
   rejectTarget.value = row
   rejectionReason.value = ''
 }
@@ -279,6 +291,7 @@ function organizationActionConfig(status: string) {
       showReject: false,
       approveLabel: 'Revoke',
       nextOnApprove: 'pending' as VerificationStatus,
+      requiresDocumentViews: false,
     }
   }
   if (normalized === 'rejected') {
@@ -287,6 +300,7 @@ function organizationActionConfig(status: string) {
       showReject: false,
       approveLabel: 'Re-approve',
       nextOnApprove: 'approved' as VerificationStatus,
+      requiresDocumentViews: true,
     }
   }
   return {
@@ -294,10 +308,72 @@ function organizationActionConfig(status: string) {
     showReject: true,
     approveLabel: 'Approve',
     nextOnApprove: 'approved' as VerificationStatus,
+    requiresDocumentViews: true,
   }
 }
 
+function syncDocViewProgress(userId: string, docs: OrganizationVerificationDocument[]) {
+  const viewed = docs.filter((doc) => !!doc.adminViewedAt).length
+  docViewProgressByUserId.value = {
+    ...docViewProgressByUserId.value,
+    [userId]: { total: docs.length, viewed },
+  }
+}
+
+function organizationDecisionGates(userId: string, requiresDocumentViews: boolean) {
+  if (!requiresDocumentViews) {
+    return { approveDisabled: false, rejectDisabled: false }
+  }
+  const progress = docViewProgressByUserId.value[userId]
+  if (!progress) {
+    return { approveDisabled: true, rejectDisabled: true }
+  }
+  if (progress.total === 0) {
+    return { approveDisabled: true, rejectDisabled: false }
+  }
+  const allViewed = progress.viewed >= progress.total
+  return { approveDisabled: !allViewed, rejectDisabled: !allViewed }
+}
+
+const selectedOrgDocProgress = computed(() => {
+  if (!selectedRecord.value || mode.value === 'interns' || !('userId' in selectedRecord.value)) {
+    return null
+  }
+  return (
+    docViewProgressByUserId.value[selectedRecord.value.userId] ?? {
+      total: verificationDocs.value.length,
+      viewed: verificationDocs.value.filter((doc) => !!doc.adminViewedAt).length,
+    }
+  )
+})
+
+const selectedOrgCanApprove = computed(() => {
+  const progress = selectedOrgDocProgress.value
+  if (!progress) return false
+  if (progress.total === 0) return false
+  return progress.viewed >= progress.total
+})
+
+const selectedOrgCanReject = computed(() => {
+  const progress = selectedOrgDocProgress.value
+  if (!progress) return false
+  if (progress.total === 0) return true
+  return progress.viewed >= progress.total
+})
+
 function openOrganizationConfirm(row: OrganizationRow, status: VerificationStatus) {
+  const actions = organizationActionConfig(row.status)
+  if (status === 'approved' || status === 'rejected') {
+    const gates = organizationDecisionGates(row.userId, actions.requiresDocumentViews)
+    const blocked = status === 'approved' ? gates.approveDisabled : gates.rejectDisabled
+    if (blocked) {
+      error(new Error('View all documents to enable actions.'), {
+        fallback: 'View all documents to enable actions.',
+      })
+      void openOrganizationDetails(row)
+      return
+    }
+  }
   confirmTarget.value = row
   confirmNextStatus.value = status
 }
@@ -470,10 +546,13 @@ const organizationColumns = computed(() => [
     header: 'Actions',
     cell: ({ row }) => {
       const actions = organizationActionConfig(row.original.status)
+      const gates = organizationDecisionGates(row.original.userId, actions.requiresDocumentViews)
       return h(AdminRowActions, {
         showApprove: actions.showApprove,
         showReject: actions.showReject,
         approveLabel: actions.approveLabel,
+        approveDisabled: gates.approveDisabled,
+        rejectDisabled: gates.rejectDisabled,
         onView: () => {
           void openOrganizationDetails(row.original)
         },
@@ -491,6 +570,7 @@ async function openOrganizationDetails(row: OrganizationRow) {
   try {
     const res = await listAdminVerificationDocuments(row.userId)
     verificationDocs.value = res.data ?? []
+    syncDocViewProgress(row.userId, verificationDocs.value)
   } catch (caughtError) {
     error(caughtError, { fallback: 'Unable to load verification documents.' })
   } finally {
@@ -500,7 +580,12 @@ async function openOrganizationDetails(row: OrganizationRow) {
 
 async function downloadAdminDoc(doc: OrganizationVerificationDocument) {
   try {
+    const marked = await markAdminVerificationDocumentViewed(doc.id)
     await downloadOrganizationVerificationDocument(doc.id, doc.fileName, true)
+    verificationDocs.value = verificationDocs.value.map((row) => (row.id === marked.id ? marked : row))
+    if (selectedRecord.value && 'userId' in selectedRecord.value) {
+      syncDocViewProgress(selectedRecord.value.userId, verificationDocs.value)
+    }
   } catch (caughtError) {
     error(caughtError, { fallback: 'Unable to download the document.' })
   }
@@ -620,6 +705,7 @@ onMounted(() => {
             </Select>
           </div>
         </div>
+
         <AdminEntityTable
           :columns="tableColumns"
           :data="tableData"
@@ -655,6 +741,21 @@ onMounted(() => {
 
           <div v-if="mode !== 'interns'" class="space-y-3 border-t border-border pt-4">
             <p class="text-sm font-semibold text-foreground">Verification documents</p>
+            <p
+              v-if="selectedOrgDocProgress"
+              class="text-xs text-muted-foreground"
+              data-testid="admin-doc-view-progress"
+            >
+              <template v-if="selectedOrgDocProgress.total === 0">
+                No documents uploaded — Approve is blocked; Reject stays available.
+              </template>
+              <template v-else-if="selectedOrgDocProgress.viewed < selectedOrgDocProgress.total">
+                View all documents to enable actions ({{ selectedOrgDocProgress.viewed }}/{{ selectedOrgDocProgress.total }} viewed).
+              </template>
+              <template v-else>
+                All documents viewed ({{ selectedOrgDocProgress.viewed }}/{{ selectedOrgDocProgress.total }}).
+              </template>
+            </p>
             <p v-if="loadingVerificationDocs" class="text-sm text-muted-foreground">Loading documents…</p>
             <p v-else-if="verificationDocs.length === 0" class="text-sm text-muted-foreground">
               No documents uploaded yet.
@@ -671,6 +772,8 @@ onMounted(() => {
                     <p class="text-xs text-muted-foreground">
                       {{ documentTypeLabel(doc.documentType, doc.documentTypeLabel) }} ·
                       {{ verificationStatusLabel(doc.status) }}
+                      ·
+                      {{ doc.adminViewedAt ? 'Viewed' : 'Not viewed' }}
                     </p>
                     <p v-if="doc.rejectionReason" class="mt-1 text-xs text-destructive">
                       {{ doc.rejectionReason }}
@@ -688,6 +791,28 @@ onMounted(() => {
                 </div>
               </li>
             </ul>
+
+            <div
+              v-if="selectedRecord && 'status' in selectedRecord && selectedRecord.status !== 'approved'"
+              class="flex flex-wrap justify-end gap-2 pt-2"
+            >
+              <Button
+                size="sm"
+                variant="outline"
+                :disabled="!selectedOrgCanApprove"
+                @click="openOrganizationConfirm(selectedRecord as OrganizationRow, 'approved')"
+              >
+                Approve
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                :disabled="!selectedOrgCanReject"
+                @click="openOrganizationRejectDialog(selectedRecord as OrganizationRow)"
+              >
+                Reject
+              </Button>
+            </div>
           </div>
 
           <div class="flex justify-end">

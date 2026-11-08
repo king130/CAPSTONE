@@ -2,10 +2,10 @@
 
 namespace Tests\Feature;
 
-use App\Models\Company;
 use App\Models\Notification;
 use App\Models\Organization;
 use App\Models\OrganizationMembership;
+use App\Models\OrganizationVerificationDocument;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\School;
@@ -171,6 +171,40 @@ class OrganizationVerificationWorkflowTest extends TestCase
         ])->assertForbidden()->assertJsonPath('message', 'Account Disabled');
     }
 
+    public function test_approval_requires_viewed_documents_when_any_exist_and_blocks_approve_with_none(): void
+    {
+        $context = $this->createPendingSchool();
+        $admin = $this->createAdmin();
+        Sanctum::actingAs($admin);
+
+        $this->patchJson('/api/admin/users/'.$context['user']->id, [
+            'verificationStatus' => 'approved',
+        ])->assertStatus(422);
+
+        $doc = OrganizationVerificationDocument::query()->create([
+            'organization_id' => $context['organization']->id,
+            'uploaded_by_user_id' => $context['user']->id,
+            'document_type' => OrganizationVerificationDocument::TYPE_SCHOOL_RECOGNITION_PERMIT,
+            'file_path' => 'verification/test-doc.pdf',
+            'file_name' => 'test-doc.pdf',
+            'file_mime' => 'application/pdf',
+            'file_size' => 12,
+            'status' => OrganizationVerificationDocument::STATUS_PENDING,
+        ]);
+
+        $this->patchJson('/api/admin/users/'.$context['user']->id, [
+            'verificationStatus' => 'approved',
+        ])->assertStatus(422);
+
+        $this->postJson('/api/admin/verification-documents/'.$doc->id.'/mark-viewed')->assertOk();
+        $this->assertNotNull($doc->fresh()->admin_viewed_at);
+
+        $this->patchJson('/api/admin/users/'.$context['user']->id, [
+            'verificationStatus' => 'rejected',
+            'verificationRejectionReason' => 'Incomplete profile.',
+        ])->assertOk();
+    }
+
     public function test_approval_clears_rejection_reason_and_unlocks_org_features(): void
     {
         $context = $this->createPendingSchool();
@@ -181,6 +215,18 @@ class OrganizationVerificationWorkflowTest extends TestCase
             'verificationStatus' => 'rejected',
             'verificationRejectionReason' => 'Incomplete profile.',
         ])->assertOk();
+
+        $doc = OrganizationVerificationDocument::query()->create([
+            'organization_id' => $context['organization']->id,
+            'uploaded_by_user_id' => $context['user']->id,
+            'document_type' => OrganizationVerificationDocument::TYPE_SCHOOL_RECOGNITION_PERMIT,
+            'file_path' => 'verification/approval-doc.pdf',
+            'file_name' => 'approval-doc.pdf',
+            'file_mime' => 'application/pdf',
+            'file_size' => 12,
+            'status' => OrganizationVerificationDocument::STATUS_PENDING,
+        ]);
+        $this->postJson('/api/admin/verification-documents/'.$doc->id.'/mark-viewed')->assertOk();
 
         $this->patchJson('/api/admin/users/'.$context['user']->id, [
             'verificationStatus' => 'approved',
@@ -196,12 +242,18 @@ class OrganizationVerificationWorkflowTest extends TestCase
         $me->assertOk()->assertJsonPath('verificationStatus', 'approved');
         $this->assertNull($me->json('verificationRejectionReason'));
 
-        $this->postJson('/api/internships', [
+        $create = $this->postJson('/api/internships', [
             'title' => 'Approved Internship',
             'description' => 'Now allowed',
             'status' => 'active',
             'slots_available' => 1,
-        ])->assertCreated();
+            'location' => 'Bacoor City',
+            'type' => 'onsite',
+            'duration' => '486 hours',
+        ]);
+        $this->assertNotEquals(403, $create->status());
+        $this->assertNotEquals('organization_verification_pending', $create->json('code'));
+        $this->assertNotEquals('organization_verification_rejected', $create->json('code'));
 
         $this->assertSame(
             1,

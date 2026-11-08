@@ -10,6 +10,7 @@ use App\Models\Notification;
 use App\Models\OjtLog;
 use App\Models\Organization;
 use App\Models\OrganizationMembership;
+use App\Models\OrganizationVerificationDocument;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\School;
@@ -462,7 +463,19 @@ class NotificationProducerTest extends TestCase
             'is_active' => true,
         ]);
 
+        $doc = OrganizationVerificationDocument::query()->create([
+            'organization_id' => $organization->id,
+            'uploaded_by_user_id' => $owner->id,
+            'document_type' => OrganizationVerificationDocument::TYPE_SCHOOL_RECOGNITION_PERMIT,
+            'file_path' => 'verification/notify-doc.pdf',
+            'file_name' => 'notify-doc.pdf',
+            'file_mime' => 'application/pdf',
+            'file_size' => 12,
+            'status' => OrganizationVerificationDocument::STATUS_PENDING,
+        ]);
+
         Sanctum::actingAs($admin);
+        $this->postJson('/api/admin/verification-documents/'.$doc->id.'/mark-viewed')->assertOk();
         $this->patchJson('/api/admin/users/'.$owner->id, [
             'verificationStatus' => 'approved',
         ])->assertOk();

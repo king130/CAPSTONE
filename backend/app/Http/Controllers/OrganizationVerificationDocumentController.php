@@ -124,6 +124,8 @@ class OrganizationVerificationDocumentController extends Controller
                     'rejection_reason' => null,
                     'reviewed_by_user_id' => null,
                     'reviewed_at' => null,
+                    'admin_viewed_at' => null,
+                    'admin_viewed_by_user_id' => null,
                 ]);
 
                 return $existing->fresh(['uploadedBy:id,name,email', 'histories']);
@@ -192,6 +194,8 @@ class OrganizationVerificationDocumentController extends Controller
                 'rejection_reason' => null,
                 'reviewed_by_user_id' => null,
                 'reviewed_at' => null,
+                'admin_viewed_at' => null,
+                'admin_viewed_by_user_id' => null,
                 'uploaded_by_user_id' => $user->id,
             ]);
 
@@ -311,6 +315,26 @@ class OrganizationVerificationDocumentController extends Controller
                 'organizationType' => $organization->type,
                 'requirements' => OrganizationVerificationRequirements::forOrganization($organization),
             ],
+        ]);
+    }
+
+    public function markAdminViewed(Request $request, OrganizationVerificationDocument $organizationVerificationDocument)
+    {
+        if (! $request->user()?->isPlatformAdmin() && $request->user()?->effectiveAppRole() !== 'admin') {
+            return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
+        }
+
+        $organizationVerificationDocument->forceFill([
+            'admin_viewed_at' => now(),
+            'admin_viewed_by_user_id' => $request->user()->id,
+        ])->save();
+
+        return response()->json([
+            'data' => $this->serialize($organizationVerificationDocument->fresh([
+                'uploadedBy:id,name,email',
+                'reviewedBy:id,name,email',
+                'histories' => fn ($q) => $q->orderByDesc('id'),
+            ])),
         ]);
     }
 
@@ -654,6 +678,7 @@ class OrganizationVerificationDocumentController extends Controller
         return $this->isOrganizationOwner($user, $organization);
     }
 
+
     private function canAccessDocument(User $user, OrganizationVerificationDocument $document): bool
     {
         if ($user->isPlatformAdmin() || $user->effectiveAppRole() === 'admin') {
@@ -695,6 +720,10 @@ class OrganizationVerificationDocumentController extends Controller
             'uploadedAt' => $row->created_at?->toIso8601String(),
             'reviewedBy' => $row->reviewedBy?->name ?? $row->reviewedBy?->email,
             'reviewedAt' => $row->reviewed_at?->toIso8601String(),
+            'adminViewedAt' => $row->admin_viewed_at?->toIso8601String(),
+            'adminViewedByUserId' => $row->admin_viewed_by_user_id
+                ? (string) $row->admin_viewed_by_user_id
+                : null,
             'history' => $row->relationLoaded('histories')
                 ? $row->histories->map(fn (OrganizationVerificationDocumentHistory $h) => [
                     'id' => (string) $h->id,

@@ -52,12 +52,15 @@ class OrganizationVerificationDocument extends Model
         'rejection_reason',
         'reviewed_by_user_id',
         'reviewed_at',
+        'admin_viewed_at',
+        'admin_viewed_by_user_id',
     ];
 
     protected function casts(): array
     {
         return [
             'reviewed_at' => 'datetime',
+            'admin_viewed_at' => 'datetime',
             'file_size' => 'integer',
         ];
     }
@@ -85,6 +88,11 @@ class OrganizationVerificationDocument extends Model
     public function reviewedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'reviewed_by_user_id');
+    }
+
+    public function adminViewedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'admin_viewed_by_user_id');
     }
 
     public function histories(): HasMany
