@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { createColumnHelper } from '@tanstack/vue-table'
 import { useRoute } from 'vue-router'
-import { computed, h, onMounted, ref } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
 
 import AdminEntityTable from '@/components/admin/AdminEntityTable.vue'
 import AdminRowActions from '@/components/admin/AdminRowActions.vue'
@@ -9,6 +9,7 @@ import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
 import Card from '@/components/ui/card/Card.vue'
 import CardContent from '@/components/ui/card/CardContent.vue'
+import Select from '@/components/ui/select/Select.vue'
 import Textarea from '@/components/ui/textarea/Textarea.vue'
 import { useToast } from '@/composables/useToast'
 import { fetchAdminApplications, fetchAdminUsers, updateAdminApplicationStatus, updateAdminUser, type AdminApplicationRecord, type AdminUserRecord, type VerificationStatus } from '@/services/admin'
@@ -43,7 +44,11 @@ interface OrganizationRow {
   status: VerificationStatus
   email: string
   rejectionReason?: string | null
+  createdAt?: string | null
 }
+
+type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected'
+type OrgSort = 'newest' | 'oldest' | 'name'
 
 type SelectedRecord = InternRow | OrganizationRow
 
@@ -65,6 +70,8 @@ const docReviewTarget = ref<OrganizationVerificationDocument | null>(null)
 const docReviewStatus = ref<'approved' | 'rejected' | 'needs_fix' | null>(null)
 const docReviewReason = ref('')
 const docReviewSubmitting = ref(false)
+const statusFilter = ref<StatusFilter>('all')
+const orgSort = ref<OrgSort>('newest')
 
 const mode = computed<ManagementMode>(() => {
   if (route.name === 'admin-manage-schools') return 'schools'
@@ -103,6 +110,14 @@ function normalizeStatus(status?: string | null): 'pending' | 'approved' | 'reje
   const value = String(status || 'pending').trim().toLowerCase()
   if (['approved', 'accepted', 'active'].includes(value)) return 'approved'
   if (['rejected', 'declined', 'cancelled'].includes(value)) return 'rejected'
+  return 'pending'
+}
+
+/** Bucket for filter/counts: under_review counts as pending. */
+function organizationStatusBucket(status?: string | null): 'pending' | 'approved' | 'rejected' {
+  const value = String(status || 'pending').trim().toLowerCase()
+  if (value === 'approved') return 'approved'
+  if (value === 'rejected') return 'rejected'
   return 'pending'
 }
 
@@ -147,12 +162,18 @@ const schoolRows = computed<OrganizationRow[]>(() =>
       status: user.school?.verificationStatus || 'pending',
       email: user.email || 'No email',
       rejectionReason: user.school?.verificationRejectionReason || null,
+      createdAt: user.createdAt || null,
     })),
 )
 
 const companyRows = computed<OrganizationRow[]>(() =>
   users.value
-    .filter((user) => user.role === 'company' && !!user.company)
+    .filter((user) => {
+      if (!user.company) return false
+      const role = String(user.role || '').toLowerCase()
+      const orgType = String(user.organization?.type || user.company?.organizationType || '').toLowerCase()
+      return role === 'company' || role === 'municipal_hall' || orgType === 'municipal_hall' || orgType === 'company'
+    })
     .map((user) => {
       const orgType = String(user.organization?.type || user.company?.organizationType || 'company').toLowerCase()
       const isMunicipal = orgType === 'municipal_hall'
@@ -167,9 +188,49 @@ const companyRows = computed<OrganizationRow[]>(() =>
         status: user.company?.verificationStatus || 'pending',
         email: user.email || 'No email',
         rejectionReason: user.company?.verificationRejectionReason || null,
+        createdAt: user.createdAt || null,
       }
     }),
 )
+
+const organizationSourceRows = computed(() =>
+  mode.value === 'schools' ? schoolRows.value : mode.value === 'companies' ? companyRows.value : [],
+)
+
+const organizationStatusCounts = computed(() => {
+  const counts = { all: 0, pending: 0, approved: 0, rejected: 0 }
+  for (const row of organizationSourceRows.value) {
+    counts.all += 1
+    counts[organizationStatusBucket(row.status)] += 1
+  }
+  return counts
+})
+
+const filteredSortedOrganizationRows = computed(() => {
+  let rows = organizationSourceRows.value
+  if (statusFilter.value !== 'all') {
+    rows = rows.filter((row) => organizationStatusBucket(row.status) === statusFilter.value)
+  }
+
+  const sorted = [...rows]
+  if (orgSort.value === 'name') {
+    sorted.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+  } else {
+    const direction = orgSort.value === 'newest' ? -1 : 1
+    sorted.sort((a, b) => {
+      const aTime = new Date(a.createdAt || 0).getTime()
+      const bTime = new Date(b.createdAt || 0).getTime()
+      if (aTime !== bTime) return (aTime - bTime) * direction
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) * direction
+    })
+  }
+  return sorted
+})
+
+watch(mode, () => {
+  statusFilter.value = 'all'
+  orgSort.value = 'newest'
+})
 
 async function loadRows() {
   loading.value = true
@@ -500,7 +561,7 @@ function closeSelectedRecord() {
 }
 
 const tableData = computed<Array<InternRow | OrganizationRow>>(() =>
-  mode.value === 'interns' ? internRows.value : mode.value === 'schools' ? schoolRows.value : companyRows.value,
+  mode.value === 'interns' ? internRows.value : filteredSortedOrganizationRows.value,
 )
 
 const tableColumns = computed(() => (mode.value === 'interns' ? internColumns : organizationColumns.value))
@@ -524,7 +585,41 @@ onMounted(() => {
     </div>
 
     <Card class="border-border/80 shadow-sm">
-      <CardContent class="p-6">
+      <CardContent class="space-y-4 p-6">
+        <div
+          v-if="mode !== 'interns'"
+          class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"
+        >
+          <div class="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            <span class="rounded-full border border-border px-2.5 py-1">All {{ organizationStatusCounts.all }}</span>
+            <span class="rounded-full border border-border px-2.5 py-1">Pending {{ organizationStatusCounts.pending }}</span>
+            <span class="rounded-full border border-border px-2.5 py-1">Approved {{ organizationStatusCounts.approved }}</span>
+            <span class="rounded-full border border-border px-2.5 py-1">Rejected {{ organizationStatusCounts.rejected }}</span>
+          </div>
+          <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Select
+              id="admin-org-status-filter"
+              v-model="statusFilter"
+              class="w-full sm:w-48"
+              aria-label="Filter by verification status"
+            >
+              <option value="all">All statuses</option>
+              <option value="pending">Pending</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+            </Select>
+            <Select
+              id="admin-org-sort"
+              v-model="orgSort"
+              class="w-full sm:w-48"
+              aria-label="Sort organizations"
+            >
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="name">Name A–Z</option>
+            </Select>
+          </div>
+        </div>
         <AdminEntityTable
           :columns="tableColumns"
           :data="tableData"
