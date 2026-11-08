@@ -46,8 +46,19 @@ import {
   removeSchoolStudent,
   resendSchoolStudentSetupLink,
   subscribeSchoolStudents,
+  updateSchoolStudent,
   type SchoolStudentRow,
 } from '@/services/schoolStudents'
+import { normalizeStudentNumber, studentNumberErrorMessage } from '@/utils/studentNumber'
+import {
+  STUDENT_CSV_COLUMNS,
+  applyStudentCsvDefaults,
+  downloadStudentCsvTemplate,
+  formatFileSize,
+  isDuplicateStudentCsvRow,
+  parseStudentCsv,
+  type StudentCsvImportMode,
+} from '@/utils/studentCsvImport'
 import {
   DEFAULT_ELIGIBLE_YEAR_LEVELS,
   listCourseRequirements,
@@ -81,6 +92,7 @@ const EMAIL_FORMAT_OPTIONS: Array<{ value: EmailFormat; label: string; example: 
 
 interface BulkImportResult {
   created: number
+  skipped: number
   failed: Array<{ line: number; message: string }>
 }
 
@@ -116,28 +128,6 @@ function statusBadgeVariant(status?: string) {
   return 'warning'
 }
 
-function parseBulkRows(input: string) {
-  return input
-    .split(/\r?\n/)
-    .map((line, index) => ({ raw: line.trim(), line: index + 1 }))
-    .filter((entry) => entry.raw.length > 0)
-    .filter((entry) => !entry.raw.toLowerCase().startsWith('email,'))
-    .map((entry) => {
-      const [email = '', studentName = '', studentNumber = '', course = '', yearLevel = ''] = entry.raw
-        .split(',')
-        .map((part) => part.trim())
-
-      return {
-        line: entry.line,
-        email,
-        studentName,
-        studentNumber,
-        course,
-        yearLevel,
-      }
-    })
-}
-
 const { success, error } = useToast()
 const authStore = useAuthStore()
 
@@ -148,13 +138,85 @@ const importing = ref(false)
 const search = ref('')
 const createDialogOpen = ref(false)
 const bulkDialogOpen = ref(false)
+const editDialogOpen = ref(false)
+const editingStudent = ref<SchoolStudentRow | null>(null)
+const studentNumberFieldError = ref('')
+const editForm = ref({
+  studentName: '',
+  studentNumber: '',
+  course: '',
+  yearLevel: '',
+})
+const editNumberError = ref('')
 const deleteTarget = ref<SchoolStudentRow | null>(null)
 const studentForm = ref<StudentFormState>(defaultStudentForm())
 const bulkCsv = ref('')
+const bulkImportMode = ref<StudentCsvImportMode>('skip_duplicates')
+const bulkDefaultCourse = ref('')
+const bulkDefaultYearLevel = ref('')
+const bulkCsvFile = ref<File | null>(null)
+const bulkFileDragOver = ref(false)
+const bulkFileInput = ref<HTMLInputElement | null>(null)
 const latestInvites = ref<RecentInvite[]>([])
 const latestBulkImport = ref<BulkImportResult | null>(null)
 const students = ref<SchoolStudentRow[]>([])
 const openDropdown = ref<'emailFormat' | 'course' | 'yearLevel' | null>(null)
+
+const studentCsvColumnHint = STUDENT_CSV_COLUMNS.map((column) => column.header).join(',')
+
+const bulkParsed = computed(() => parseStudentCsv(bulkCsv.value))
+const bulkPreviewRows = computed(() =>
+  bulkParsed.value.rows.map((row) =>
+    applyStudentCsvDefaults(row, {
+      course: bulkDefaultCourse.value,
+      yearLevel: bulkDefaultYearLevel.value,
+    }),
+  ),
+)
+const bulkYearLevelOptions = computed(() => eligibleYearsForCourse(bulkDefaultCourse.value))
+
+function resetBulkImportState() {
+  bulkCsv.value = ''
+  bulkCsvFile.value = null
+  bulkFileDragOver.value = false
+  bulkImportMode.value = 'skip_duplicates'
+  bulkDefaultCourse.value = ''
+  bulkDefaultYearLevel.value = ''
+  if (bulkFileInput.value) bulkFileInput.value.value = ''
+}
+
+function removeBulkCsvFile() {
+  bulkCsvFile.value = null
+  if (bulkFileInput.value) bulkFileInput.value.value = ''
+}
+
+async function readBulkCsvFile(file: File) {
+  const name = file.name.toLowerCase()
+  if (!name.endsWith('.csv') && file.type !== 'text/csv' && file.type !== 'application/vnd.ms-excel') {
+    error('Please choose a .csv file.')
+    return
+  }
+  try {
+    const text = await file.text()
+    bulkCsvFile.value = file
+    bulkCsv.value = text
+  } catch {
+    error('Could not read that CSV file.')
+  }
+}
+
+function onBulkFileInputChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (file) void readBulkCsvFile(file)
+}
+
+function onBulkDrop(event: DragEvent) {
+  event.preventDefault()
+  bulkFileDragOver.value = false
+  const file = event.dataTransfer?.files?.[0]
+  if (file) void readBulkCsvFile(file)
+}
 
 let unsubscribeStudents: (() => void) | null = null
 
@@ -266,6 +328,17 @@ watch(
   },
 )
 
+watch(bulkDialogOpen, (open) => {
+  if (!open) resetBulkImportState()
+})
+
+watch(bulkDefaultCourse, (course) => {
+  const allowed = eligibleYearsForCourse(course)
+  if (bulkDefaultYearLevel.value && !allowed.includes(bulkDefaultYearLevel.value)) {
+    bulkDefaultYearLevel.value = ''
+  }
+})
+
 function selectYearLevel(value: string) {
   studentForm.value.yearLevelChoice = value
   studentForm.value.yearLevel = value
@@ -287,7 +360,51 @@ function slugPart(value: string) {
     .replace(/\s+/g, '')
 }
 
+function openEditStudent(student: SchoolStudentRow) {
+  editingStudent.value = student
+  editForm.value = {
+    studentName: student.studentName || '',
+    studentNumber: student.studentNumber || '',
+    course: student.course || '',
+    yearLevel: student.yearLevel || '',
+  }
+  editNumberError.value = ''
+  editDialogOpen.value = true
+}
+
+async function saveEditedStudent(close: () => void) {
+  if (!editingStudent.value) return
+  const numberError = studentNumberErrorMessage(editForm.value.studentNumber, true)
+  editNumberError.value = numberError || ''
+  if (numberError) return
+
+  saving.value = true
+  try {
+    await updateSchoolStudent(editingStudent.value.id, {
+      studentName: editForm.value.studentName.trim() || undefined,
+      studentNumber: normalizeStudentNumber(editForm.value.studentNumber),
+      course: editForm.value.course || undefined,
+      yearLevel: editForm.value.yearLevel || undefined,
+    })
+    success('Student account updated.')
+    editingStudent.value = null
+    close()
+  } catch (caughtError) {
+    const message = caughtError instanceof Error ? caughtError.message : 'Could not update the student account.'
+    if (/student number/i.test(message)) {
+      editNumberError.value = message
+    }
+    error(caughtError, { fallback: 'Could not update the student account.' })
+  } finally {
+    saving.value = false
+  }
+}
+
 async function createStudent(close: () => void) {
+  const numberError = studentNumberErrorMessage(studentForm.value.studentNumber, true)
+  studentNumberFieldError.value = numberError || ''
+  if (numberError) return
+
   const confirmation = await Swal.fire({
     icon: 'question',
     title: 'Create this student account?',
@@ -298,7 +415,7 @@ async function createStudent(close: () => void) {
         <div><strong>Intern Code:</strong> This will be generated automatically</div>
         <div><strong>Course:</strong> ${studentForm.value.course}</div>
         <div><strong>Year Level:</strong> ${studentForm.value.yearLevel}</div>
-        <div><strong>Student Number:</strong> ${studentForm.value.studentNumber || 'Not set'}</div>
+        <div><strong>Student Number:</strong> ${normalizeStudentNumber(studentForm.value.studentNumber)}</div>
       </div>
     `,
     showCancelButton: true,
@@ -313,7 +430,7 @@ async function createStudent(close: () => void) {
   try {
     const created = await addSchoolStudent('', generatedEmail.value, {
       studentName: `${studentForm.value.firstName} ${studentForm.value.lastName}`.trim() || undefined,
-      studentNumber: studentForm.value.studentNumber || undefined,
+      studentNumber: normalizeStudentNumber(studentForm.value.studentNumber),
       course: studentForm.value.course || undefined,
       yearLevel: studentForm.value.yearLevel || undefined,
     })
@@ -361,6 +478,10 @@ async function createStudent(close: () => void) {
     studentForm.value = defaultStudentForm()
     close()
   } catch (caughtError) {
+    const message = caughtError instanceof Error ? caughtError.message : 'Could not create the student account.'
+    if (/student number/i.test(message)) {
+      studentNumberFieldError.value = message
+    }
     error(caughtError, {
       fallback: 'Could not create the student account.',
     })
@@ -384,11 +505,26 @@ async function confirmDeleteStudent() {
 }
 
 async function runBulkImport(close: () => void) {
-  const rows = parseBulkRows(bulkCsv.value)
-  if (!rows.length) {
-    error('Add at least one CSV row before importing.')
+  const { rows: parsedRows, issues } = parseStudentCsv(bulkCsv.value)
+  const rows = parsedRows.map((row) =>
+    applyStudentCsvDefaults(row, {
+      course: bulkDefaultCourse.value,
+      yearLevel: bulkDefaultYearLevel.value,
+    }),
+  )
+
+  if (!rows.length && !issues.length) {
+    error('Add at least one CSV row or choose a .csv file before importing.')
     return
   }
+
+  if (!rows.length) {
+    error(`CSV has ${issues.length} invalid row${issues.length === 1 ? '' : 's'}. Fix them before importing.`)
+    return
+  }
+
+  const modeLabel =
+    bulkImportMode.value === 'skip_duplicates' ? 'Skip duplicates' : 'Add new only (duplicates fail)'
 
   const confirmation = await Swal.fire({
     icon: 'question',
@@ -396,7 +532,8 @@ async function runBulkImport(close: () => void) {
     html: `
       <div style="text-align:left;display:grid;gap:8px;">
         <div><strong>Rows ready:</strong> ${rows.length}</div>
-        <div>This will create student accounts for every valid row in your CSV list.</div>
+        <div><strong>Mode:</strong> ${modeLabel}</div>
+        <div>New accounts still use the normal setup-link email flow.</div>
       </div>
     `,
     showCancelButton: true,
@@ -408,15 +545,10 @@ async function runBulkImport(close: () => void) {
   if (!confirmation.isConfirmed) return
 
   importing.value = true
-  const result: BulkImportResult = { created: 0, failed: [] }
+  const result: BulkImportResult = { created: 0, skipped: 0, failed: [...issues] }
   const invites: RecentInvite[] = []
 
   for (const row of rows) {
-    if (!row.email) {
-      result.failed.push({ line: row.line, message: 'Missing email address.' })
-      continue
-    }
-
     if (row.yearLevel) {
       const allowed = eligibleYearsForCourse(row.course || '')
       if (!allowed.includes(row.yearLevel)) {
@@ -426,6 +558,19 @@ async function runBulkImport(close: () => void) {
         })
         continue
       }
+    }
+
+    const duplicate = isDuplicateStudentCsvRow(row, students.value)
+    if (duplicate) {
+      if (bulkImportMode.value === 'skip_duplicates') {
+        result.skipped += 1
+        continue
+      }
+      result.failed.push({
+        line: row.line,
+        message: 'Duplicate email or student number already exists in the roster.',
+      })
+      continue
     }
 
     try {
@@ -454,14 +599,20 @@ async function runBulkImport(close: () => void) {
 
   if (result.created > 0) {
     await authStore.refreshUser()
-    success(`Imported ${result.created} student account${result.created === 1 ? '' : 's'}.`)
+    success(
+      `Imported ${result.created} student account${result.created === 1 ? '' : 's'}` +
+        (result.skipped ? ` · skipped ${result.skipped} duplicate${result.skipped === 1 ? '' : 's'}` : '') +
+        '.',
+    )
+  } else if (result.skipped > 0 && result.failed.length === 0) {
+    success(`No new accounts created. Skipped ${result.skipped} duplicate${result.skipped === 1 ? '' : 's'}.`)
   }
   if (result.failed.length > 0) {
     error(`Some rows failed to import (${result.failed.length}).`)
   }
 
   if (result.failed.length === 0) {
-    bulkCsv.value = ''
+    resetBulkImportState()
     close()
   }
 
@@ -595,7 +746,10 @@ onUnmounted(() => {
         </CardHeader>
         <CardContent class="space-y-3">
           <p class="text-sm text-muted-foreground">
-            Created {{ latestBulkImport.created }} account{{ latestBulkImport.created === 1 ? '' : 's' }}.
+            Created {{ latestBulkImport.created }} account{{ latestBulkImport.created === 1 ? '' : 's' }}
+            <template v-if="latestBulkImport.skipped">
+              · skipped {{ latestBulkImport.skipped }} duplicate{{ latestBulkImport.skipped === 1 ? '' : 's' }}
+            </template>.
           </p>
           <div v-if="latestBulkImport.failed.length" class="space-y-2 rounded-xl border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40 p-4">
             <p class="font-medium text-red-700">Failed rows</p>
@@ -646,7 +800,10 @@ onUnmounted(() => {
                   <TableCell class="font-mono text-xs font-semibold text-foreground">{{ student.internCode || 'Pending' }}</TableCell>
                   <TableCell class="font-medium">{{ student.email }}</TableCell>
                   <TableCell>{{ student.studentName || 'Not set' }}</TableCell>
-                  <TableCell>{{ student.studentNumber || 'Not set' }}</TableCell>
+                  <TableCell>
+                    <span v-if="student.studentNumber">{{ student.studentNumber }}</span>
+                    <Badge v-else variant="warning">Needs student number</Badge>
+                  </TableCell>
                   <TableCell>{{ student.course || 'Not set' }}</TableCell>
                   <TableCell>{{ student.yearLevel || 'Not set' }}</TableCell>
                   <TableCell>
@@ -656,6 +813,9 @@ onUnmounted(() => {
                   </TableCell>
                   <TableCell>
                     <div class="flex flex-wrap gap-2">
+                      <Button variant="outline" size="sm" @click="openEditStudent(student)">
+                        Edit
+                      </Button>
                       <Button
                         v-if="normalizeStatus(student.status) === 'pending'"
                         variant="outline"
@@ -763,13 +923,23 @@ onUnmounted(() => {
             </FormControl>
           </FormItem>
           <FormItem class="rounded-2xl border border-border bg-card/80 p-4 shadow-sm">
-            <FormLabel class="text-foreground">Student Number</FormLabel>
+            <FormLabel class="text-foreground">
+              Student Number <span class="text-red-600" aria-hidden="true">*</span>
+            </FormLabel>
             <FormControl>
               <div class="relative mt-1">
                 <IdCard class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input v-model="studentForm.studentNumber" placeholder="2024-0001" class="border-border bg-muted/80 pl-10" />
+                <Input
+                  v-model="studentForm.studentNumber"
+                  placeholder="2024-0001"
+                  class="border-border bg-muted/80 pl-10"
+                  :aria-invalid="Boolean(studentNumberFieldError)"
+                  @update:model-value="studentNumberFieldError = ''"
+                />
               </div>
             </FormControl>
+            <p v-if="studentNumberFieldError" class="mt-2 text-sm text-red-600">{{ studentNumberFieldError }}</p>
+            <p v-else class="mt-2 text-xs text-muted-foreground">Required. Letters, numbers, and - / . _ only. Unique within this school.</p>
           </FormItem>
           <FormItem class="rounded-2xl border border-border bg-card/80 p-4 shadow-sm">
             <FormLabel class="text-foreground">Course</FormLabel>
@@ -878,11 +1048,70 @@ onUnmounted(() => {
         <div class="mt-6 flex justify-end gap-3">
           <Button variant="outline" @click="close">Cancel</Button>
           <Button
-            :disabled="saving || !studentForm.firstName.trim() || !studentForm.lastName.trim() || !generatedEmail || !studentForm.course || !studentForm.yearLevel"
+            :disabled="saving || !studentForm.firstName.trim() || !studentForm.lastName.trim() || !generatedEmail || !studentForm.course || !studentForm.yearLevel || !normalizeStudentNumber(studentForm.studentNumber)"
             @click="createStudent(close)"
           >
             <LoaderCircle v-if="saving" class="h-4 w-4 animate-spin" />
             <span>{{ saving ? 'Creating...' : 'Create Account' }}</span>
+          </Button>
+        </div>
+      </template>
+    </Dialog>
+
+    <Dialog v-model:open="editDialogOpen">
+      <template #default="{ close }">
+        <DialogHeader>
+          <DialogTitle>Edit Student Account</DialogTitle>
+          <p class="text-sm text-muted-foreground">
+            Update enrollment details for {{ editingStudent?.email || 'this student' }}.
+          </p>
+        </DialogHeader>
+        <div class="mt-6 grid gap-4 md:grid-cols-2">
+          <FormItem class="md:col-span-2">
+            <FormLabel>Full Name</FormLabel>
+            <FormControl>
+              <Input v-model="editForm.studentName" placeholder="Juan Dela Cruz" />
+            </FormControl>
+          </FormItem>
+          <FormItem class="md:col-span-2">
+            <FormLabel>
+              Student Number <span class="text-red-600" aria-hidden="true">*</span>
+            </FormLabel>
+            <FormControl>
+              <Input
+                v-model="editForm.studentNumber"
+                placeholder="2024-0001"
+                :aria-invalid="Boolean(editNumberError)"
+                @update:model-value="editNumberError = ''"
+              />
+            </FormControl>
+            <p v-if="editNumberError" class="mt-2 text-sm text-red-600">{{ editNumberError }}</p>
+            <p v-else class="mt-2 text-xs text-muted-foreground">Required and unique within this school.</p>
+          </FormItem>
+          <FormItem>
+            <FormLabel>Course</FormLabel>
+            <FormControl>
+              <select v-model="editForm.course" class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm">
+                <option value="">Select course</option>
+                <option v-for="course in schoolCourseOptions" :key="course" :value="course">{{ course }}</option>
+              </select>
+            </FormControl>
+          </FormItem>
+          <FormItem>
+            <FormLabel>Year Level</FormLabel>
+            <FormControl>
+              <select v-model="editForm.yearLevel" class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm">
+                <option value="">Select year level</option>
+                <option v-for="level in eligibleYearsForCourse(editForm.course)" :key="level" :value="level">{{ level }}</option>
+              </select>
+            </FormControl>
+          </FormItem>
+        </div>
+        <div class="mt-6 flex justify-end gap-3">
+          <Button variant="outline" @click="close">Cancel</Button>
+          <Button :disabled="saving || !normalizeStudentNumber(editForm.studentNumber)" @click="saveEditedStudent(close)">
+            <LoaderCircle v-if="saving" class="h-4 w-4 animate-spin" />
+            <span>{{ saving ? 'Saving...' : 'Save Changes' }}</span>
           </Button>
         </div>
       </template>
@@ -893,18 +1122,118 @@ onUnmounted(() => {
         <DialogHeader>
           <DialogTitle>Import Students</DialogTitle>
           <p class="text-sm text-muted-foreground">
-            Paste CSV rows using: `email,name,student number,course,year level`
+            Columns: <code class="text-xs">{{ studentCsvColumnHint }}</code>
           </p>
         </DialogHeader>
         <div class="mt-6 space-y-4">
-          <Textarea
-            v-model="bulkCsv"
-            :rows="10"
-            placeholder="student1@example.com,Juan Dela Cruz,2024-0001,BS Computer Science,4th Year&#10;student2@example.com,Maria Santos,2024-0002,BS Information Technology,3rd Year"
-          />
+          <div class="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" size="sm" @click="downloadStudentCsvTemplate()">
+              <Download class="h-4 w-4" />
+              <span>Download template</span>
+            </Button>
+          </div>
+
+          <div class="grid gap-3 sm:grid-cols-2">
+            <FormItem>
+              <FormLabel for="bulk-import-mode">Selection of import</FormLabel>
+              <FormControl>
+                <select
+                  id="bulk-import-mode"
+                  v-model="bulkImportMode"
+                  class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                >
+                  <option value="skip_duplicates">Skip duplicates (default)</option>
+                  <option value="add_new_only">Add new only (duplicates fail)</option>
+                </select>
+              </FormControl>
+            </FormItem>
+            <FormItem>
+              <FormLabel for="bulk-default-course">Default course (if CSV omits)</FormLabel>
+              <FormControl>
+                <select
+                  id="bulk-default-course"
+                  v-model="bulkDefaultCourse"
+                  class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                >
+                  <option value="">No default</option>
+                  <option v-for="course in schoolCourseOptions" :key="course" :value="course">{{ course }}</option>
+                </select>
+              </FormControl>
+            </FormItem>
+            <FormItem class="sm:col-span-2">
+              <FormLabel for="bulk-default-year">Default year level (if CSV omits)</FormLabel>
+              <FormControl>
+                <select
+                  id="bulk-default-year"
+                  v-model="bulkDefaultYearLevel"
+                  class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                >
+                  <option value="">No default</option>
+                  <option v-for="level in bulkYearLevelOptions" :key="level" :value="level">{{ level }}</option>
+                </select>
+              </FormControl>
+            </FormItem>
+          </div>
+
+          <div
+            class="rounded-xl border border-dashed px-4 py-6 text-center transition"
+            :class="bulkFileDragOver ? 'border-primary bg-primary/5' : 'border-border bg-muted/30'"
+            @dragenter.prevent="bulkFileDragOver = true"
+            @dragover.prevent="bulkFileDragOver = true"
+            @dragleave.prevent="bulkFileDragOver = false"
+            @drop="onBulkDrop"
+          >
+            <input
+              ref="bulkFileInput"
+              type="file"
+              accept=".csv,text/csv"
+              class="hidden"
+              @change="onBulkFileInputChange"
+            />
+            <Upload class="mx-auto h-8 w-8 text-muted-foreground" />
+            <p class="mt-2 text-sm font-medium text-foreground">Drag and drop a .csv file here</p>
+            <p class="mt-1 text-xs text-muted-foreground">or</p>
+            <Button type="button" variant="outline" size="sm" class="mt-2" @click="bulkFileInput?.click()">
+              Browse files
+            </Button>
+            <div v-if="bulkCsvFile" class="mt-4 flex items-center justify-center gap-3 text-sm">
+              <span class="text-foreground">{{ bulkCsvFile.name }} · {{ formatFileSize(bulkCsvFile.size) }}</span>
+              <Button type="button" variant="ghost" size="sm" class="h-8 gap-1 text-destructive" @click="removeBulkCsvFile">
+                <Trash2 class="h-4 w-4" />
+                Remove
+              </Button>
+            </div>
+          </div>
+
+          <FormItem>
+            <FormLabel for="bulk-csv-paste">Or paste CSV (fallback)</FormLabel>
+            <FormControl>
+              <Textarea
+                id="bulk-csv-paste"
+                v-model="bulkCsv"
+                :rows="8"
+                :placeholder="`${studentCsvColumnHint}\nstudent1@example.com,Juan Dela Cruz,2024-0001,BS Computer Science,4th Year`"
+              />
+            </FormControl>
+          </FormItem>
+
+          <div class="rounded-xl border border-border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+            <p>
+              Preview: {{ bulkPreviewRows.length }} valid row{{ bulkPreviewRows.length === 1 ? '' : 's' }}
+              <template v-if="bulkParsed.issues.length">
+                · {{ bulkParsed.issues.length }} row error{{ bulkParsed.issues.length === 1 ? '' : 's' }}
+              </template>
+            </p>
+            <ul v-if="bulkParsed.issues.length" class="mt-2 space-y-1 text-xs text-destructive">
+              <li v-for="issue in bulkParsed.issues.slice(0, 8)" :key="`${issue.line}-${issue.message}`">
+                Line {{ issue.line }}: {{ issue.message }}
+              </li>
+            </ul>
+          </div>
+
           <div class="flex justify-end gap-3">
             <Button variant="outline" @click="close">Cancel</Button>
-            <Button :disabled="importing" @click="runBulkImport(close)">
+            <Button :disabled="importing || (!bulkPreviewRows.length && !bulkParsed.issues.length)" @click="runBulkImport(close)">
               <LoaderCircle v-if="importing" class="h-4 w-4 animate-spin" />
               <span>{{ importing ? 'Importing...' : 'Import Accounts' }}</span>
             </Button>
