@@ -11,6 +11,7 @@ use App\Models\Role;
 use App\Models\School;
 use App\Models\Student;
 use App\Models\User;
+use App\Services\EmailOtpService;
 use App\Services\OrganizationAccountProvisioner;
 use App\Support\CaviteAddress;
 use App\Services\SubscriptionAccessService;
@@ -31,6 +32,7 @@ class AuthController extends Controller
         private readonly SubscriptionPlanService $subscriptionPlans,
         private readonly TenantRoleService $tenantRoleService,
         private readonly OrganizationAccountProvisioner $organizationAccountProvisioner,
+        private readonly EmailOtpService $emailOtps,
         private readonly SubscriptionAccessService $subscriptionAccess,
     )
     {
@@ -89,12 +91,29 @@ class AuthController extends Controller
                 ]);
 
                 $user = $created['user'];
+                $otpMailSent = true;
+                $otpMailError = null;
+                try {
+                    $this->emailOtps->issueAndSend($user);
+                } catch (ValidationException $e) {
+                    throw $e;
+                } catch (Throwable $e) {
+                    report($e);
+                    $otpMailSent = false;
+                    $otpMailError = 'Account created, but the verification email could not be sent. Sign in and use Resend.';
+                }
+
                 $this->loadUserRelations($user);
                 $token = $user->createToken('spa')->plainTextToken;
 
                 return response()->json([
                     'token' => $token,
                     'user' => $this->formatUserProfile($user),
+                    'emailOtp' => [
+                        'required' => true,
+                        'sent' => $otpMailSent,
+                        'message' => $otpMailError,
+                    ],
                 ], Response::HTTP_CREATED);
             }
 
@@ -209,6 +228,48 @@ class AuthController extends Controller
         $this->loadUserRelations($user);
 
         return response()->json($this->formatUserProfile($user));
+    }
+
+    public function verifyEmailOtp(Request $request)
+    {
+        $data = $request->validate([
+            'code' => ['required', 'string', 'max:32'],
+        ]);
+
+        /** @var User $user */
+        $user = $request->user();
+        $this->emailOtps->verify($user, (string) $data['code']);
+        $this->loadUserRelations($user->fresh());
+
+        return response()->json([
+            'message' => 'Email verified.',
+            'user' => $this->formatUserProfile($user->fresh()),
+        ]);
+    }
+
+    public function resendEmailOtp(Request $request)
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        try {
+            $this->emailOtps->issueAndSend($user);
+        } catch (ValidationException $e) {
+            throw $e;
+        } catch (Throwable $e) {
+            report($e);
+
+            return response()->json([
+                'message' => 'Could not send the verification email. Please try Resend again in a minute.',
+                'errors' => [
+                    'email' => ['Could not send the verification email. Please try Resend again in a minute.'],
+                ],
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        return response()->json([
+            'message' => 'A new verification code was sent to your email.',
+        ]);
     }
 
     public function updatePassword(Request $request)
@@ -415,6 +476,8 @@ class AuthController extends Controller
             'verificationRejectionReason' => $verificationRejectionReason,
             'profileSetupComplete' => $user->profile_setup_complete,
             'mustChangePassword' => $user->must_change_password,
+            'emailVerifiedAt' => $user->email_verified_at?->toIso8601String(),
+            'emailVerificationRequired' => $this->emailOtps->needsEmailVerification($user),
             'profile' => $profile,
             'accessScope' => $user->isPlatformAdmin() ? 'platform' : ($activeOrganization ? 'organization' : 'personal'),
             'primaryMembershipRole' => $primaryMembership?->role?->slug,

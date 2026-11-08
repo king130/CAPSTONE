@@ -48,6 +48,8 @@ export interface UserProfile {
   profileSetupComplete?: boolean
   profile?: Record<string, unknown>
   mustChangePassword?: boolean
+  emailVerifiedAt?: string | null
+  emailVerificationRequired?: boolean
   platformRole?: {
     id: string
     slug: string
@@ -218,6 +220,8 @@ export function mapApiUserToProfile(raw: Record<string, unknown>): UserProfile {
     profileSetupComplete: raw.profileSetupComplete as boolean | undefined,
     profile: (raw.profile as Record<string, unknown>) || {},
     mustChangePassword: raw.mustChangePassword as boolean | undefined,
+    emailVerifiedAt: typeof raw.emailVerifiedAt === 'string' ? raw.emailVerifiedAt : null,
+    emailVerificationRequired: Boolean(raw.emailVerificationRequired),
     platformRole: (raw.platformRole as UserProfile['platformRole']) ?? null,
     memberships: (raw.memberships as MembershipSummary[] | undefined) ?? [],
     activeOrganization: (raw.activeOrganization as UserProfile['activeOrganization']) ?? null,
@@ -302,6 +306,21 @@ export async function updateCurrentUserPassword(newPassword: string): Promise<vo
   await apiFetch('/auth/password', {
     method: 'POST',
     body: JSON.stringify({ password: newPassword, password_confirmation: newPassword }),
+  })
+}
+
+export async function verifyEmailOtp(code: string): Promise<UserProfile> {
+  const response = await apiFetch<{ user: Record<string, unknown> }>('/auth/email-otp/verify', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+  })
+  return mapApiUserToProfile(response.user)
+}
+
+export async function resendEmailOtp(): Promise<void> {
+  await apiFetch('/auth/email-otp/resend', {
+    method: 'POST',
+    body: JSON.stringify({}),
   })
 }
 

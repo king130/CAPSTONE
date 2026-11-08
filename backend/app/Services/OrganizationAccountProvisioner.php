@@ -50,6 +50,9 @@ class OrganizationAccountProvisioner
                 default => (string) ($profile['companyName'] ?? $fullName),
             };
 
+            // OTP gate decision: temporaryPassword present = admin/create-tenant path (skip OTP);
+            // password-only = self-registration (email_verified_at null → OTP before documents).
+            // Do not mark self-reg verified here, and do not clear verified on admin-created accounts.
             $user = User::query()->create([
                 'name' => $fullName,
                 'email' => $email,
@@ -60,12 +63,13 @@ class OrganizationAccountProvisioner
                 'is_temporary' => $temporaryPassword !== null,
                 'must_change_password' => $temporaryPassword !== null,
                 'profile_setup_complete' => true,
+                'email_verified_at' => $temporaryPassword !== null ? now() : null,
             ]);
 
-            // Every new org starts a time-limited trial (features of the trial plan, default Standard).
+            // New orgs start a timed trial (startTrial); unverified orgs resolve as "unverified".
             $subscription = Subscription::query()->create([
-                'plan' => $selectedPlan,
-                'status' => 'trialing',
+                'plan' => 'free',
+                'status' => 'active',
                 'billing_cycle' => $billingCycle,
             ]);
 

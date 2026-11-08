@@ -7,6 +7,7 @@ use App\Models\Organization;
 use App\Models\OrganizationVerificationDocument;
 use App\Models\OrganizationVerificationDocumentHistory;
 use App\Models\User;
+use App\Services\EmailOtpService;
 use App\Support\OrganizationVerificationRequirements;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -17,6 +18,10 @@ use Illuminate\Validation\ValidationException;
 
 class OrganizationVerificationDocumentController extends Controller
 {
+    public function __construct(private readonly EmailOtpService $emailOtps)
+    {
+    }
+
     public function index(Request $request)
     {
         $user = $request->user();
@@ -78,6 +83,9 @@ class OrganizationVerificationDocumentController extends Controller
     public function store(Request $request)
     {
         $user = $request->user();
+        if ($blocked = $this->emailVerificationBlock($user)) {
+            return $blocked;
+        }
         $organization = $this->resolvableOrganization($user);
         if (! $organization) {
             return response()->json(['message' => 'Organization not found.'], Response::HTTP_NOT_FOUND);
@@ -154,6 +162,9 @@ class OrganizationVerificationDocumentController extends Controller
     public function resubmit(Request $request, OrganizationVerificationDocument $organizationVerificationDocument)
     {
         $user = $request->user();
+        if ($blocked = $this->emailVerificationBlock($user)) {
+            return $blocked;
+        }
         $organization = $this->resolvableOrganization($user);
         if (! $organization || (int) $organizationVerificationDocument->organization_id !== (int) $organization->id) {
             return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
@@ -235,6 +246,9 @@ class OrganizationVerificationDocumentController extends Controller
     public function submitForReview(Request $request)
     {
         $user = $request->user();
+        if ($blocked = $this->emailVerificationBlock($user)) {
+            return $blocked;
+        }
         $organization = $this->resolvableOrganization($user);
         if (! $organization) {
             return response()->json(['message' => 'Organization not found.'], Response::HTTP_NOT_FOUND);
@@ -678,6 +692,20 @@ class OrganizationVerificationDocumentController extends Controller
         return $this->isOrganizationOwner($user, $organization);
     }
 
+    private function emailVerificationBlock(?User $user): ?\Illuminate\Http\JsonResponse
+    {
+        if (! $user || ! $this->emailOtps->needsEmailVerification($user)) {
+            return null;
+        }
+
+        return response()->json([
+            'message' => 'Verify your email with the one-time code before uploading or submitting documents.',
+            'code' => 'email_verification_required',
+            'errors' => [
+                'email' => ['Verify your email with the one-time code before uploading or submitting documents.'],
+            ],
+        ], Response::HTTP_FORBIDDEN);
+    }
 
     private function canAccessDocument(User $user, OrganizationVerificationDocument $document): bool
     {

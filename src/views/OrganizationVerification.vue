@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AlertTriangle, Clock3, LogOut, RefreshCw, ShieldCheck } from 'lucide-vue-next'
 
@@ -8,9 +8,11 @@ import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
 import Card from '@/components/ui/card/Card.vue'
 import CardContent from '@/components/ui/card/CardContent.vue'
+import Input from '@/components/ui/input/Input.vue'
 import { useToast } from '@/composables/useToast'
 import MainLayout from '@/layouts/MainLayout.vue'
 import { pendingOrganizationNavItems, type LayoutRole } from '@/layouts/navigation'
+import { resendEmailOtp, verifyEmailOtp } from '@/services/auth'
 import {
   organizationTypeLabel,
   verificationStatusLabel,
@@ -32,6 +34,7 @@ const status = computed(() => String(authStore.user?.verificationStatus || 'pend
 const isRejected = computed(() => status.value === 'rejected')
 const isVerified = computed(() => status.value === 'approved')
 const isUnderReview = computed(() => status.value === 'under_review')
+const needsEmailOtp = computed(() => Boolean(authStore.user?.emailVerificationRequired))
 const orgName = computed(() => {
   const profile = authStore.user?.profile || {}
   if (role.value === 'school') {
@@ -55,12 +58,29 @@ const rejectionReason = computed(() => {
 })
 
 const panelRef = ref<{ reload: () => Promise<void> } | null>(null)
+const otpCode = ref('')
+const otpSubmitting = ref(false)
+const otpResending = ref(false)
+const resendCooldown = ref(0)
+let resendTimer: number | null = null
 
 const statusBadgeVariant = computed(() => {
   if (isVerified.value) return 'success' as const
   if (isRejected.value) return 'destructive' as const
   return 'warning' as const
 })
+
+function startResendCooldown(seconds = 60) {
+  resendCooldown.value = seconds
+  if (resendTimer !== null) window.clearInterval(resendTimer)
+  resendTimer = window.setInterval(() => {
+    resendCooldown.value = Math.max(0, resendCooldown.value - 1)
+    if (resendCooldown.value <= 0 && resendTimer !== null) {
+      window.clearInterval(resendTimer)
+      resendTimer = null
+    }
+  }, 1000)
+}
 
 async function onDocsRefreshed(meta: OrganizationVerificationMeta) {
   if (meta.verificationStatus && meta.verificationStatus !== status.value) {
@@ -86,17 +106,62 @@ async function refreshStatus() {
   }
 }
 
+async function submitOtp() {
+  const code = otpCode.value.replace(/\D+/g, '')
+  if (code.length !== 6) {
+    error(new Error('Enter the 6-digit code from your email.'), {
+      fallback: 'Enter the 6-digit code from your email.',
+    })
+    return
+  }
+  otpSubmitting.value = true
+  try {
+    const profile = await verifyEmailOtp(code)
+    authStore.setUserProfile(profile)
+    otpCode.value = ''
+    success('Email verified.', {
+      description: 'You can now upload verification documents.',
+    })
+  } catch (caughtError) {
+    error(caughtError, { fallback: 'Could not verify that code.' })
+  } finally {
+    otpSubmitting.value = false
+  }
+}
+
+async function resendOtp() {
+  if (resendCooldown.value > 0 || otpResending.value) return
+  otpResending.value = true
+  try {
+    await resendEmailOtp()
+    startResendCooldown(60)
+    success('Verification code sent.', {
+      description: 'Check your email for a new 6-digit code.',
+    })
+  } catch (caughtError) {
+    error(caughtError, {
+      fallback: 'Could not send the verification email. Please try Resend again.',
+    })
+  } finally {
+    otpResending.value = false
+  }
+}
+
 /** Stale sessions keep pending after admin approve until profile is re-fetched. */
 onMounted(async () => {
   try {
     const profile = await authStore.refreshUser()
     const next = String(profile?.verificationStatus || '').toLowerCase()
-    if (next === 'approved') {
+    if (next === 'approved' && !profile?.emailVerificationRequired) {
       await router.replace(isHost.value ? '/dashboard' : '/school')
     }
   } catch {
     /* keep verification page if refresh fails */
   }
+})
+
+onUnmounted(() => {
+  if (resendTimer !== null) window.clearInterval(resendTimer)
 })
 
 async function logout() {
@@ -131,13 +196,19 @@ async function logout() {
                 <Badge :variant="statusBadgeVariant">{{ verificationStatusLabel(status) }}</Badge>
               </div>
               <h1 class="text-2xl font-semibold text-foreground">
-                <template v-if="isVerified">{{ orgName }} is verified</template>
+                <template v-if="needsEmailOtp">Verify your email first</template>
+                <template v-else-if="isVerified">{{ orgName }} is verified</template>
                 <template v-else-if="isRejected">{{ orgName }} was not approved</template>
                 <template v-else-if="isUnderReview">{{ orgName }} is under review</template>
                 <template v-else>{{ orgName }} needs verification documents</template>
               </h1>
               <p class="text-sm leading-6 text-muted-foreground">
-                <template v-if="isRejected">
+                <template v-if="needsEmailOtp">
+                  Enter the 6-digit code sent to
+                  <span class="font-medium text-foreground">{{ authStore.user?.email }}</span>
+                  before uploading documents.
+                </template>
+                <template v-else-if="isRejected">
                   Review the reason below, fix or replace the documents that need attention, then submit again for
                   review.
                 </template>
@@ -160,33 +231,67 @@ async function logout() {
           </div>
 
           <div
-            v-if="isRejected"
-            class="rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-4 text-sm text-foreground"
+            v-if="needsEmailOtp"
+            class="space-y-4 rounded-2xl border border-border bg-muted/40 px-4 py-4"
+            data-testid="email-otp-step"
           >
-            <p class="font-semibold">Rejection / fix reason</p>
-            <p class="mt-1 leading-6 text-muted-foreground">
-              {{ rejectionReason || 'No reason was provided. Contact the platform administrator for details.' }}
+            <p class="text-sm font-semibold text-foreground">Email verification code</p>
+            <Input
+              id="email-otp-code"
+              v-model="otpCode"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              maxlength="6"
+              placeholder="6-digit code"
+              class="max-w-xs tracking-[0.3em]"
+              @keyup.enter="submitOtp"
+            />
+            <div class="flex flex-wrap gap-3">
+              <Button :disabled="otpSubmitting" @click="submitOtp">
+                {{ otpSubmitting ? 'Verifying…' : 'Verify email' }}
+              </Button>
+              <Button variant="outline" :disabled="otpResending || resendCooldown > 0" @click="resendOtp">
+                <template v-if="resendCooldown > 0">Resend in {{ resendCooldown }}s</template>
+                <template v-else-if="otpResending">Sending…</template>
+                <template v-else>Resend code</template>
+              </Button>
+            </div>
+            <p class="text-xs text-muted-foreground">
+              Didn’t get the email? Check spam, then use Resend. Document upload stays locked until the code is
+              verified.
             </p>
           </div>
 
-          <OrganizationVerificationDocumentsPanel
-            ref="panelRef"
-            :show-approved-notice="true"
-            @refreshed="onDocsRefreshed"
-          />
+          <template v-else>
+            <div
+              v-if="isRejected"
+              class="rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-4 text-sm text-foreground"
+            >
+              <p class="font-semibold">Rejection / fix reason</p>
+              <p class="mt-1 leading-6 text-muted-foreground">
+                {{ rejectionReason || 'No reason was provided. Contact the platform administrator for details.' }}
+              </p>
+            </div>
 
-          <div class="rounded-2xl border border-border bg-muted px-4 py-4 text-sm text-foreground">
-            <p class="font-semibold text-foreground">What you can do now</p>
-            <ul class="mt-2 list-disc space-y-1 pl-5 leading-6 text-muted-foreground">
-              <li>Upload or replace supporting documents for verification</li>
-              <li>Open Settings to review your account details</li>
-              <li>Check Notifications for verification updates</li>
-              <li>Use Refresh status after an administrator reviews your organization</li>
-            </ul>
-          </div>
+            <OrganizationVerificationDocumentsPanel
+              ref="panelRef"
+              :show-approved-notice="true"
+              @refreshed="onDocsRefreshed"
+            />
+
+            <div class="rounded-2xl border border-border bg-muted px-4 py-4 text-sm text-foreground">
+              <p class="font-semibold text-foreground">What you can do now</p>
+              <ul class="mt-2 list-disc space-y-1 pl-5 leading-6 text-muted-foreground">
+                <li>Upload or replace supporting documents for verification</li>
+                <li>Open Settings to review your account details</li>
+                <li>Check Notifications for verification updates</li>
+                <li>Use Refresh status after an administrator reviews your organization</li>
+              </ul>
+            </div>
+          </template>
 
           <div class="flex flex-wrap gap-3">
-            <Button @click="refreshStatus">
+            <Button v-if="!needsEmailOtp" @click="refreshStatus">
               <RefreshCw class="mr-2 h-4 w-4" />
               Refresh status
             </Button>

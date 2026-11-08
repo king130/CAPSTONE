@@ -66,6 +66,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('user.active')->group(function () {
     // Always available to authenticated active users (including pending org verification).
     Route::get('auth/me', [AuthController::class, 'me']);
+    Route::post('auth/email-otp/verify', [AuthController::class, 'verifyEmailOtp'])->middleware('throttle:10,1');
+    Route::post('auth/email-otp/resend', [AuthController::class, 'resendEmailOtp'])->middleware('throttle:6,1');
     Route::post('auth/password', [AuthController::class, 'updatePassword']);
     Route::patch('profile', [ProfileController::class, 'update']);
     Route::post('profile/avatar', [ProfileAvatarController::class, 'store']);
