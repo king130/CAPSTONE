@@ -3,7 +3,9 @@
 namespace App\Services;
 
 use App\Models\Application;
+use App\Models\OjtAttendanceEvent;
 use App\Models\OjtDtrSubmission;
+use App\Models\OjtLog;
 use App\Models\PlacementSchedule;
 use App\Models\PlacementScheduleVersion;
 use App\Models\PublicHoliday;
@@ -102,6 +104,26 @@ class OjtCalendarService
             ->where('status', OjtDtrSubmission::STATUS_APPROVED)
             ->get(['id', 'period_start', 'period_end', 'submitted_hours']);
 
+        $absences = OjtAttendanceEvent::query()
+            ->where('application_id', $application->id)
+            ->whereBetween('date', [
+                $monthStart->copy()->subMonths(1)->toDateString(),
+                $monthEnd->copy()->addYear()->toDateString(),
+            ])
+            ->get()
+            ->keyBy(fn (OjtAttendanceEvent $event) => $event->date->toDateString());
+
+        $approvedMakeupByDate = OjtLog::query()
+            ->where('application_id', $application->id)
+            ->where('status', 'approved')
+            ->where('is_makeup', true)
+            ->whereBetween('log_date', [
+                $monthStart->toDateString(),
+                $monthEnd->toDateString(),
+            ])
+            ->get(['log_date', 'hours'])
+            ->groupBy(fn (OjtLog $log) => $log->log_date?->toDateString());
+
         $startDate = $placement?->ojt_start_date
             ? Carbon::parse($placement->ojt_start_date->toDateString(), $tz)->startOfDay()
             : null;
@@ -126,9 +148,14 @@ class OjtCalendarService
             $scheduledHours = $slot ? $this->creditedHoursForSlot($slot) : 0.0;
             $inApprovedPeriod = $this->dayInApprovedPeriods($cursor, $approvedPeriods);
             $overScheduled = $this->periodOverScheduledForDay($cursor, $approvedPeriods, $versions, $holidays);
+            $absence = $absences->get($dateKey);
+            $makeupHours = (float) ($approvedMakeupByDate->get($dateKey)?->sum('hours') ?? 0);
 
+            // Absences never count as completed, even if a DTR somehow overlaps.
             $kind = 'non_working';
-            if ($holiday) {
+            if ($absence) {
+                $kind = (string) $absence->type;
+            } elseif ($holiday) {
                 $kind = 'holiday';
             } elseif ($slot && $scheduledHours > 0) {
                 if ($startDate && $cursor->lt($startDate)) {
@@ -148,6 +175,9 @@ class OjtCalendarService
                 'holidayName' => $holiday?->name,
                 'inApprovedDtrPeriod' => $inApprovedPeriod,
                 'hoursOverScheduled' => $overScheduled,
+                'absenceType' => $absence?->type,
+                'absenceReason' => $absence?->reason,
+                'approvedMakeupHours' => $makeupHours > 0 ? round($makeupHours, 2) : null,
             ];
 
             $cursor->addDay();
@@ -157,6 +187,7 @@ class OjtCalendarService
             $application,
             $versions,
             $holidays,
+            $absences,
             $startDate,
             $today,
             $remaining,
@@ -195,22 +226,26 @@ class OjtCalendarService
                 'holiday' => 'Public holiday',
                 'non_working' => 'Not in schedule',
                 'before_start' => 'Before OJT start date',
+                'absent_excused' => 'Excused absence',
+                'absent_unexcused' => 'Unexcused absence',
                 'projected_end' => 'Projected end date',
             ],
         ];
     }
 
     /**
-     * Working days needed for remaining hours (ceil), skipping non-schedule + holidays.
+     * Working days needed for remaining hours (ceil), skipping non-schedule, holidays, and absences.
      *
      * @param  Collection<int, mixed>  $versions
      * @param  Collection<string, PublicHoliday>  $holidays
+     * @param  Collection<string, OjtAttendanceEvent>  $absences
      * @return array{projectedEndDate: ?string, workingDays: ?int}
      */
     public function projectEndDate(
         Application $application,
         Collection $versions,
         Collection $holidays,
+        Collection $absences,
         ?CarbonInterface $startDate,
         CarbonInterface $today,
         ?float $remaining,
@@ -239,7 +274,7 @@ class OjtCalendarService
         while ($hoursLeft > 0 && $guard < 5000) {
             $guard++;
             $dateKey = $cursor->toDateString();
-            if (! $holidays->has($dateKey)) {
+            if (! $holidays->has($dateKey) && ! $absences->has($dateKey)) {
                 $slot = $this->slotForDate($cursor, $versions);
                 $credit = $slot ? $this->creditedHoursForSlot($slot) : 0.0;
                 if ($credit > 0) {

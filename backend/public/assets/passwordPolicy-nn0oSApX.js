@@ -1,0 +1,1 @@
+const r="Password must be at least 8 characters and include a letter and a number";function n(t){return t.length>=8&&/[A-Za-z]/.test(t)&&/[0-9]/.test(t)}function a(t){return t?n(t)?null:r:null}function u(t,e){return n(t)&&t===e}export{u as i,n as m,a as p};

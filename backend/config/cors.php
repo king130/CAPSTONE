@@ -19,13 +19,25 @@ foreach ($configured as $origin) {
 }
 $allowedOrigins = array_values(array_unique(array_filter($allowedOrigins)));
 
+// Never use "*" with credentials — fall back to FRONTEND_URL (production default).
+if ($allowedOrigins === []) {
+    $fallback = rtrim((string) env('FRONTEND_URL', 'https://ojtpath.online'), '/');
+    $allowedOrigins = [$fallback];
+    if (str_contains($fallback, '://127.0.0.1')) {
+        $allowedOrigins[] = str_replace('://127.0.0.1', '://localhost', $fallback);
+    } elseif (str_contains($fallback, '://localhost')) {
+        $allowedOrigins[] = str_replace('://localhost', '://127.0.0.1', $fallback);
+    }
+    $allowedOrigins = array_values(array_unique(array_filter($allowedOrigins)));
+}
+
 return [
 
     'paths' => ['api/*', 'sanctum/csrf-cookie'],
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => $allowedOrigins !== [] ? $allowedOrigins : ['*'],
+    'allowed_origins' => $allowedOrigins,
 
     'allowed_origins_patterns' => [],
 

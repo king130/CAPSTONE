@@ -13,11 +13,13 @@ use App\Services\CourseYearLevelGate;
 use App\Services\HoursAgreementService;
 use App\Services\InternshipEligibilityService;
 use App\Services\PermissionGate;
+use App\Services\PlacementExclusivityService;
 use App\Services\RequiredOjtHoursAccessor;
 use App\Support\InternshipDocumentRequirements;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class ApplicationController extends Controller
 {
@@ -28,6 +30,7 @@ class ApplicationController extends Controller
         private readonly CourseYearLevelGate $courseYearLevels,
         private readonly HoursAgreementService $hoursAgreements,
         private readonly RequiredOjtHoursAccessor $hoursAccessor,
+        private readonly PlacementExclusivityService $placementExclusivity,
     ) {
     }
 
@@ -50,6 +53,10 @@ class ApplicationController extends Controller
                 'company_id',
                 'status',
                 'tracker_stage',
+                'withdrawal_reason',
+                'placement_closed_at',
+                'placement_close_reason',
+                'active_placement_key',
                 'resume_url',
                 'documents',
                 'documents_pending',
@@ -63,6 +70,7 @@ class ApplicationController extends Controller
             ])
             ->with([
                 'student:id,user_id,school_id,school_subscription_code,school_name',
+                'student.skills',
                 'internship:id,company_id,school_id,host_type,host_name,title,host_required_hours',
                 'internship.company:id,user_id,company_name',
                 'internship.school:id,institution_name',
@@ -95,7 +103,86 @@ class ApplicationController extends Controller
             ->get()
             ->map(fn ($application) => $this->serialize($application));
 
-        return response()->json(['data' => $items]);
+        $payload = ['data' => $items];
+        if ($appRole === 'student' && $user->student) {
+            $payload['activePlacement'] = $this->placementExclusivity->activePlacementSummary((int) $user->student->id);
+        }
+
+        return response()->json($payload);
+    }
+
+    public function activePlacement(Request $request)
+    {
+        $user = $request->user();
+        if ($user->effectiveAppRole() !== 'student' || ! $user->student) {
+            return response()->json(['message' => 'Only students have placements.'], Response::HTTP_FORBIDDEN);
+        }
+
+        return response()->json([
+            'data' => $this->placementExclusivity->activePlacementSummary((int) $user->student->id),
+        ]);
+    }
+
+    public function closePlacement(Request $request, Application $application)
+    {
+        $user = $request->user();
+        $appRole = $user->effectiveAppRole();
+        $data = $request->validate([
+            'reason' => ['required', 'string', 'in:cancelled,declined,ended,completed'],
+        ]);
+        $reason = strtolower(trim((string) $data['reason']));
+
+        $internship = $application->internship;
+        $company = $user->organizationCompany() ?? $user->company;
+        $school = $user->organizationSchool() ?? $user->school;
+
+        $isStudentOwner = $appRole === 'student'
+            && $user->student
+            && (int) $application->student_id === (int) $user->student->id;
+
+        $isHost = $appRole === 'company'
+            && $company
+            && $internship
+            && $internship->company_id
+            && (int) $internship->company_id === (int) $company->id;
+
+        $isSchoolOfStudent = $appRole === 'school'
+            && $school
+            && $application->student
+            && (
+                (int) $application->student->school_id === (int) $school->id
+                || ($school->subscription_code && $application->student->school_subscription_code === $school->subscription_code)
+            );
+
+        if ($appRole === 'admin') {
+            // allowed
+        } elseif ($isStudentOwner) {
+            if ($reason !== PlacementExclusivityService::CLOSE_DECLINED) {
+                return response()->json([
+                    'message' => 'Interns can only decline their own active placement.',
+                ], Response::HTTP_FORBIDDEN);
+            }
+        } elseif ($isHost || $isSchoolOfStudent) {
+            if (! in_array($reason, [
+                PlacementExclusivityService::CLOSE_CANCELLED,
+                PlacementExclusivityService::CLOSE_ENDED,
+                PlacementExclusivityService::CLOSE_COMPLETED,
+            ], true)) {
+                return response()->json([
+                    'message' => 'Hosts and schools can cancel, end, or complete a placement.',
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+        } else {
+            return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
+        }
+
+        try {
+            $closed = $this->placementExclusivity->closePlacement($application, $reason, $user);
+        } catch (ValidationException $e) {
+            throw $e;
+        }
+
+        return response()->json(['data' => $this->serialize($closed)]);
     }
 
     public function store(Request $request)
@@ -116,6 +203,20 @@ class ApplicationController extends Controller
         $internship = Internship::query()->with('company')->findOrFail($data['internship_id']);
 
         $student = $user->student;
+
+        // One active placement: block new applications while placed.
+        try {
+            $this->placementExclusivity->assertStudentCanApply($student);
+        } catch (ValidationException $e) {
+            $message = collect($e->errors())->flatten()->first() ?: 'You already have an active placement.';
+
+            return response()->json([
+                'message' => $message,
+                'code' => 'active_placement',
+                'activePlacement' => $this->placementExclusivity->activePlacementSummary((int) $student->id),
+                'errors' => $e->errors(),
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
 
         // Course hours / year eligibility before partnership checks so setup messages are clear.
         if ($blocked = $this->courseYearLevels->rejectIfCannotApply($student)) {
@@ -189,6 +290,7 @@ class ApplicationController extends Controller
 
         $application->load([
             'student:id,user_id,school_id,school_subscription_code,school_name',
+            'student.skills',
             'student.school:id,user_id,institution_name',
             'internship:id,company_id,school_id,host_type,host_name,title,host_required_hours',
             'internship.company:id,user_id,company_name',
@@ -342,12 +444,18 @@ class ApplicationController extends Controller
                 $data['reason'] ?? null,
                 false,
             );
+        } catch (ConflictHttpException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+                'code' => 'active_placement_conflict',
+            ], Response::HTTP_CONFLICT);
         } catch (ValidationException $e) {
             throw $e;
         }
 
         $freshApplication = $application->fresh([
             'student:id,user_id,school_id,school_subscription_code,school_name',
+            'student.skills',
             'internship:id,company_id,school_id,host_type,host_name,title',
             'internship.company:id,user_id,company_name',
             'internship.school:id,institution_name',
@@ -614,8 +722,18 @@ class ApplicationController extends Controller
             $hostType = $a->internship?->company_id ? 'company' : 'school';
         }
 
-        $a->loadMissing(['hoursAgreement', 'internship']);
+        $a->loadMissing(['hoursAgreement', 'internship', 'student.skills']);
         $hoursPayload = $this->hoursAgreements->serialize($a->hoursAgreement, $a, $a->internship, false);
+
+        $studentSkills = $a->student?->skills
+            ? $a->student->skills->map(fn ($skill) => [
+                'id' => (string) $skill->id,
+                'name' => $skill->name,
+                'category' => $skill->category,
+                'status' => $skill->status,
+                'level' => $skill->pivot->level ?? 'beginner',
+            ])->values()->all()
+            : [];
 
         return [
             'id' => (string) $a->id,
@@ -626,6 +744,7 @@ class ApplicationController extends Controller
             'studentName' => $a->student_name,
             'studentEmail' => $a->student_email,
             'studentCourse' => $a->student_course,
+            'studentSkills' => $studentSkills,
             'schoolName' => $a->student?->school_name ?: $a->internship?->school?->institution_name,
             'companyName' => $a->internship?->company?->company_name,
             'hostType' => $hostType,
@@ -634,7 +753,11 @@ class ApplicationController extends Controller
                     ? ($a->internship?->school?->institution_name ?: $a->student?->school_name)
                     : $a->internship?->company?->company_name),
             'status' => $a->status,
-            'trackerStage' => $a->tracker_stage ?: $this->tracker->inferStage($a),
+            'trackerStage' => $this->tracker->stageForDisplay($a),
+            'withdrawalReason' => $a->withdrawal_reason,
+            'placementClosedAt' => $a->placement_closed_at?->toIso8601String(),
+            'placementCloseReason' => $a->placement_close_reason,
+            'hasActivePlacement' => $this->placementExclusivity->isActivePlacement($a),
             'resume' => $a->resume_url,
             'documents' => $a->documents,
             'documentsPending' => $a->documents_pending,

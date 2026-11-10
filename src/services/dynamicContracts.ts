@@ -1,4 +1,84 @@
+import axios from 'axios'
+
 import apiClient from './apiClient'
+
+export const OJT_MOA_TEMPLATE_SLUG = 'ojt-moa'
+
+export const OJT_MOA_DEFAULT_SUBJECT = 'OJT Memorandum of Agreement'
+
+export const OJT_MOA_DEFAULT_PURPOSE =
+  'This agreement formalizes a partnership for On-the-Job Training (OJT) placements. ' +
+  'It covers how students will be assigned to your organization, supervised during their internship, ' +
+  'and evaluated according to our academic requirements for the agreed period.'
+
+export class AgreementSubmitError extends Error {
+  fieldErrors: Record<string, string>
+
+  constructor(message: string, fieldErrors: Record<string, string> = {}) {
+    super(message)
+    this.name = 'AgreementSubmitError'
+    this.fieldErrors = fieldErrors
+  }
+}
+
+const API_FIELD_TO_FORM: Record<string, string> = {
+  subject: 'subject',
+  purpose: 'purpose',
+  startDate: 'startDate',
+  endDate: 'endDate',
+  notes: 'notes',
+  schoolId: 'partnerUserId',
+  companyId: 'partnerUserId',
+  contract_type_id: 'selectedTypeId',
+  dynamic_fields: 'dynamicFields',
+}
+
+function firstErrorMessage(value: unknown): string | undefined {
+  if (Array.isArray(value) && value[0]) return String(value[0])
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  if (value && typeof value === 'object') {
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      const msg = firstErrorMessage(nested)
+      if (msg) return msg
+    }
+  }
+  return undefined
+}
+
+export function mapAgreementValidationErrors(error: unknown): Record<string, string> {
+  if (!axios.isAxiosError(error)) return {}
+
+  const errs = (error.response?.data as { errors?: Record<string, unknown> } | undefined)?.errors
+  if (!errs || typeof errs !== 'object') return {}
+
+  const mapped: Record<string, string> = {}
+  for (const [apiKey, raw] of Object.entries(errs)) {
+    const message = firstErrorMessage(raw)
+    if (!message) continue
+
+    const formKey = API_FIELD_TO_FORM[apiKey] ?? apiKey
+    if (!mapped[formKey]) mapped[formKey] = message
+
+    if (apiKey.startsWith('dynamic_fields.') || apiKey.includes('.')) {
+      const dynamicKey = apiKey.replace(/^dynamic_fields\./, '')
+      mapped[`dynamic:${dynamicKey}`] = message
+    }
+  }
+
+  return mapped
+}
+
+export function getAgreementSubmitErrorMessage(error: unknown, fallback = 'Could not send the agreement.') {
+  if (error instanceof AgreementSubmitError) {
+    return error.message || fallback
+  }
+  if (axios.isAxiosError(error)) {
+    const data = error.response?.data as { message?: string } | undefined
+    if (data?.message?.trim()) return data.message.trim()
+  }
+  if (error instanceof Error && error.message.trim()) return error.message
+  return fallback
+}
 
 export interface ContractFieldSchema {
   key: string
@@ -116,9 +196,14 @@ export async function submitDynamicContract(payload: ContractSubmitPayload): Pro
     form.append('files[]', file)
   }
 
-  const response = await apiClient.post<SubmittedContractResponse>('/agreements', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  })
-
-  return response.data
+  try {
+    const response = await apiClient.post<SubmittedContractResponse>('/agreements', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    return response.data
+  } catch (error) {
+    const fieldErrors = mapAgreementValidationErrors(error)
+    const message = getAgreementSubmitErrorMessage(error, 'Could not send the agreement.')
+    throw new AgreementSubmitError(message, fieldErrors)
+  }
 }

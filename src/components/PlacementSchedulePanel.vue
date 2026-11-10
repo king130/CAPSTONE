@@ -15,6 +15,7 @@ import {
 } from '@/services/placementSchedules'
 import { useAuthStore } from '@/stores/auth'
 import { type ScheduleSlot, validateSlots } from '@/utils/scheduleSlots'
+import { statusLabel } from '@/utils/statusLabels'
 
 const props = defineProps<{
   applicationId: string
@@ -127,7 +128,7 @@ watch(() => props.applicationId, load)
 
     <div v-if="state" class="space-y-2">
       <div class="flex flex-wrap items-center gap-2">
-        <Badge variant="outline">{{ state.status || (state.hasPlacementSchedule ? 'default' : 'Not set') }}</Badge>
+        <Badge variant="outline">{{ statusLabel(state.status || (state.hasPlacementSchedule ? 'default' : '')) }}</Badge>
         <span class="text-sm text-foreground">{{ state.activeLabel || 'Not set' }}</span>
       </div>
       <p v-if="!state.hasPlacementSchedule" class="text-sm text-muted-foreground">
@@ -184,7 +185,7 @@ watch(() => props.applicationId, load)
           :key="item.id"
           class="rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground"
         >
-          <span class="font-medium text-foreground">{{ item.status }}</span>
+          <span class="font-medium text-foreground">{{ statusLabel(item.status) }}</span>
           · {{ item.requestedLabel }}
           <div v-if="item.reason">Reason: {{ item.reason }}</div>
           <div v-if="item.decisionNote">Note: {{ item.decisionNote }}</div>

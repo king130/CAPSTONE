@@ -164,7 +164,7 @@ class HostPlacementLifecycleTest extends TestCase
             'revision_required' => true,
         ]);
         $reject->assertOk();
-        $this->assertSame('revision_required', OjtDtrSubmission::query()->find($dtrId)?->status);
+        $this->assertSame('rejected', OjtDtrSubmission::query()->find($dtrId)?->status);
         $this->assertSame('Incomplete signatures', OjtDtrSubmission::query()->find($dtrId)?->company_rejection_reason);
 
         $resubmit = $this->post('/api/ojt-dtrs/'.$dtrId.'/resubmit', [
@@ -176,13 +176,11 @@ class HostPlacementLifecycleTest extends TestCase
         ], ['Accept' => 'application/json']);
         $resubmit->assertCreated();
         $newDtrId = (int) $resubmit->json('data.id');
-        // Host resubmit path skips to coordinator; student resubmit would be pending_company.
-        // Host performed resubmit here.
-        $this->assertSame('submitted', OjtDtrSubmission::query()->find($newDtrId)?->status);
-        $this->assertSame('school', OjtDtrSubmission::query()->find($newDtrId)?->review_stage);
+        $this->assertSame('approved', OjtDtrSubmission::query()->find($newDtrId)?->status);
+        $this->assertNull(OjtDtrSubmission::query()->find($newDtrId)?->review_stage);
 
         Sanctum::actingAs($ctx['schoolUser']);
-        $this->postJson('/api/ojt-dtrs/'.$newDtrId.'/approve')->assertOk();
+        $this->postJson('/api/ojt-dtrs/'.$newDtrId.'/approve')->assertStatus(422);
         $this->assertSame('approved', OjtDtrSubmission::query()->find($newDtrId)?->status);
 
         $this->assertSame(1, OjtDtrSubmission::query()->where('status', 'approved')->count());
@@ -190,7 +188,7 @@ class HostPlacementLifecycleTest extends TestCase
             8.0,
             (float) OjtDtrSubmission::query()->where('status', 'approved')->sum('submitted_hours')
         );
-        $this->assertSame('revision_required', OjtDtrSubmission::query()->find($dtrId)?->status);
+        $this->assertSame('rejected', OjtDtrSubmission::query()->find($dtrId)?->status);
     }
 
     /**

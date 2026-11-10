@@ -37,43 +37,44 @@ class SubscriptionPlanService
 
         $access = app(SubscriptionAccessService::class)->resolve($organization);
         $rawPlan = strtolower(trim((string) ($organization->subscription?->plan ?: ''))) ?: '';
+        $accessStatus = strtolower(trim((string) ($access['status'] ?? '')));
         $planSlug = strtolower(trim((string) ($access['plan'] ?? $rawPlan))) ?: '';
-        $status = strtolower(trim((string) ($organization->subscription?->status ?: 'inactive'))) ?: 'inactive';
         $settings = is_array($organization->settings) ? $organization->settings : [];
         $pending = is_array($settings['pending_plan_change'] ?? null) ? $settings['pending_plan_change'] : null;
         $previousPlan = $pending
             ? strtolower(trim((string) ($pending['previousPlan'] ?? '')))
             : '';
-        $targetPlan = $pending
-            ? strtolower(trim((string) ($pending['targetPlan'] ?? '')))
-            : '';
 
-        // Trial / grace use the configured trial plan limits (default: standard).
-        if (in_array($access['status'], [SubscriptionAccessService::STATUS_TRIAL, SubscriptionAccessService::STATUS_GRACE], true)) {
-            $planSlug = app(SubscriptionAccessService::class)->trialPlanSlug();
-        } elseif ($pending) {
-            // Checkout in flight: keep CURRENT entitlements; never grant targetPlan before verify.
-            if ($previousPlan !== '' && $previousPlan !== 'free') {
-                $planSlug = $previousPlan;
-            } elseif (in_array($status, ['trialing', 'trial'], true)) {
-                $planSlug = app(SubscriptionAccessService::class)->trialPlanSlug();
-            } elseif ($previousPlan === 'free' || $rawPlan === 'free') {
-                // Legacy free → paid checkout still pending: keep free seat limits until verify.
-                $planSlug = 'free';
-            } elseif (in_array($status, ['inactive', 'pending'], true)) {
-                if ($planSlug === '' || ($targetPlan !== '' && $planSlug === $targetPlan)) {
-                    $planSlug = app(SubscriptionAccessService::class)->trialPlanSlug();
-                }
-            }
-        } elseif ($rawPlan === 'free') {
-            // Legacy free row (not on trial dates) — keep free limits for seat enforcement.
+        // Unverified + free always use free-plan seat limits (never read-only lock).
+        if (in_array($accessStatus, [
+            SubscriptionAccessService::STATUS_UNVERIFIED,
+            SubscriptionAccessService::STATUS_FREE,
+        ], true)) {
             $planSlug = 'free';
-        } elseif (in_array($status, ['inactive', 'pending'], true)) {
-            $planSlug = app(SubscriptionAccessService::class)->trialPlanSlug();
+        } elseif ($accessStatus === SubscriptionAccessService::STATUS_TRIAL) {
+            $planSlug = (string) config('subscription.trial_plan', 'standard') ?: 'standard';
+        } elseif ($accessStatus === SubscriptionAccessService::STATUS_PENDING_PAYMENT) {
+            // Checkout in flight: keep CURRENT entitlements; never grant target before verify.
+            if ($previousPlan !== '') {
+                $planSlug = $previousPlan === 'free' ? 'free' : $previousPlan;
+            } elseif ($rawPlan !== '' && $rawPlan !== 'free') {
+                $planSlug = $rawPlan;
+            } else {
+                $planSlug = 'free';
+            }
+        } elseif (in_array($accessStatus, [
+            SubscriptionAccessService::STATUS_ACTIVE,
+            SubscriptionAccessService::STATUS_PAST_DUE,
+            SubscriptionAccessService::STATUS_EXPIRED,
+        ], true)) {
+            // Keep the paid (or last paid) plan definition for limit display / enforcement.
+            $planSlug = $rawPlan !== '' && $rawPlan !== 'free'
+                ? $rawPlan
+                : (string) ($access['plan'] ?? 'standard');
         }
 
         if ($planSlug === '') {
-            $planSlug = app(SubscriptionAccessService::class)->trialPlanSlug();
+            $planSlug = 'free';
         }
 
         return SubscriptionPlanDefinition::query()

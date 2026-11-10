@@ -134,8 +134,20 @@ export async function createTenantMember(
     roleId: string
     title?: string
   },
-): Promise<{ member: TenantMember; temporaryPassword: string }> {
-  return apiFetch<{ member: TenantMember; temporaryPassword: string }>(`/rbac/tenants/${tenantId}/members`, {
+): Promise<{
+  member: TenantMember
+  inviteSent: boolean
+  email: string
+  message?: string
+  invite?: { sent: boolean; expiresAt?: string; errorMessage?: string }
+}> {
+  return apiFetch<{
+    member: TenantMember
+    inviteSent: boolean
+    email: string
+    message?: string
+    invite?: { sent: boolean; expiresAt?: string; errorMessage?: string }
+  }>(`/rbac/tenants/${tenantId}/members`, {
     method: 'POST',
     body: JSON.stringify({
       name: payload.name,
@@ -143,5 +155,19 @@ export async function createTenantMember(
       roleId: Number(payload.roleId),
       title: payload.title,
     }),
+  })
+}
+
+export async function resendTenantMemberSetupLink(
+  tenantId: string,
+  membershipId: string,
+): Promise<{ inviteSent: boolean; email?: string; message?: string; invite?: { sent: boolean; errorMessage?: string } }> {
+  return apiFetch<{
+    inviteSent: boolean
+    email?: string
+    message?: string
+    invite?: { sent: boolean; errorMessage?: string }
+  }>(`/rbac/tenants/${tenantId}/members/${membershipId}/resend-setup-link`, {
+    method: 'POST',
   })
 }

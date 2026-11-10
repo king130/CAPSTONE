@@ -8,6 +8,7 @@ use App\Models\SchoolCourseRequirement;
 use App\Models\User;
 use App\Services\CourseYearLevelGate;
 use App\Services\PermissionGate;
+use App\Support\CourseSkillCategoryDefaults;
 use App\Support\StudentYearLevel;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
@@ -41,6 +42,7 @@ class SchoolCourseRequirementController extends Controller
             'meta' => [
                 'allowedYearLevels' => StudentYearLevel::OPTIONS,
                 'defaultEligibleYearLevels' => StudentYearLevel::DEFAULT_ELIGIBLE,
+                'skillCatalogCategories' => CourseSkillCategoryDefaults::catalogCategories(),
                 'incompleteCourses' => $incomplete,
                 'flaggedStudentCount' => $flagged->count(),
                 'hasSetupWarnings' => $incomplete !== [] || $flagged->isNotEmpty() || $requirements->isEmpty(),
@@ -68,13 +70,18 @@ class SchoolCourseRequirementController extends Controller
         }
 
         try {
-            $requirement = SchoolCourseRequirement::query()->create([
+            $createPayload = [
                 'school_id' => $school->id,
                 'course_name' => $data['courseName'],
                 'course_name_key' => $key,
                 'required_hours' => $data['requiredHours'],
                 'eligible_year_levels' => $data['eligibleYearLevels'],
-            ]);
+            ];
+            if (array_key_exists('recommendedSkillCategories', $data)) {
+                $createPayload['recommended_skill_categories'] = $data['recommendedSkillCategories'];
+            }
+
+            $requirement = SchoolCourseRequirement::query()->create($createPayload);
         } catch (QueryException $exception) {
             if ($this->isUniqueViolation($exception)) {
                 return $this->duplicateResponse();
@@ -106,12 +113,17 @@ class SchoolCourseRequirementController extends Controller
         }
 
         try {
-            $schoolCourseRequirement->fill([
+            $updatePayload = [
                 'course_name' => $data['courseName'],
                 'course_name_key' => $key,
                 'required_hours' => $data['requiredHours'],
                 'eligible_year_levels' => $data['eligibleYearLevels'],
-            ])->save();
+            ];
+            if (array_key_exists('recommendedSkillCategories', $data)) {
+                $updatePayload['recommended_skill_categories'] = $data['recommendedSkillCategories'];
+            }
+
+            $schoolCourseRequirement->fill($updatePayload)->save();
         } catch (QueryException $exception) {
             if ($this->isUniqueViolation($exception)) {
                 return $this->duplicateResponse();
@@ -124,7 +136,12 @@ class SchoolCourseRequirementController extends Controller
     }
 
     /**
-     * @return array{courseName: string, requiredHours: int, eligibleYearLevels: list<string>}
+     * @return array{
+     *     courseName: string,
+     *     requiredHours: int,
+     *     eligibleYearLevels: list<string>,
+     *     recommendedSkillCategories?: list<string>
+     * }
      */
     private function validated(Request $request): array
     {
@@ -133,6 +150,8 @@ class SchoolCourseRequirementController extends Controller
             'requiredHours' => ['required', 'integer', 'min:1', 'max:10000'],
             'eligibleYearLevels' => ['sometimes', 'array'],
             'eligibleYearLevels.*' => ['string', 'max:32'],
+            'recommendedSkillCategories' => ['sometimes', 'array'],
+            'recommendedSkillCategories.*' => ['string', 'max:64'],
         ]);
 
         $courseName = SchoolCourseRequirement::displayCourseName($data['courseName']);
@@ -168,11 +187,17 @@ class SchoolCourseRequirementController extends Controller
             ]);
         }
 
-        return [
+        $payload = [
             'courseName' => $courseName,
             'requiredHours' => (int) $data['requiredHours'],
             'eligibleYearLevels' => $levels,
         ];
+
+        if (array_key_exists('recommendedSkillCategories', $data)) {
+            $payload['recommendedSkillCategories'] = CourseSkillCategoryDefaults::normalizeList($data['recommendedSkillCategories']);
+        }
+
+        return $payload;
     }
 
     private function resolveSchool(?User $user): School
@@ -225,12 +250,18 @@ class SchoolCourseRequirementController extends Controller
             $levels = StudentYearLevel::DEFAULT_ELIGIBLE;
         }
 
+        $recommended = CourseSkillCategoryDefaults::normalizeList($requirement->recommended_skill_categories);
+        if ($recommended === [] && filled($requirement->course_name)) {
+            $recommended = CourseSkillCategoryDefaults::forCourseName((string) $requirement->course_name);
+        }
+
         return [
             'id' => (string) $requirement->id,
             'schoolId' => (string) $requirement->school_id,
             'courseName' => $requirement->course_name,
             'requiredHours' => (int) $requirement->required_hours,
             'eligibleYearLevels' => $levels,
+            'recommendedSkillCategories' => $recommended,
             'configComplete' => (int) $requirement->required_hours >= 1 && $levels !== [],
         ];
     }

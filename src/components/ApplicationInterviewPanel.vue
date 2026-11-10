@@ -67,6 +67,15 @@ function isLockedStatus(status: string) {
   return LOCKED_STATUSES.includes(status)
 }
 
+function formatScheduledAt(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/)
+  const date = match
+    ? new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5])))
+    : new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString(undefined, { timeZone: 'UTC' })
+}
+
 function statusLabel(status: string) {
   if (status === 'proposed' || status === 'pending') return 'Pending'
   if (status === 'confirmed' || status === 'scheduled') return 'Scheduled'
@@ -185,7 +194,7 @@ watch(() => props.applicationId, load)
       >
         <div class="min-w-0">
           <p class="text-sm font-medium text-foreground">
-            {{ new Date(interview.scheduledAt).toLocaleString() }}
+            {{ formatScheduledAt(interview.scheduledAt) }}
             · {{ interview.durationMinutes }} min · {{ interview.mode }}
           </p>
           <p v-if="interview.locationOrLink" class="truncate text-xs text-muted-foreground">{{ interview.locationOrLink }}</p>

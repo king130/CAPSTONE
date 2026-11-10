@@ -11,10 +11,11 @@ import {
   fetchApplicationTracker,
   submitTrackerAssessment,
   TRACKER_FLOW,
-  TRACKER_STAGE_LABELS,
   transitionApplicationStage,
   type TrackerState,
 } from '@/services/applicationTracker'
+import { statusLabel } from '@/utils/statusLabels'
+import { closePlacement } from '@/services/applications'
 import { hasPermission } from '@/services/permissions'
 import { useAuthStore } from '@/stores/auth'
 
@@ -106,10 +107,24 @@ async function runTransition(toStage: string, options?: { reason?: string; rollb
   submitting.value = true
   try {
     tracker.value = await transitionApplicationStage(props.applicationId, toStage, options)
-    success(options?.rollback ? 'Stage rolled back.' : `Moved to ${TRACKER_STAGE_LABELS[toStage] || toStage}.`)
+    success(options?.rollback ? 'Stage rolled back.' : `Moved to ${statusLabel(toStage)}.`)
     emit('updated')
   } catch (caught) {
     error(caught, { fallback: 'Unable to update stage.' })
+  } finally {
+    submitting.value = false
+  }
+}
+
+async function runClosePlacement(reason: 'cancelled' | 'ended' | 'completed') {
+  submitting.value = true
+  try {
+    await closePlacement(props.applicationId, reason)
+    await load()
+    success(reason === 'cancelled' ? 'Placement cancelled.' : 'Placement ended.')
+    emit('updated')
+  } catch (caught) {
+    error(caught, { fallback: 'Unable to close this placement.' })
   } finally {
     submitting.value = false
   }
@@ -225,18 +240,23 @@ const showDecision = computed(() => {
   return stage.value === 'assessed'
 })
 
+const showClosePlacement = computed(() => {
+  if (isStudent.value || !canManageStages.value) return false
+  return stage.value === 'accepted'
+})
+
 const showInterviewSection = computed(() => {
-  return stage.value === 'endorsed' || stage.value === 'interview_scheduled'
+  return stage.value === 'endorsed' || stage.value === 'interview_scheduled' || stage.value === 'interviewed'
 })
 
 const completedStepLabels = computed(() =>
   flowSteps.value
     .filter((step) => stepTone(step) === 'complete')
-    .map((step) => TRACKER_STAGE_LABELS[step] || step),
+    .map((step) => statusLabel(step)),
 )
 
 const stageSummary = computed(() => {
-  const current = TRACKER_STAGE_LABELS[stage.value] || stage.value
+  const current = statusLabel(stage.value)
   if (stage.value === 'applied' && isStudent.value) {
     return 'Waiting for your school to endorse this application.'
   }
@@ -311,7 +331,7 @@ watch(() => props.applicationId, load)
           class="text-xs font-medium"
           :class="stepTone(step) === 'active' || stepTone(step) === 'error' ? 'text-foreground' : 'text-muted-foreground'"
         >
-          {{ TRACKER_STAGE_LABELS[step] || step }}
+          {{ statusLabel(step) }}
         </span>
         <span
           v-if="index < flowSteps.length - 1"
@@ -322,10 +342,7 @@ watch(() => props.applicationId, load)
     </ol>
 
     <div class="flex flex-wrap items-center gap-2">
-      <Badge variant="outline">{{ TRACKER_STAGE_LABELS[stage] || stage }}</Badge>
-      <span v-if="tracker?.legacyStatus" class="text-xs text-muted-foreground">
-        Status: {{ tracker.legacyStatus }}
-      </span>
+      <Badge variant="outline">Current: {{ statusLabel(stage) }}</Badge>
     </div>
 
     <p
@@ -397,6 +414,22 @@ watch(() => props.applicationId, load)
           Reject
         </Button>
       </template>
+      <template v-if="showClosePlacement">
+        <Button
+          variant="outline"
+          :disabled="submitting"
+          @click="runClosePlacement('cancelled')"
+        >
+          Cancel placement
+        </Button>
+        <Button
+          variant="outline"
+          :disabled="submitting"
+          @click="runClosePlacement('ended')"
+        >
+          End placement
+        </Button>
+      </template>
     </div>
 
     <div
@@ -452,7 +485,7 @@ watch(() => props.applicationId, load)
         <div class="flex flex-col gap-2 sm:flex-row">
           <select
             v-model="rollbackTarget"
-            class="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground sm:max-w-[12rem]"
+            class="flex h-11 w-full rounded-md border border-input bg-background px-3 text-[16px] text-foreground sm:max-w-[12rem] md:text-sm"
           >
             <option value="">Select stage</option>
             <option
@@ -460,7 +493,7 @@ watch(() => props.applicationId, load)
               :key="s"
               :value="s"
             >
-              {{ TRACKER_STAGE_LABELS[s] || s }}
+              {{ statusLabel(s) }}
             </option>
           </select>
           <Input v-model="rollbackReason" placeholder="Reason" class="flex-1" />
@@ -475,9 +508,9 @@ watch(() => props.applicationId, load)
           class="rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground"
         >
           <span class="font-medium text-foreground">
-            {{ TRACKER_STAGE_LABELS[event.fromStage || ''] || event.fromStage || '—' }}
+            {{ statusLabel(event.fromStage || '') }}
             →
-            {{ TRACKER_STAGE_LABELS[event.toStage] || event.toStage }}
+            {{ statusLabel(event.toStage) }}
           </span>
           <span v-if="event.isRollback" class="ml-1 text-destructive">(rollback)</span>
           <div class="mt-0.5">

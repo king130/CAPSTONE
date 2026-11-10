@@ -3,6 +3,7 @@ import { FileText, LoaderCircle } from 'lucide-vue-next'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
+import FilePreviewActions from '@/components/FilePreviewActions.vue'
 import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
 import Card from '@/components/ui/card/Card.vue'
@@ -22,10 +23,14 @@ import TableRow from '@/components/ui/table/TableRow.vue'
 import Textarea from '@/components/ui/textarea/Textarea.vue'
 import { useToast } from '@/composables/useToast'
 import MainLayout from '@/layouts/MainLayout.vue'
+import AlertDialog from '@/components/ui/alert-dialog/AlertDialog.vue'
 import {
   approveDtr,
-  downloadDtrFile,
+  deleteDtr,
   dtrStatusLabel,
+  dtrRowStatus,
+  dtrStatusDetail,
+  isPendingDtr,
   isAwaitingHost,
   isAwaitingSchool,
   isRejectedOrRevision,
@@ -41,17 +46,19 @@ import {
 import { hasAnyPermission, hasPermission } from '@/services/permissions'
 import { useAuthStore } from '@/stores/auth'
 import { extractDtrSuggestions } from '@/utils/dtrExtract'
+import { formatDate, toTitleCaseName } from '@/utils/formatDisplay'
 
 const authStore = useAuthStore()
 const route = useRoute()
 const { success, error } = useToast()
 
 const isCompany = computed(() => route.name === 'company-dtr')
+const isAdmin = computed(() => route.name === 'admin-dtr')
 const isMunicipalHall = computed(
   () => String(authStore.user?.activeOrganization?.type || '').toLowerCase() === 'municipal_hall',
 )
 const hostLabel = computed(() => (isMunicipalHall.value ? 'Municipal Hall' : 'Company'))
-const role = computed(() => (isCompany.value ? 'company' : 'school'))
+const role = computed(() => (isAdmin.value ? 'admin' : isCompany.value ? 'company' : 'school'))
 const canCoordinatorReview = computed(() => !isCompany.value && hasPermission('org.approve_ojt_logs'))
 const canCompanyReview = computed(
   () =>
@@ -81,6 +88,7 @@ const fileMessage = ref('')
 const resubmitTarget = ref<DtrSubmission | null>(null)
 
 const rejectTarget = ref<DtrSubmission | null>(null)
+const deleteTarget = ref<DtrSubmission | null>(null)
 const rejectReason = ref('')
 const rejectAsRevision = ref(false)
 const rejectOpen = computed({
@@ -171,10 +179,10 @@ async function onSubmit() {
     }
     if (resubmitTarget.value) {
       await resubmitDtr(resubmitTarget.value.id, payload)
-      success('DTR resubmitted for review.')
+      success('DTR resubmitted. Status is Approved.')
     } else {
       await submitDtr(payload)
-      success('DTR submitted. Status is Submitted.')
+      success('DTR entered. Status is Approved.')
     }
     resetForm()
     await load()
@@ -196,14 +204,28 @@ function startResubmit(row: DtrSubmission) {
   fileMessage.value = ''
 }
 
+function askDelete(row: DtrSubmission) {
+  deleteTarget.value = row
+}
+
+async function confirmDelete() {
+  const row = deleteTarget.value
+  if (!row) return
+  try {
+    await deleteDtr(row.id)
+    submissions.value = submissions.value.filter((item) => item.id !== row.id)
+    success('DTR deleted.')
+  } catch (caught) {
+    error(caught, { fallback: 'Unable to delete this DTR.' })
+  } finally {
+    deleteTarget.value = null
+  }
+}
+
 async function onApprove(row: DtrSubmission) {
   try {
     const updated = await approveDtr(row.id)
-    if (isCompany.value) {
-      success('DTR approved by the host. Status is still Submitted, now waiting for the school.')
-    } else {
-      success('DTR fully approved.')
-    }
+    success('DTR approved.')
     // Prefer server response so status is correct immediately.
     const idx = submissions.value.findIndex((item) => item.id === row.id)
     if (idx >= 0 && updated) submissions.value[idx] = updated
@@ -221,19 +243,11 @@ async function onReject() {
   }
   try {
     await rejectDtr(rejectTarget.value.id, rejectReason.value.trim(), rejectAsRevision.value)
-    success(rejectAsRevision.value ? 'DTR marked as revision required.' : 'DTR rejected.')
+    success('DTR rejected.')
     rejectOpen.value = false
     await load()
   } catch (caught) {
     error(caught, { fallback: 'Unable to reject this DTR.' })
-  }
-}
-
-async function onDownload(row: DtrSubmission) {
-  try {
-    await downloadDtrFile(row.id, row.fileName)
-  } catch (caught) {
-    error(caught, { fallback: 'Unable to download the DTR.' })
   }
 }
 
@@ -244,6 +258,7 @@ function badgeVariant(status: DtrDisplayStatus) {
 }
 
 function canApproveRow(row: DtrSubmission): boolean {
+  if (isAdmin.value && (isAwaitingHost(row) || isAwaitingSchool(row))) return true
   if (canCompanyReview.value && isAwaitingHost(row)) return true
   if (canCoordinatorReview.value && isAwaitingSchool(row)) return true
   return false
@@ -262,75 +277,15 @@ onMounted(() => {
 <template>
   <MainLayout
     :role="role"
-    :title="isCompany ? 'DTR Submissions' : 'DTR Review'"
-    :active-item="isCompany ? 'dtr-submissions' : 'dtr-review'"
+    :title="isAdmin ? 'DTR Records' : isCompany ? 'DTR Submissions' : 'DTR Review'"
+    :active-item="isAdmin ? 'admin-dtr' : isCompany ? 'dtr-submissions' : 'dtr-review'"
   >
     <div class="space-y-6">
-      <Card v-if="isCompany">
-        <CardHeader>
-          <h2 class="text-lg font-semibold text-foreground">
-            {{ resubmitTarget ? 'Resubmit DTR' : 'Submit a DTR' }}
-          </h2>
-          <p class="text-sm text-muted-foreground">
-            This form is a draft until you submit. A {{ hostLabel.toLowerCase() }} submission is stored as Submitted and goes to the school. Student uploads stay Submitted until you approve them.
-          </p>
-        </CardHeader>
-        <CardContent class="grid gap-4 md:grid-cols-2">
-          <div class="md:col-span-2">
-            <Badge variant="warning">Draft</Badge>
-          </div>
-          <label class="space-y-2 text-sm">
-            <span class="font-medium text-foreground">Accepted intern</span>
-            <Select v-model="applicationId" :disabled="Boolean(resubmitTarget)">
-              <option value="">Select an intern</option>
-              <option v-for="placement in placements" :key="placement.applicationId" :value="String(placement.applicationId)">
-                {{ placement.internName }} — {{ placement.internshipTitle }}
-              </option>
-            </Select>
-          </label>
-          <label class="space-y-2 text-sm">
-            <span class="font-medium text-foreground">Hours on this DTR</span>
-            <Input v-model="submittedHours" type="number" min="0.25" max="500" step="0.25" />
-          </label>
-          <label class="space-y-2 text-sm">
-            <span class="font-medium text-foreground">Period start</span>
-            <Input v-model="periodStart" type="date" />
-          </label>
-          <label class="space-y-2 text-sm">
-            <span class="font-medium text-foreground">Period end</span>
-            <Input v-model="periodEnd" type="date" />
-          </label>
-          <label class="space-y-2 text-sm md:col-span-2">
-            <span class="font-medium text-foreground">DTR file</span>
-            <input
-              class="flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              type="file"
-              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
-              :disabled="readingFile"
-              @change="onFileChange"
-            />
-            <p v-if="readingFile" class="text-sm text-muted-foreground">Reading the file…</p>
-            <p v-else-if="fileMessage" class="text-sm text-muted-foreground">{{ fileMessage }}</p>
-          </label>
-          <label class="space-y-2 text-sm md:col-span-2">
-            <span class="font-medium text-foreground">Remarks</span>
-            <Textarea v-model="remarks" :rows="3" placeholder="Optional note for the coordinator" />
-          </label>
-          <div class="flex gap-2 md:col-span-2">
-            <Button :disabled="submitting || readingFile" @click="onSubmit">
-              <LoaderCircle v-if="submitting" class="mr-2 h-4 w-4 animate-spin" />
-              {{ resubmitTarget ? 'Resubmit for review' : 'Submit for review' }}
-            </Button>
-            <Button v-if="resubmitTarget" variant="outline" @click="resetForm">Cancel</Button>
-          </div>
-        </CardContent>
-      </Card>
-
       <Card>
         <CardHeader class="flex flex-row items-center gap-2">
           <FileText class="h-5 w-5 text-primary" />
           <h2 class="text-lg font-semibold text-foreground">
-            {{ isCompany ? `${hostLabel} DTR queue` : 'Coordinator review' }}
+            {{ isCompany ? `${hostLabel} DTR queue` : isAdmin ? 'All DTR records' : 'Coordinator review' }}
           </h2>
         </CardHeader>
         <CardContent>
@@ -356,26 +311,33 @@ onMounted(() => {
             <TableBody>
               <TableRow v-for="row in submissions" :key="row.id">
                 <TableCell>
-                  <div class="font-medium">{{ row.internName }}</div>
+                  <div class="font-medium">{{ toTitleCaseName(row.internName) || row.internName }}</div>
                   <div class="text-xs text-muted-foreground">{{ row.internshipTitle }}</div>
                 </TableCell>
                 <TableCell>{{ row.company }}</TableCell>
-                <TableCell>{{ row.periodStart }} – {{ row.periodEnd }}</TableCell>
+                <TableCell>{{ formatDate(row.periodStart) }} – {{ formatDate(row.periodEnd) }}</TableCell>
                 <TableCell>{{ row.submittedHours }}</TableCell>
                 <TableCell>
-                  <Badge :variant="badgeVariant(row.status)">{{ dtrStatusLabel(row.status) }}</Badge>
+                  <Badge :variant="badgeVariant(dtrRowStatus(row) as DtrDisplayStatus)">{{ dtrStatusLabel(dtrRowStatus(row)) }}</Badge>
+                  <p v-if="dtrStatusDetail(row)" class="mt-1 text-xs text-muted-foreground">{{ dtrStatusDetail(row) }}</p>
                   <p v-if="row.companyReviewedBy" class="mt-1 text-xs text-muted-foreground">
-                    Company: {{ row.companyReviewedBy }}
+                    Company: {{ toTitleCaseName(row.companyReviewedBy) || row.companyReviewedBy }}
                   </p>
                   <p v-if="row.reviewedBy" class="mt-1 text-xs text-muted-foreground">
-                    Coordinator: {{ row.reviewedBy }}
+                    Coordinator: {{ toTitleCaseName(row.reviewedBy) || row.reviewedBy }}
                   </p>
                   <p v-if="row.rejectionReason" class="mt-1 max-w-xs text-xs text-muted-foreground">
                     {{ row.rejectionReason }}
                   </p>
                 </TableCell>
                 <TableCell>
-                  <Button variant="outline" size="sm" @click="onDownload(row)">{{ row.fileName }}</Button>
+                  <div class="space-y-1">
+                    <p class="max-w-[14rem] truncate text-xs text-muted-foreground">{{ row.fileName }}</p>
+                    <FilePreviewActions
+                      :file-name="row.fileName || `dtr-${row.id}.pdf`"
+                      :api-path="`/ojt-dtrs/${row.id}/file`"
+                    />
+                  </div>
                 </TableCell>
                 <TableCell class="space-x-2">
                   <template v-if="canApproveRow(row)">
@@ -390,11 +352,78 @@ onMounted(() => {
                   >
                     Correct and resubmit
                   </Button>
+                  <Button
+                    v-if="isPendingDtr(row.status)"
+                    size="sm"
+                    variant="outline"
+                    @click="askDelete(row)"
+                  >
+                    Delete
+                  </Button>
                 </TableCell>
               </TableRow>
             </TableBody>
           </Table>
         </CardContent>
+      </Card>
+
+      <Card v-if="isCompany">
+        <details class="group" :open="Boolean(resubmitTarget)">
+          <summary class="cursor-pointer list-none px-6 pt-6">
+            <h2 class="text-lg font-semibold text-foreground">
+              {{ resubmitTarget ? 'Resubmit DTR' : 'Add a DTR for an intern' }}
+            </h2>
+            <p class="mt-1 text-sm text-muted-foreground">
+              DTRs you add yourself are approved automatically.
+            </p>
+          </summary>
+          <div class="grid gap-4 px-6 pb-6 pt-4 md:grid-cols-2">
+            <label class="space-y-2 text-sm">
+              <span class="font-medium text-foreground">Accepted intern</span>
+              <Select v-model="applicationId" :disabled="Boolean(resubmitTarget)">
+                <option value="">Select an intern</option>
+                <option v-for="placement in placements" :key="placement.applicationId" :value="String(placement.applicationId)">
+                  {{ toTitleCaseName(placement.internName) || placement.internName }} — {{ placement.internshipTitle }}
+                </option>
+              </Select>
+            </label>
+            <label class="space-y-2 text-sm">
+              <span class="font-medium text-foreground">Hours on this DTR</span>
+              <Input v-model="submittedHours" type="number" min="0.25" max="500" step="0.25" />
+            </label>
+            <label class="space-y-2 text-sm">
+              <span class="font-medium text-foreground">Period start</span>
+              <Input v-model="periodStart" type="date" />
+            </label>
+            <label class="space-y-2 text-sm">
+              <span class="font-medium text-foreground">Period end</span>
+              <Input v-model="periodEnd" type="date" />
+            </label>
+            <label class="space-y-2 text-sm md:col-span-2">
+              <span class="font-medium text-foreground">DTR file</span>
+              <input
+                class="flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                :disabled="readingFile"
+                @change="onFileChange"
+              />
+              <p v-if="readingFile" class="text-sm text-muted-foreground">Reading the file…</p>
+              <p v-else-if="fileMessage" class="text-sm text-muted-foreground">{{ fileMessage }}</p>
+            </label>
+            <label class="space-y-2 text-sm md:col-span-2">
+              <span class="font-medium text-foreground">Remarks</span>
+              <Textarea v-model="remarks" :rows="3" placeholder="Optional note for the coordinator" />
+            </label>
+            <div class="flex gap-2 md:col-span-2">
+              <Button :disabled="submitting || readingFile" @click="onSubmit">
+                <LoaderCircle v-if="submitting" class="mr-2 h-4 w-4 animate-spin" />
+                {{ resubmitTarget ? 'Resubmit DTR' : 'Submit DTR' }}
+              </Button>
+              <Button v-if="resubmitTarget" variant="outline" @click="resetForm">Cancel</Button>
+            </div>
+          </div>
+        </details>
       </Card>
     </div>
 
@@ -404,15 +433,21 @@ onMounted(() => {
       </DialogHeader>
       <div class="space-y-3 p-6 pt-0">
         <Textarea v-model="rejectReason" :rows="4" placeholder="Explain what needs to be corrected" />
-        <label class="flex items-center gap-2 text-sm text-foreground">
-          <input v-model="rejectAsRevision" type="checkbox" class="rounded border-border" />
-          Mark as Revision Required (instead of Rejected)
-        </label>
         <div class="flex justify-end gap-2">
           <Button variant="outline" @click="rejectOpen = false">Cancel</Button>
-          <Button @click="onReject">{{ rejectAsRevision ? 'Request revision' : 'Reject submission' }}</Button>
+          <Button @click="onReject">Reject submission</Button>
         </div>
       </div>
     </Dialog>
+
+    <AlertDialog
+      :open="deleteTarget !== null"
+      title="Delete this DTR?"
+      :description="deleteTarget ? `${toTitleCaseName(deleteTarget.internName) || deleteTarget.internName}, ${formatDate(deleteTarget.periodStart)} to ${formatDate(deleteTarget.periodEnd)}, ${deleteTarget.submittedHours} hours. This cannot be undone.` : ''"
+      action-label="Delete"
+      action-variant="destructive"
+      @update:open="(open) => { if (!open) deleteTarget = null }"
+      @action="confirmDelete"
+    />
   </MainLayout>
 </template>

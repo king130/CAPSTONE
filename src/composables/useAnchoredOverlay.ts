@@ -2,14 +2,25 @@ import { nextTick, onBeforeUnmount, ref, watch, type CSSProperties, type Ref } f
 
 type OverlayAlign = 'start' | 'end' | 'center'
 
+type AnchoredOverlayOptions = {
+  /** Panel overflow. Use `hidden` when an inner region scrolls (e.g. notification list). */
+  overflowY?: 'auto' | 'hidden'
+}
+
 /**
  * Positions a teleported panel against its trigger so it is not clipped by
  * overflow or trapped in a parent stacking context.
  */
-export function useAnchoredOverlay(open: Ref<boolean>, align: OverlayAlign = 'end', onDismiss?: () => void) {
+export function useAnchoredOverlay(
+  open: Ref<boolean>,
+  align: OverlayAlign = 'end',
+  onDismiss?: () => void,
+  options: AnchoredOverlayOptions = {},
+) {
   const triggerRef = ref<HTMLElement | null>(null)
   const panelRef = ref<HTMLElement | null>(null)
   const panelStyle = ref<CSSProperties>({})
+  const overflowY = options.overflowY ?? 'auto'
 
   function updatePosition() {
     const trigger = triggerRef.value
@@ -32,8 +43,14 @@ export function useAnchoredOverlay(open: Ref<boolean>, align: OverlayAlign = 'en
       top: `${Math.max(margin, top)}px`,
       zIndex: 'var(--z-dropdown)',
       maxWidth: `calc(100vw - ${margin * 2}px)`,
-      maxHeight: `calc(100vh - ${margin * 2}px)`,
-      overflowY: 'auto',
+      height: 'auto',
+      overflow: overflowY === 'hidden' ? 'hidden' : undefined,
+      overflowY,
+    }
+
+    // Only constrain outer height when the panel itself scrolls.
+    if (overflowY === 'auto') {
+      style.maxHeight = `calc(100vh - ${margin * 2}px)`
     }
 
     const panelWidth = panel?.offsetWidth ?? 0

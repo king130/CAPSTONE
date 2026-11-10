@@ -6,11 +6,13 @@ use App\Models\Organization;
 use App\Models\OrganizationMembership;
 use App\Models\Role;
 use App\Models\User;
+use App\Services\AccountSetupInviteService;
 use App\Services\SubscriptionPlanService;
 use App\Services\TenantRoleService;
 use App\Support\OrgPermissions;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 class OrganizationAccessController extends Controller
@@ -18,6 +20,7 @@ class OrganizationAccessController extends Controller
     public function __construct(
         private readonly SubscriptionPlanService $subscriptionPlans,
         private readonly TenantRoleService $tenantRoleService,
+        private readonly AccountSetupInviteService $accountSetupInvites,
     )
     {
     }
@@ -242,13 +245,12 @@ class OrganizationAccessController extends Controller
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
-        $tempPassword = $this->generateTemporaryPassword();
         $legacyRole = $organization->type === 'school' ? 'student' : $organization->type;
 
         $newUser = User::query()->create([
             'name' => trim($data['name']),
             'email' => strtolower(trim($data['email'])),
-            'password' => $tempPassword,
+            'password' => Str::random(32).'!Aa1',
             'role' => $legacyRole,
             'profile' => $this->buildProfileForOrganizationUser($organization, $data['title'] ?? null),
             'is_active' => true,
@@ -274,10 +276,71 @@ class OrganizationAccessController extends Controller
         $membership->load(['user', 'role.permissions', 'organization']);
         $this->subscriptionPlans->syncOrganizationCompliance($organization);
 
+        $inviteDelivery = $this->accountSetupInvites->sendStaffInvite(
+            $newUser,
+            $organization,
+            $user,
+            24,
+        );
+
         return response()->json([
             'member' => $this->serializeMembership($membership),
-            'temporaryPassword' => $tempPassword,
+            'inviteSent' => $inviteDelivery['sent'],
+            'email' => $newUser->email,
+            'message' => $inviteDelivery['sent']
+                ? 'Account created. A password setup link was sent to '.$newUser->email.'.'
+                : ($inviteDelivery['errorMessage'] ?? 'Account created, but the setup email could not be sent.'),
+            'invite' => $inviteDelivery,
         ], Response::HTTP_CREATED);
+    }
+
+    public function resendMemberSetupLink(Request $request, OrganizationMembership $membership)
+    {
+        /** @var User $user */
+        $user = $request->user();
+        $actorMembership = $user->primaryOrganizationMembership();
+
+        if (! $actorMembership || ! $actorMembership->organization) {
+            return response()->json(['message' => 'No active organization context found.'], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        if (! $this->canManageOrganizationAccess($actorMembership)) {
+            return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
+        }
+
+        if ((int) $membership->organization_id !== (int) $actorMembership->organization_id) {
+            return response()->json(['message' => 'Member not found for this organization.'], Response::HTTP_NOT_FOUND);
+        }
+
+        $targetUser = $membership->user;
+        if (! $targetUser) {
+            return response()->json([
+                'message' => 'This member account is missing its login record.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        if (! $targetUser->must_change_password) {
+            return response()->json([
+                'message' => 'This member already finished account setup.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $inviteDelivery = $this->accountSetupInvites->sendStaffInvite(
+            $targetUser,
+            $actorMembership->organization,
+            $user,
+            24,
+            true,
+        );
+
+        return response()->json([
+            'message' => $inviteDelivery['sent']
+                ? 'A fresh setup link was sent to the member email.'
+                : ($inviteDelivery['errorMessage'] ?? 'The setup link was generated, but the email could not be delivered.'),
+            'inviteSent' => $inviteDelivery['sent'],
+            'email' => $targetUser->email,
+            'invite' => $inviteDelivery,
+        ]);
     }
 
     private function canManageOrganizationAccess(OrganizationMembership $membership): bool
@@ -316,11 +379,6 @@ class OrganizationAccessController extends Controller
             'companyName' => $organization->name,
             'contactPersonTitle' => $title,
         ];
-    }
-
-    private function generateTemporaryPassword(): string
-    {
-        return 'Temp@'.strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
     }
 
     private function wouldExceedAccountLimit(Organization $organization): bool

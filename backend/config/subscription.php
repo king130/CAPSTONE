@@ -4,7 +4,7 @@ return [
     /*
     | Trial length for every newly created organization (Asia/Manila calendar days).
     */
-    'trial_days' => (int) env('SUBSCRIPTION_TRIAL_DAYS', 14),
+    'trial_days' => (int) env('SUBSCRIPTION_TRIAL_DAYS', 30),
 
     /*
     | Grace after trial/paid period ends — full access + urgent banner.

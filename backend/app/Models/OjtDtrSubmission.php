@@ -67,6 +67,17 @@ class OjtDtrSubmission extends Model
         return $this->belongsTo(User::class, 'company_reviewed_by_user_id');
     }
 
+    public function isPending(): bool
+    {
+        return in_array($this->status, [
+            self::STATUS_DRAFT,
+            self::STATUS_SUBMITTED,
+            self::STATUS_PENDING_COMPANY,
+            self::STATUS_PENDING_COORDINATOR,
+            'pending',
+        ], true);
+    }
+
     public static function openStatuses(): array
     {
         return [

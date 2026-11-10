@@ -18,6 +18,7 @@ class DatabaseSeeder extends Seeder
         $seeders = [
             RbacSeeder::class,
             ContractTypeSeeder::class,
+            SkillCatalogSeeder::class,
         ];
 
         // Demo accounts (including Municipal Hall demo) are local/testing only.

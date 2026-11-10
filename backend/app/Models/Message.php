@@ -11,7 +11,18 @@ class Message extends Model
         'conversation_id',
         'sender_id',
         'body',
+        'attachment_path',
+        'attachment_name',
+        'attachment_mime',
+        'attachment_size',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'attachment_size' => 'integer',
+        ];
+    }
 
     public function conversation(): BelongsTo
     {
@@ -21,5 +32,10 @@ class Message extends Model
     public function sender(): BelongsTo
     {
         return $this->belongsTo(User::class, 'sender_id');
+    }
+
+    public function hasAttachment(): bool
+    {
+        return filled($this->attachment_path);
     }
 }

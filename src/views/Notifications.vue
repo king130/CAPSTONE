@@ -125,10 +125,11 @@ onMounted(() => {
             </Badge>
             <Button
               variant="outline"
+              class="min-h-11 whitespace-nowrap"
               :disabled="!notificationStore.unreadCount"
               @click="handleMarkAllRead"
             >
-              Mark All as Read
+              Mark all read
             </Button>
           </div>
         </CardHeader>

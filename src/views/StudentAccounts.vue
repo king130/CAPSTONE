@@ -8,6 +8,7 @@ import {
   Download,
   IdCard,
   LoaderCircle,
+  Copy,
   Mail,
   Sparkles,
   Search,
@@ -619,6 +620,16 @@ async function runBulkImport(close: () => void) {
   importing.value = false
 }
 
+function toTitleCaseName(value: string | null | undefined): string {
+  const raw = String(value || '').trim()
+  if (!raw) return 'Not set'
+  return raw
+    .toLowerCase()
+    .split(/\s+/)
+    .map((part) => (part ? part[0]!.toUpperCase() + part.slice(1) : part))
+    .join(' ')
+}
+
 async function resendSetupLink(student: SchoolStudentRow) {
   try {
     const invite = await resendSchoolStudentSetupLink(student.id)
@@ -633,6 +644,27 @@ async function resendSetupLink(student: SchoolStudentRow) {
   } catch (caughtError) {
     error(caughtError, {
       fallback: 'Could not resend the setup link.',
+    })
+  }
+}
+
+async function copySetupLink(student: SchoolStudentRow) {
+  try {
+    const invite = await resendSchoolStudentSetupLink(student.id)
+    await authStore.refreshUser()
+    if (!invite.setupUrl) {
+      error('Setup link was not returned by the server. Use Resend Link to email it instead.')
+      return
+    }
+    await navigator.clipboard.writeText(invite.setupUrl)
+    success('Setup link copied.', {
+      description: invite.sent
+        ? 'Copied to clipboard. A fresh setup email was also sent.'
+        : 'Copied to clipboard. Email delivery failed, but the link is ready to share.',
+    })
+  } catch (caughtError) {
+    error(caughtError, {
+      fallback: 'Could not copy the setup link.',
     })
   }
 }
@@ -799,7 +831,7 @@ onUnmounted(() => {
                 <TableRow v-for="student in filteredStudents" :key="student.id">
                   <TableCell class="font-mono text-xs font-semibold text-foreground">{{ student.internCode || 'Pending' }}</TableCell>
                   <TableCell class="font-medium">{{ student.email }}</TableCell>
-                  <TableCell>{{ student.studentName || 'Not set' }}</TableCell>
+                  <TableCell>{{ toTitleCaseName(student.studentName) }}</TableCell>
                   <TableCell>
                     <span v-if="student.studentNumber">{{ student.studentNumber }}</span>
                     <Badge v-else variant="warning">Needs student number</Badge>
@@ -825,6 +857,15 @@ onUnmounted(() => {
                         <Mail class="h-4 w-4" />
                         Resend Link
                       </Button>
+                      <Button
+                        v-if="normalizeStatus(student.status) === 'pending'"
+                        variant="outline"
+                        size="sm"
+                        @click="copySetupLink(student)"
+                      >
+                        <Copy class="h-4 w-4" />
+                        Copy setup link
+                      </Button>
                       <Button variant="ghost" size="sm" class="text-red-600 hover:text-red-600" @click="deleteTarget = student">
                         <Trash2 class="h-4 w-4" />
                         Remove
@@ -846,14 +887,15 @@ onUnmounted(() => {
 
     <Dialog v-model:open="createDialogOpen">
       <template #default="{ close }">
-        <DialogHeader>
+        <div class="flex max-h-[min(90vh,44rem)] flex-col">
+        <DialogHeader class="shrink-0">
           <DialogTitle>Create Student Account</DialogTitle>
           <p class="text-sm text-muted-foreground">
             Create a student account using your school email domain. The student will receive a setup link to create their own password.
           </p>
         </DialogHeader>
-        <div class="mt-6 space-y-5">
-          <div class="rounded-2xl border border-border bg-gradient-to-r from-accent via-card to-emerald-50/60 px-4 py-4">
+        <div class="mt-6 min-h-0 flex-1 space-y-5 overflow-y-auto pr-1">
+          <div class="rounded-2xl border border-border bg-card px-4 py-4">
             <div class="flex items-start gap-3">
               <div class="rounded-2xl bg-accent p-3 text-primary">
                 <Sparkles class="h-5 w-5" />
@@ -871,13 +913,13 @@ onUnmounted(() => {
           <FormItem class="rounded-2xl border border-border bg-card/80 p-4 shadow-sm">
             <FormLabel class="text-foreground">First Name</FormLabel>
             <FormControl>
-              <Input v-model="studentForm.firstName" type="text" placeholder="Juan" class="mt-1 border-border bg-muted/80" />
+              <Input v-model="studentForm.firstName" type="text" placeholder="Juan" class="mt-1 border-border bg-muted/80 placeholder:text-muted-foreground/40" />
             </FormControl>
           </FormItem>
           <FormItem class="rounded-2xl border border-border bg-card/80 p-4 shadow-sm">
             <FormLabel class="text-foreground">Last Name</FormLabel>
             <FormControl>
-              <Input v-model="studentForm.lastName" placeholder="Dela Cruz" class="mt-1 border-border bg-muted/80" />
+              <Input v-model="studentForm.lastName" placeholder="Dela Cruz" class="mt-1 border-border bg-muted/80 placeholder:text-muted-foreground/40" />
             </FormControl>
           </FormItem>
           <FormItem class="rounded-2xl border border-border bg-card/80 p-4 shadow-sm">
@@ -932,7 +974,7 @@ onUnmounted(() => {
                 <Input
                   v-model="studentForm.studentNumber"
                   placeholder="2024-0001"
-                  class="border-border bg-muted/80 pl-10"
+                  class="border-border bg-muted/80 pl-10 placeholder:text-muted-foreground/40"
                   :aria-invalid="Boolean(studentNumberFieldError)"
                   @update:model-value="studentNumberFieldError = ''"
                 />
@@ -1045,7 +1087,7 @@ onUnmounted(() => {
           </div>
           </div>
         </div>
-        <div class="mt-6 flex justify-end gap-3">
+        <div class="mt-4 flex shrink-0 justify-end gap-3 border-t border-border bg-card pt-4">
           <Button variant="outline" @click="close">Cancel</Button>
           <Button
             :disabled="saving || !studentForm.firstName.trim() || !studentForm.lastName.trim() || !generatedEmail || !studentForm.course || !studentForm.yearLevel || !normalizeStudentNumber(studentForm.studentNumber)"
@@ -1054,6 +1096,7 @@ onUnmounted(() => {
             <LoaderCircle v-if="saving" class="h-4 w-4 animate-spin" />
             <span>{{ saving ? 'Creating...' : 'Create Account' }}</span>
           </Button>
+        </div>
         </div>
       </template>
     </Dialog>

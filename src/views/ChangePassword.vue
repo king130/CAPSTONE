@@ -5,6 +5,7 @@ import { RouterLink } from 'vue-router'
 import Swal from '@/services/swal'
 import { useAuthStore } from '@/stores/auth'
 import { updateCurrentUserPassword } from '@/services/auth'
+import PasswordInput from '@/components/ui/password-input/PasswordInput.vue'
 import { isChangePasswordFormValid, passwordPolicyError } from '@/utils/passwordPolicy'
 
 const router = useRouter()
@@ -12,8 +13,6 @@ const authStore = useAuthStore()
 
 const newPassword = ref('')
 const confirmPassword = ref('')
-const showNewPassword = ref(false)
-const showConfirmPassword = ref(false)
 const saving = ref(false)
 
 const passwordMismatch = computed(() => {
@@ -97,32 +96,24 @@ async function onSubmit() {
       <form class="form" @submit.prevent="onSubmit">
         <label class="field">
           <span>New Password</span>
-          <div class="password-field">
-            <input
-              v-model="newPassword"
-              :type="showNewPassword ? 'text' : 'password'"
-              placeholder="Enter new password"
-              required
-            />
-            <button type="button" class="toggle-password" @click="showNewPassword = !showNewPassword">
-              {{ showNewPassword ? 'Hide' : 'Show' }}
-            </button>
-          </div>
+          <PasswordInput
+            v-model="newPassword"
+            placeholder="Enter new password"
+            autocomplete="new-password"
+            required
+            minlength="8"
+          />
         </label>
 
         <label class="field">
           <span>Confirm New Password</span>
-          <div class="password-field">
-            <input
-              v-model="confirmPassword"
-              :type="showConfirmPassword ? 'text' : 'password'"
-              placeholder="Confirm new password"
-              required
-            />
-            <button type="button" class="toggle-password" @click="showConfirmPassword = !showConfirmPassword">
-              {{ showConfirmPassword ? 'Hide' : 'Show' }}
-            </button>
-          </div>
+          <PasswordInput
+            v-model="confirmPassword"
+            placeholder="Confirm new password"
+            autocomplete="new-password"
+            required
+            minlength="8"
+          />
         </label>
 
         <small v-if="passwordError" class="error-text">

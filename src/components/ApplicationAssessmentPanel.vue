@@ -9,6 +9,7 @@ import Select from '@/components/ui/select/Select.vue'
 import { useToast } from '@/composables/useToast'
 import { createAssessment, listAssessments, type AssessmentRecord } from '@/services/assessments'
 import { hasPermission } from '@/services/permissions'
+import { statusLabel } from '@/utils/statusLabels'
 
 const props = defineProps<{
   applicationId: string
@@ -90,7 +91,7 @@ watch(() => props.applicationId, load)
     <div v-if="assessments.length" class="space-y-2">
       <div v-for="item in assessments" :key="item.id" class="rounded-xl bg-muted p-3">
         <div class="flex flex-wrap items-center gap-2">
-          <Badge variant="outline">{{ item.stage }}</Badge>
+          <Badge variant="outline">{{ statusLabel(item.stage) }}</Badge>
           <span class="text-sm font-medium text-foreground">
             Score: {{ item.overallScore ?? '—' }}
           </span>

@@ -7,17 +7,17 @@ use App\Services\SubscriptionAccessService;
 use Illuminate\Console\Command;
 
 /**
- * Local/testing only — put an organization into Trial, Grace, or Expired for demos.
+ * Local/testing only — put an organization into free, past_due, expired, or active for demos.
  */
 class SetOrganizationSubscriptionDemoStatus extends Command
 {
     protected $signature = 'subscription:demo-status
         {organization : Organization id}
-        {status : trial|grace|expired|active}
-        {--days=14 : Days for trial extension or paid period}
+        {status : free|trial|past_due|grace|expired|active}
+        {--days=14 : Days for paid period}
         {--reason=Local demo status change : Audit reason}';
 
-    protected $description = 'Local/testing only: set an organization subscription into trial, grace, expired, or active for demos.';
+    protected $description = 'Local/testing only: set an organization subscription into free, past_due, expired, or active for demos.';
 
     public function handle(SubscriptionAccessService $access): int
     {
@@ -42,23 +42,28 @@ class SetOrganizationSubscriptionDemoStatus extends Command
         }
 
         $status = strtolower((string) $this->argument('status'));
+        // Aliases for older demos / docs.
+        $status = match ($status) {
+            'grace' => 'past_due',
+            'free' => 'trial',
+            default => $status,
+        };
         $days = max(1, (int) $this->option('days'));
         $reason = (string) $this->option('reason');
         $admin = \App\Models\User::query()->where('role', 'admin')->orderBy('id')->first();
 
-        match ($status) {
-            'trial' => $access->startTrial($subscription, $organization, $admin),
-            'grace' => $access->forceGrace($subscription, $organization, $admin, $reason),
-            'expired' => $access->forceExpired($subscription, $organization, $admin, $reason),
-            'active' => $access->activatePaid($subscription, 'standard', $organization, $admin, 'monthly', $access->now()->copy()->addDays($days), $reason),
-            default => null,
-        };
-
-        if (! in_array($status, ['trial', 'grace', 'expired', 'active'], true)) {
-            $this->error('Status must be one of: trial, grace, expired, active.');
+        if (! in_array($status, ['trial', 'past_due', 'expired', 'active'], true)) {
+            $this->error('Status must be one of: trial, past_due, expired, active (aliases: free→trial, grace→past_due).');
 
             return self::FAILURE;
         }
+
+        match ($status) {
+            'trial' => $access->startTrial($subscription, $organization, $admin),
+            'past_due' => $access->forceGrace($subscription, $organization, $admin, $reason),
+            'expired' => $access->forceExpired($subscription, $organization, $admin, $reason),
+            'active' => $access->activatePaid($subscription, 'standard', $organization, $admin, 'monthly', $access->now()->copy()->addDays($days), $reason),
+        };
 
         $state = $access->resolve($organization->fresh('subscription'));
         $this->info(sprintf(

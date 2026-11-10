@@ -70,8 +70,20 @@ export async function createOrganizationMember(payload: {
   email: string
   roleId: string
   title?: string | null
-}): Promise<{ member: OrganizationAccessMember; temporaryPassword: string }> {
-  return apiFetch<{ member: OrganizationAccessMember; temporaryPassword: string }>('/organization/access/members', {
+}): Promise<{
+  member: OrganizationAccessMember
+  inviteSent: boolean
+  email: string
+  message?: string
+  invite?: { sent: boolean; expiresAt?: string; errorMessage?: string }
+}> {
+  return apiFetch<{
+    member: OrganizationAccessMember
+    inviteSent: boolean
+    email: string
+    message?: string
+    invite?: { sent: boolean; expiresAt?: string; errorMessage?: string }
+  }>('/organization/access/members', {
     method: 'POST',
     body: JSON.stringify({
       name: payload.name,
@@ -79,5 +91,18 @@ export async function createOrganizationMember(payload: {
       roleId: Number(payload.roleId),
       title: payload.title,
     }),
+  })
+}
+
+export async function resendOrganizationMemberSetupLink(
+  membershipId: string,
+): Promise<{ inviteSent: boolean; email?: string; message?: string; invite?: { sent: boolean; errorMessage?: string } }> {
+  return apiFetch<{
+    inviteSent: boolean
+    email?: string
+    message?: string
+    invite?: { sent: boolean; errorMessage?: string }
+  }>(`/organization/access/members/${membershipId}/resend-setup-link`, {
+    method: 'POST',
   })
 }

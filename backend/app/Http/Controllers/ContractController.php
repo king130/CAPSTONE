@@ -291,6 +291,8 @@ class ContractController extends Controller
             'attachments.*.name' => ['required_with:attachments', 'string', 'max:255'],
             'attachments.*.size' => ['nullable', 'integer', 'min:0'],
             'attachments.*.type' => ['nullable', 'string', 'max:255'],
+            'files' => ['sometimes', 'array'],
+            'files.*' => ['file', 'max:10240', 'mimes:pdf,doc,docx,xls,xlsx,jpg,jpeg,png'],
         ]);
 
         $fieldMap = [
@@ -332,11 +334,33 @@ class ContractController extends Controller
             $updates[$column] = $newValue;
         }
 
+        $wasActive = $contract->status === 'active';
+
+        $uploadedFiles = $request->file('files', []);
+        if (! is_array($uploadedFiles)) {
+            $uploadedFiles = $uploadedFiles ? [$uploadedFiles] : [];
+        }
+        $uploadedFiles = array_values(array_filter($uploadedFiles));
+
+        if ($uploadedFiles !== []) {
+            $mergedAttachments = $this->contractRequestService->storeAttachments(
+                $contract,
+                $uploadedFiles,
+                $contract->attachments
+            );
+            $oldAttachments = $contract->attachments;
+            if ($mergedAttachments !== $oldAttachments) {
+                $changes['attachments'] = [
+                    'from' => $oldAttachments,
+                    'to' => $mergedAttachments,
+                ];
+                $updates['attachments'] = $mergedAttachments;
+            }
+        }
+
         if ($changes === []) {
             return response()->json(['message' => 'No changes were provided.'], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
-
-        $wasActive = $contract->status === 'active';
 
         $metadata = $contract->metadata ?? [];
         $amendments = $metadata['amendments'] ?? [];
@@ -349,7 +373,13 @@ class ContractController extends Controller
         $metadata['amendments'] = $amendments;
         $updates['metadata'] = $metadata;
 
-        if ($wasActive) {
+        // Amender becomes the requester so the partner can accept/review the change.
+        if ($appRole === 'school' || $appRole === 'company') {
+            $updates['requested_by_role'] = $appRole;
+            $updates['requested_by_user_id'] = $user->id;
+        }
+
+        if ($wasActive || $contract->status === 'pending') {
             $updates['status'] = 'pending_amendment';
         }
 

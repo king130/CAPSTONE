@@ -148,8 +148,8 @@ class MunicipalHallAuditTest extends TestCase
         // Municipal Hall own approval then company still cannot touch.
         Sanctum::actingAs($lifecycle['hostUser']);
         $this->postJson('/api/ojt-dtrs/'.$dtrId.'/approve')->assertOk();
-        $this->assertSame('submitted', OjtDtrSubmission::query()->find($dtrId)?->status);
-        $this->assertSame('school', OjtDtrSubmission::query()->find($dtrId)?->review_stage);
+        $this->assertSame('approved', OjtDtrSubmission::query()->find($dtrId)?->status);
+        $this->assertNull(OjtDtrSubmission::query()->find($dtrId)?->review_stage);
 
         Sanctum::actingAs($company['user']);
         $this->postJson('/api/ojt-dtrs/'.$dtrId.'/reject', [
@@ -181,7 +181,7 @@ class MunicipalHallAuditTest extends TestCase
             'revision_required' => true,
         ]);
         $reject->assertOk();
-        $this->assertSame('revision_required', OjtDtrSubmission::query()->find($dtrId)?->status);
+        $this->assertSame('rejected', OjtDtrSubmission::query()->find($dtrId)?->status);
         $this->assertSame(
             'Missing supervisor signature',
             OjtDtrSubmission::query()->find($dtrId)?->company_rejection_reason
@@ -198,18 +198,16 @@ class MunicipalHallAuditTest extends TestCase
         ], ['Accept' => 'application/json']);
         $resubmit->assertCreated();
         $newId = (int) $resubmit->json('data.id');
-        // Host-submitted resubmit skips to coordinator stage.
-        $this->assertSame('submitted', OjtDtrSubmission::query()->find($newId)?->status);
-        $this->assertSame('school', OjtDtrSubmission::query()->find($newId)?->review_stage);
+        $this->assertSame('approved', OjtDtrSubmission::query()->find($newId)?->status);
+        $this->assertNull(OjtDtrSubmission::query()->find($newId)?->review_stage);
 
         Sanctum::actingAs($lifecycle['schoolUser']);
-        $this->postJson('/api/ojt-dtrs/'.$newId.'/approve')->assertOk();
+        $this->postJson('/api/ojt-dtrs/'.$newId.'/approve')->assertStatus(422);
         $row = OjtDtrSubmission::query()->find($newId);
         $this->assertSame('approved', $row?->status);
         $this->assertSame(8.0, (float) $row?->submitted_hours);
 
-        // Prior revision row stays non-approved; hours counted once.
-        $this->assertSame('revision_required', OjtDtrSubmission::query()->find($dtrId)?->status);
+        $this->assertSame('rejected', OjtDtrSubmission::query()->find($dtrId)?->status);
         $this->assertSame(1, OjtDtrSubmission::query()->where('status', 'approved')->count());
         $this->assertEquals(
             8.0,

@@ -2,8 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Application;
 use App\Models\Company;
-use App\Models\Contract;
 use App\Models\Internship;
 use App\Models\OrganizationMedia;
 use App\Models\SavedInternship;
@@ -12,6 +12,7 @@ use App\Models\Student;
 use App\Services\InternshipEligibilityService;
 use App\Services\PermissionGate;
 use App\Services\PlacementScheduleService;
+use App\Services\SkillCatalogService;
 use App\Services\SubscriptionPlanService;
 use App\Support\InternshipDocumentRequirements;
 use App\Support\ProfileAvatar;
@@ -27,6 +28,7 @@ class InternshipController extends Controller
         private readonly SubscriptionPlanService $subscriptionPlans,
         private readonly InternshipEligibilityService $internshipEligibility,
         private readonly PlacementScheduleService $placementSchedules,
+        private readonly SkillCatalogService $skillCatalog,
     ) {
     }
 
@@ -44,6 +46,7 @@ class InternshipController extends Controller
             'school.user:id,profile,updated_at',
             'school.organization:id,name,type,is_active,tagline,description,address,city,website,industry,perks',
             'school.organization.media',
+            'catalogSkills',
         ];
     }
 
@@ -55,8 +58,17 @@ class InternshipController extends Controller
                 'applications as accepted_applications_count' => fn (Builder $builder) => $builder->where('status', 'accepted'),
             ]);
 
+        // Drafts are owner-only. Everyone else never sees them in listings.
+        $this->constrainDraftVisibility($query, $request);
+
         if ($request->filled('status')) {
-            $query->where('status', $request->string('status'));
+            $requestedStatus = strtolower(trim((string) $request->string('status')));
+            if ($requestedStatus === 'draft') {
+                $this->constrainToOwnedInternships($query, $request);
+                $query->where('status', 'draft');
+            } else {
+                $query->where('status', $requestedStatus);
+            }
         }
 
         if ($request->filled('company_id')) {
@@ -83,6 +95,35 @@ class InternshipController extends Controller
 
         if ($request->filled('host_type')) {
             $query->where('host_type', $request->string('host_type'));
+        }
+
+        // Authenticated students only see partnered hosts / own-school postings.
+        $user = $request->user();
+        if ($user?->effectiveAppRole() === 'student') {
+            if (! $user->student) {
+                return response()->json([
+                    'data' => [],
+                    'meta' => [
+                        'current_page' => 1,
+                        'per_page' => (int) $request->input('per_page', 15),
+                        'total' => 0,
+                        'last_page' => 1,
+                    ],
+                ]);
+            }
+
+            $constrained = $this->internshipEligibility->applyEligibleListingConstraints($query, $user->student);
+            if ($constrained === null) {
+                return response()->json([
+                    'data' => [],
+                    'meta' => [
+                        'current_page' => 1,
+                        'per_page' => (int) $request->input('per_page', 15),
+                        'total' => 0,
+                        'last_page' => 1,
+                    ],
+                ]);
+            }
         }
 
         $this->applyCatalogFilters($query, $request);
@@ -172,8 +213,19 @@ class InternshipController extends Controller
             return response()->json(['message' => 'Missing permission to manage internships.'], Response::HTTP_FORBIDDEN);
         }
 
+        $incomingStatus = strtolower(trim((string) $request->input('status', 'active')));
+        if (! in_array($incomingStatus, ['active', 'draft', 'closed', 'filled'], true)) {
+            $incomingStatus = 'active';
+        }
+
         $organization = $user->activeOrganization();
-        if ($appRole === 'company' && $organization && $this->subscriptionPlans->wouldExceedAfterIncrement($organization, 'company.internships')) {
+        // Drafts do not consume published internship quota until they are published.
+        if (
+            $incomingStatus !== 'draft'
+            && $appRole === 'company'
+            && $organization
+            && $this->subscriptionPlans->wouldExceedAfterIncrement($organization, 'company.internships')
+        ) {
             $overage = $this->subscriptionPlans->getOverageForResource($organization, 'company.internships') ?? [
                 'key' => 'company.internships',
                 'message' => 'Your organization has reached the internship posting limit for the current subscription plan.',
@@ -186,7 +238,7 @@ class InternshipController extends Controller
         }
 
         $data = $request->validate([
-            'title' => ['required', 'string', 'max:255'],
+            'title' => [$incomingStatus === 'draft' ? 'nullable' : 'required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
             'location' => ['nullable', 'string', 'max:255'],
             'city' => ['nullable', 'string', 'max:255'],
@@ -196,7 +248,7 @@ class InternshipController extends Controller
             'duration' => ['nullable', 'string', 'max:255'],
             'host_required_hours' => ['nullable', 'integer', 'min:1', 'max:10000'],
             'slots_available' => ['nullable', 'integer', 'min:1'],
-            'status' => ['nullable', 'in:active,draft,closed'],
+            'status' => ['nullable', 'in:active,draft,closed,filled'],
             'requirements' => ['nullable', 'array'],
             'eligible_courses' => ['nullable', 'array'],
             'allowance' => ['nullable', 'string', 'max:255'],
@@ -224,13 +276,30 @@ class InternshipController extends Controller
             'requires_resume' => ['sometimes', 'boolean'],
             'application_instructions' => ['nullable', 'string'],
             'contact_info' => ['nullable', 'string', 'max:500'],
+            'skills' => ['nullable', 'array', 'max:10'],
+            'skills.*.id' => ['required_with:skills'],
+            'skills.*.importance' => ['nullable', 'in:required,nice_to_have'],
         ]);
 
         // Phase E: only Endorsement may be required; resume is never a posting requirement.
         $requiredDocuments = InternshipDocumentRequirements::normalizeForStorage($data['required_documents'] ?? null);
 
+        if ($incomingStatus === 'active') {
+            $publishErrors = $this->publishValidationErrors($data);
+            if ($publishErrors !== []) {
+                return response()->json([
+                    'message' => 'Complete the required fields before publishing.',
+                    'errors' => $publishErrors,
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+        }
+
         $scheduleFields = $this->extractScheduleFields($data);
         $workSetup = $this->normalizeWorkSetup($data['work_setup'] ?? $data['type'] ?? null);
+        $title = trim((string) ($data['title'] ?? ''));
+        if ($title === '') {
+            $title = 'Untitled draft';
+        }
 
         $internship = Internship::query()->create([
             'company_id' => $appRole === 'company' ? $company->id : null,
@@ -239,7 +308,7 @@ class InternshipController extends Controller
             'industry' => $data['industry'] ?? null,
             'host_type' => $appRole,
             'host_name' => $appRole === 'school' ? $school->institution_name : $company->company_name,
-            'title' => $data['title'],
+            'title' => $title,
             'description' => $data['description'] ?? null,
             'location' => $data['location'] ?? null,
             'city' => $data['city'] ?? $this->extractCityFromLocation($data['location'] ?? null),
@@ -248,7 +317,7 @@ class InternshipController extends Controller
             'duration' => $data['duration'] ?? null,
             'host_required_hours' => $data['host_required_hours'] ?? null,
             'slots_available' => $data['slots_available'] ?? 1,
-            'status' => $data['status'] ?? 'active',
+            'status' => $incomingStatus,
             'requirements' => $data['requirements'] ?? null,
             'eligible_courses' => $data['eligible_courses'] ?? null,
             'allowance' => blank($data['allowance'] ?? null) ? null : $data['allowance'],
@@ -275,6 +344,10 @@ class InternshipController extends Controller
             'approval_status' => 'approved',
         ]);
 
+        if (array_key_exists('skills', $data)) {
+            $this->skillCatalog->syncInternshipSkills($internship, $data['skills'] ?? [], $request->user());
+        }
+
         $internship->load($this->internshipRelations());
         if ($organization) {
             $this->subscriptionPlans->syncOrganizationCompliance($organization);
@@ -285,6 +358,39 @@ class InternshipController extends Controller
 
     public function show(Request $request, Internship $internship)
     {
+        if (strtolower(trim((string) $internship->status)) === 'draft' && ! $this->viewerOwnsInternship($request, $internship)) {
+            // Hide existence of drafts from non-owners.
+            return response()->json(['message' => 'Not found.'], Response::HTTP_NOT_FOUND);
+        }
+
+        $user = $request->user();
+        if ($user?->effectiveAppRole() === 'student') {
+            if (! $user->student) {
+                return response()->json([
+                    'message' => 'Your student account is not linked to a school, so this internship is unavailable.',
+                    'code' => 'student_school_required',
+                ], Response::HTTP_FORBIDDEN);
+            }
+
+            // Students may always view postings they already applied to (covers, tracker, detail),
+            // even if the school–company agreement later ends. Discovery/apply stay eligibility-gated.
+            $alreadyApplied = Application::query()
+                ->where('student_id', $user->student->id)
+                ->where('internship_id', $internship->id)
+                ->exists();
+
+            if (! $alreadyApplied) {
+                $internship->loadMissing('company');
+                $eligibility = $this->internshipEligibility->evaluate($user->student, $internship);
+                if (! $eligibility['allowed']) {
+                    return response()->json([
+                        'message' => $eligibility['message'],
+                        'code' => $eligibility['code'],
+                    ], Response::HTTP_FORBIDDEN);
+                }
+            }
+        }
+
         $internship->load($this->internshipRelations());
         $internship->loadCount([
             'applications as accepted_applications_count' => fn (Builder $builder) => $builder->where('status', 'accepted'),
@@ -340,8 +446,29 @@ class InternshipController extends Controller
             return response()->json(['message' => 'Missing permission to manage internships.'], Response::HTTP_FORBIDDEN);
         }
 
+        $nextStatus = array_key_exists('status', $request->all())
+            ? strtolower(trim((string) $request->input('status')))
+            : strtolower(trim((string) $internship->status));
+        if (! in_array($nextStatus, ['active', 'draft', 'closed', 'filled'], true)) {
+            $nextStatus = strtolower(trim((string) $internship->status));
+        }
+
+        // Decision: never demote a published job to draft once it has applications.
+        if (
+            $nextStatus === 'draft'
+            && strtolower(trim((string) $internship->status)) !== 'draft'
+            && $internship->applications()->exists()
+        ) {
+            return response()->json([
+                'message' => 'Jobs with applications cannot be converted back to a draft.',
+                'errors' => [
+                    'status' => ['This job already has applications, so it cannot become a draft again.'],
+                ],
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
         $data = $request->validate([
-            'title' => ['sometimes', 'string', 'max:255'],
+            'title' => [$nextStatus === 'draft' ? 'nullable' : 'sometimes', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
             'location' => ['nullable', 'string', 'max:255'],
             'city' => ['nullable', 'string', 'max:255'],
@@ -351,7 +478,7 @@ class InternshipController extends Controller
             'duration' => ['nullable', 'string', 'max:255'],
             'host_required_hours' => ['nullable', 'integer', 'min:1', 'max:10000'],
             'slots_available' => ['nullable', 'integer', 'min:1'],
-            'status' => ['nullable', 'in:active,draft,closed'],
+            'status' => ['nullable', 'in:active,draft,closed,filled'],
             'requirements' => ['nullable', 'array'],
             'eligible_courses' => ['nullable', 'array'],
             'allowance' => ['nullable', 'string', 'max:255'],
@@ -379,9 +506,55 @@ class InternshipController extends Controller
             'requires_resume' => ['sometimes', 'boolean'],
             'application_instructions' => ['nullable', 'string'],
             'contact_info' => ['nullable', 'string', 'max:500'],
+            'skills' => ['nullable', 'array', 'max:10'],
+            'skills.*.id' => ['required_with:skills'],
+            'skills.*.importance' => ['nullable', 'in:required,nice_to_have'],
         ]);
 
+        if ($nextStatus === 'active') {
+            $mergedForPublish = array_merge([
+                'title' => $internship->title,
+                'location' => $internship->location,
+                'type' => $internship->type ?: $internship->work_setup,
+                'duration' => $internship->duration,
+                'slots_available' => $internship->slots_available,
+                'description' => $internship->description,
+                'eligible_courses' => $internship->eligible_courses,
+            ], $data);
+            $publishErrors = $this->publishValidationErrors($mergedForPublish);
+            if ($publishErrors !== []) {
+                return response()->json([
+                    'message' => 'Complete the required fields before publishing.',
+                    'errors' => $publishErrors,
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+        }
+
+        // Publishing a draft counts against the internship quota.
+        if (
+            $nextStatus === 'active'
+            && strtolower(trim((string) $internship->status)) === 'draft'
+            && $appRole === 'company'
+        ) {
+            $organization = $user->activeOrganization();
+            if ($organization && $this->subscriptionPlans->wouldExceedAfterIncrement($organization, 'company.internships')) {
+                $overage = $this->subscriptionPlans->getOverageForResource($organization, 'company.internships') ?? [
+                    'key' => 'company.internships',
+                    'message' => 'Your organization has reached the internship posting limit for the current subscription plan.',
+                ];
+
+                return response()->json([
+                    'message' => $overage['message'],
+                    'overage' => $overage,
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+        }
+
         $updates = array_filter($data, fn ($v) => $v !== null);
+        if (array_key_exists('title', $data)) {
+            $title = trim((string) $data['title']);
+            $updates['title'] = $title !== '' ? $title : ($nextStatus === 'draft' ? 'Untitled draft' : $internship->title);
+        }
         // Allow clearing optional host hours by sending null explicitly.
         if (array_key_exists('host_required_hours', $data)) {
             $updates['host_required_hours'] = $data['host_required_hours'];
@@ -426,6 +599,10 @@ class InternshipController extends Controller
         }
 
         $internship->update($updates);
+
+        if (array_key_exists('skills', $data)) {
+            $this->skillCatalog->syncInternshipSkills($internship, $data['skills'] ?? [], $request->user());
+        }
 
         $internship->load($this->internshipRelations());
 
@@ -541,7 +718,18 @@ class InternshipController extends Controller
             'partnered_with_my_school' => $partnered,
             'partneredWithMySchool' => $partnered,
             'tasks' => $i->tasks,
-            'requiredSkills' => $i->required_skills ?? [],
+            'requiredSkills' => $i->relationLoaded('catalogSkills') && $i->catalogSkills->isNotEmpty()
+                ? $i->catalogSkills->pluck('name')->values()->all()
+                : ($i->required_skills ?? []),
+            'skills' => $i->relationLoaded('catalogSkills')
+                ? $i->catalogSkills->map(fn ($skill) => [
+                    'id' => (string) $skill->id,
+                    'name' => $skill->name,
+                    'category' => $skill->category,
+                    'status' => $skill->status,
+                    'importance' => $skill->pivot->importance ?? 'required',
+                ])->values()->all()
+                : [],
             'internGains' => $i->intern_gains,
             // Effective checklist ignores legacy free-form required_documents (kept in DB).
             'requiredDocuments' => InternshipDocumentRequirements::effectiveRequiredDocuments(),
@@ -693,16 +881,9 @@ class InternshipController extends Controller
             ];
         }
 
-        $partnerIds = Contract::query()
-            ->where('school_user_id', $school->user_id)
-            ->where('status', 'active')
-            ->pluck('company_user_id')
-            ->filter()
-            ->values();
-
         return [
             'studentSchoolId' => (int) $school->id,
-            'partnerCompanyUserIds' => $partnerIds,
+            'partnerCompanyUserIds' => $this->internshipEligibility->activePartnerCompanyUserIds($school),
             'savedInternshipIds' => $savedInternshipIds,
         ];
     }
@@ -981,5 +1162,113 @@ class InternshipController extends Controller
             ->unique(fn (string $course) => strtolower($course))
             ->values()
             ->all();
+    }
+
+    private function viewerOwnsInternship(Request $request, Internship $internship): bool
+    {
+        $user = $request->user();
+        if (! $user) {
+            return false;
+        }
+
+        $company = $user->organizationCompany() ?? $user->company;
+        $school = $user->organizationSchool() ?? $user->school;
+        $appRole = $user->effectiveAppRole();
+
+        $ownsCompany = $appRole === 'company' && $company && (int) $internship->company_id === (int) $company->id;
+        $ownsSchool = $appRole === 'school' && $school && (int) $internship->school_id === (int) $school->id;
+
+        return ($ownsCompany || $ownsSchool) && $this->permissions->userCan($user, 'org.manage_internships');
+    }
+
+    private function constrainDraftVisibility(Builder $query, Request $request): void
+    {
+        $user = $request->user();
+        $company = $user?->organizationCompany() ?? $user?->company;
+        $school = $user?->organizationSchool() ?? $user?->school;
+        $canManage = $user && $this->permissions->userCan($user, 'org.manage_internships');
+
+        $query->where(function (Builder $builder) use ($user, $company, $school, $canManage) {
+            $builder->where('status', '!=', 'draft');
+
+            if (! $user || ! $canManage) {
+                return;
+            }
+
+            if ($company) {
+                $builder->orWhere(function (Builder $owned) use ($company) {
+                    $owned->where('status', 'draft')->where('company_id', $company->id);
+                });
+            }
+
+            if ($school) {
+                $builder->orWhere(function (Builder $owned) use ($school) {
+                    $owned->where('status', 'draft')->where('school_id', $school->id);
+                });
+            }
+        });
+    }
+
+    private function constrainToOwnedInternships(Builder $query, Request $request): void
+    {
+        $user = $request->user();
+        $company = $user?->organizationCompany() ?? $user?->company;
+        $school = $user?->organizationSchool() ?? $user?->school;
+        $canManage = $user && $this->permissions->userCan($user, 'org.manage_internships');
+
+        if (! $user || ! $canManage || (! $company && ! $school)) {
+            $query->whereRaw('1 = 0');
+
+            return;
+        }
+
+        $query->where(function (Builder $builder) use ($company, $school) {
+            if ($company) {
+                $builder->orWhere('company_id', $company->id);
+            }
+            if ($school) {
+                $builder->orWhere('school_id', $school->id);
+            }
+        });
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, array<int, string>>
+     */
+    private function publishValidationErrors(array $data): array
+    {
+        $errors = [];
+        $title = trim((string) ($data['title'] ?? ''));
+        if ($title === '' || strcasecmp($title, 'Untitled draft') === 0) {
+            $errors['title'] = ['Enter a job title before publishing.'];
+        }
+
+        $location = trim((string) ($data['location'] ?? ''));
+        if ($location === '') {
+            $errors['location'] = ['Choose a Cavite location before publishing.'];
+        }
+
+        $type = trim((string) ($data['type'] ?? $data['work_setup'] ?? ''));
+        if ($type === '') {
+            $errors['type'] = ['Choose a work setup before publishing.'];
+        }
+
+        $duration = trim((string) ($data['duration'] ?? ''));
+        if ($duration === '') {
+            $errors['duration'] = ['Enter the internship duration before publishing.'];
+        }
+
+        $slots = $data['slots_available'] ?? null;
+        if ($slots === null || (int) $slots < 1) {
+            $errors['slots_available'] = ['Enter at least one available slot before publishing.'];
+        }
+
+        $description = trim((string) ($data['description'] ?? ''));
+        if ($description === '') {
+            $errors['description'] = ['Add a short role description before publishing.'];
+        }
+
+        return $errors;
     }
 }

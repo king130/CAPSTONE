@@ -3,7 +3,10 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Swal from '@/services/swal'
 import { useAuthStore } from '@/stores/auth'
-import { completeAccountSetup, validateAccountSetupToken } from '@/services/auth'
+import { completeAccountSetup, validateAccountSetupToken, type UserRole } from '@/services/auth'
+import { medianAppUrl } from '@/utils/medianAppLink'
+import PasswordInput from '@/components/ui/password-input/PasswordInput.vue'
+import { isChangePasswordFormValid, passwordPolicyError } from '@/utils/passwordPolicy'
 
 const route = useRoute()
 const router = useRouter()
@@ -15,14 +18,54 @@ const saving = ref(false)
 const valid = ref(false)
 const inviteEmail = ref('')
 const inviteName = ref('')
+const inviteRole = ref<string | null>(null)
 const errorMessage = ref('')
 const password = ref('')
 const confirmPassword = ref('')
-const showPassword = ref(false)
-const showConfirmPassword = ref(false)
+const continueInBrowser = ref(false)
+
+/** Student invites keep the exact existing copy and /intern redirect. */
+const isStudentInvite = computed(() => {
+  const role = (inviteRole.value || 'student').toLowerCase()
+  return role === 'student'
+})
+
+function dashboardForRole(role: UserRole): string {
+  switch (role) {
+    case 'admin':
+      return '/admin/overview'
+    case 'company':
+    case 'municipal_hall':
+      return '/dashboard'
+    case 'school':
+      return '/school'
+    case 'student':
+      return '/intern'
+    default:
+      return '/guest'
+  }
+}
 
 const passwordMismatch = computed(() => !!confirmPassword.value && password.value !== confirmPassword.value)
-const isValid = computed(() => password.value.length >= 8 && password.value === confirmPassword.value)
+const passwordError = computed(() => passwordPolicyError(password.value))
+const isValid = computed(() => isChangePasswordFormValid(password.value, confirmPassword.value))
+
+const insideApp = computed(() => {
+  if (typeof window === 'undefined') return false
+  return Boolean((window as Window & { median?: unknown }).median)
+})
+
+const canOfferAppOpen = computed(() => {
+  if (typeof window === 'undefined' || insideApp.value) return false
+  return /Android|iPhone|iPad|iPod/i.test(window.navigator.userAgent)
+})
+
+const showChooser = computed(() => canOfferAppOpen.value && !continueInBrowser.value && valid.value)
+
+const appDeepLink = computed(() => {
+  if (typeof window === 'undefined') return null
+  return medianAppUrl(String(import.meta.env.VITE_MEDIAN_APP_SCHEME ?? ''), window.location.href)
+})
 
 onMounted(async () => {
   if (!token.value) {
@@ -35,6 +78,7 @@ onMounted(async () => {
     const data = await validateAccountSetupToken(token.value)
     inviteEmail.value = data.email
     inviteName.value = data.displayName
+    inviteRole.value = data.role ?? 'student'
     valid.value = true
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : 'This account setup link is invalid or expired.'
@@ -42,6 +86,16 @@ onMounted(async () => {
     loading.value = false
   }
 })
+
+function openInApp() {
+  const target = appDeepLink.value
+  if (!target) return
+  window.location.href = target
+}
+
+function stayInBrowser() {
+  continueInBrowser.value = true
+}
 
 async function onSubmit() {
   if (!isValid.value || !token.value) return
@@ -51,14 +105,23 @@ async function onSubmit() {
     const profile = await completeAccountSetup(token.value, password.value)
     authStore.setUserProfile(profile)
 
-    await Swal.fire({
-      icon: 'success',
-      title: 'Account Confirmed',
-      text: 'Your student account is ready. You can now continue to your dashboard.',
-      confirmButtonColor: '#2563eb',
-    })
-
-    router.replace('/intern')
+    if (isStudentInvite.value) {
+      await Swal.fire({
+        icon: 'success',
+        title: 'Account Confirmed',
+        text: 'Your student account is ready. You can now continue to your dashboard.',
+        confirmButtonColor: '#2563eb',
+      })
+      router.replace('/intern')
+    } else {
+      await Swal.fire({
+        icon: 'success',
+        title: 'Account Confirmed',
+        text: 'Your account is ready. You can now continue to your dashboard.',
+        confirmButtonColor: '#2563eb',
+      })
+      router.replace(dashboardForRole(profile.role))
+    }
   } catch (error) {
     await Swal.fire({
       icon: 'error',
@@ -80,7 +143,13 @@ async function onSubmit() {
       </div>
 
       <h1>Create Your Password</h1>
-      <p class="subtitle">Finish setting up your student account through the secure email link.</p>
+      <p class="subtitle">
+        {{
+          isStudentInvite
+            ? 'Finish setting up your student account through the secure email link.'
+            : 'Finish setting up your account through the secure email link.'
+        }}
+      </p>
 
       <div v-if="loading" class="notice">
         Validating your setup link...
@@ -88,51 +157,59 @@ async function onSubmit() {
 
       <div v-else-if="!valid" class="error-panel">
         <p>{{ errorMessage }}</p>
-        <p class="helper-copy">Ask your school admin to send you a new setup link.</p>
+        <p class="helper-copy">
+          {{
+            isStudentInvite
+              ? 'Ask your school admin to send you a new setup link.'
+              : 'Ask your organization admin to send you a new setup link.'
+          }}
+        </p>
       </div>
+
+      <template v-else-if="showChooser">
+        <div class="notice">
+          Account for {{ inviteName || (isStudentInvite ? 'student' : 'user') }} ({{ inviteEmail }})
+        </div>
+        <p class="chooser-copy">
+          Prefer the installed app for a smoother phone experience, or continue here in your browser.
+        </p>
+        <div class="chooser-actions">
+          <button type="button" class="primary-btn" @click="openInApp">Open in app</button>
+          <button type="button" class="secondary-btn" @click="stayInBrowser">Continue in browser</button>
+        </div>
+      </template>
 
       <template v-else>
         <div class="notice">
-          Account for {{ inviteName || 'student' }} ({{ inviteEmail }})
+          Account for {{ inviteName || (isStudentInvite ? 'student' : 'user') }} ({{ inviteEmail }})
         </div>
 
         <form class="form" @submit.prevent="onSubmit">
           <label class="field">
             <span>New Password</span>
-            <div class="password-field">
-              <input
-                v-model="password"
-                :type="showPassword ? 'text' : 'password'"
-                placeholder="Create your password"
-                required
-              />
-              <button type="button" class="toggle-password" @click="showPassword = !showPassword">
-                {{ showPassword ? 'Hide' : 'Show' }}
-              </button>
-            </div>
+            <PasswordInput
+              v-model="password"
+              autocomplete="new-password"
+              inputmode="text"
+              placeholder="Create your password"
+              required
+              minlength="8"
+            />
+            <small v-if="passwordError" class="error-text">{{ passwordError }}</small>
           </label>
 
           <label class="field">
             <span>Confirm Password</span>
-            <div class="password-field">
-              <input
-                v-model="confirmPassword"
-                :type="showConfirmPassword ? 'text' : 'password'"
-                placeholder="Confirm your password"
-                required
-              />
-              <button type="button" class="toggle-password" @click="showConfirmPassword = !showConfirmPassword">
-                {{ showConfirmPassword ? 'Hide' : 'Show' }}
-              </button>
-            </div>
+            <PasswordInput
+              v-model="confirmPassword"
+              autocomplete="new-password"
+              inputmode="text"
+              placeholder="Confirm your password"
+              required
+              minlength="8"
+            />
+            <small v-if="passwordMismatch" class="error-text">Passwords do not match.</small>
           </label>
-
-          <small v-if="password && password.length < 8" class="error-text">
-            Password must be at least 8 characters.
-          </small>
-          <small v-if="passwordMismatch" class="error-text">
-            Passwords do not match.
-          </small>
 
           <button type="submit" class="primary-btn" :disabled="!isValid || saving">
             {{ saving ? 'Finishing Setup...' : 'Confirm Account' }}
@@ -171,7 +248,39 @@ async function onSubmit() {
 }
 
 .error-text {
+  display: block;
+  margin-top: 6px;
   color: #dc2626;
-  font-size: 11px;
+  font-size: 12px;
+}
+
+.chooser-copy {
+  margin: 0 0 16px;
+  color: #475569;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.chooser-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.secondary-btn {
+  min-height: 44px;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #0f172a;
+  font-weight: 600;
+  padding: 12px 16px;
+}
+
+.primary-btn {
+  min-height: 44px;
+}
+
+.field :deep(input) {
+  font-size: 16px;
 }
 </style>

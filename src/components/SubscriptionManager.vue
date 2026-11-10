@@ -24,6 +24,7 @@ import {
   createPaymongoCheckoutSession,
   verifyPaymongoCheckoutSession,
 } from '@/services/subscriptions'
+import { billingDisplayStatus, isTrialEndedAccess } from '@/lib/subscriptionAccess'
 import { useAuthStore } from '@/stores/auth'
 
 const props = defineProps<{
@@ -74,11 +75,26 @@ const currentPlan = computed(() => plans.value.find((plan) => plan.id === curren
 const recommendedPlanId = computed(() => plans.value.find((plan) => plan.id === 'standard')?.id ?? plans.value[0]?.id ?? 'standard')
 const selectablePlans = computed(() => plans.value.filter((plan) => plan.id !== 'free' && plan.isSelectable !== false))
 
+const displayStatus = computed(() => billingDisplayStatus(subscriptionAccess.value))
+const trialEnded = computed(() => isTrialEndedAccess(subscriptionAccess.value))
+
+const planHeading = computed(() => {
+  if (!currentPlan.value) return 'Choose a plan'
+  if (displayStatus.value === 'Trial ended') {
+    return `${currentPlan.value.name} plan (trial ended)`
+  }
+  return `${currentPlan.value.name} plan`
+})
+
 const statusTone = computed(() => {
-  switch (currentSubscription.value?.status) {
-    case 'active':
+  switch (displayStatus.value) {
+    case 'Active':
+    case 'Free trial':
       return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200'
-    case 'pending':
+    case 'Pending payment':
+      return 'bg-sky-100 text-sky-800 dark:bg-sky-950/50 dark:text-sky-200'
+    case 'Trial ended':
+    case 'Payment failed':
       return 'bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200'
     default:
       return 'bg-muted text-muted-foreground'
@@ -93,12 +109,12 @@ const summaryMetrics = computed(() => {
     ? [
         { label: 'Coordinators', value: formatLimit(current.limits.school.coordinators) },
         { label: 'Students', value: formatLimit(current.limits.school.students) },
-        { label: 'Status', value: capitalize(currentSubscription.value?.status ?? 'inactive') },
+        { label: 'Status', value: displayStatus.value },
       ]
     : [
         { label: 'Team seats', value: formatLimit(current.limits.company.accounts) },
         { label: 'Internship posts', value: formatLimit(current.limits.company.internships) },
-        { label: 'Status', value: capitalize(currentSubscription.value?.status ?? 'inactive') },
+        { label: 'Status', value: displayStatus.value },
       ]
 })
 
@@ -168,6 +184,16 @@ function isCurrentPlan(plan: SubscriptionPlan): boolean {
   return currentPlanId.value === plan.id && !pendingChange.value
 }
 
+/** School is on this plan but trial ended — not locked as "Current". */
+function isTrialPlanCard(plan: SubscriptionPlan): boolean {
+  return trialEnded.value && isCurrentPlan(plan)
+}
+
+/** True current paid/active plan — disables Choose and pay. */
+function isLockedCurrentPlan(plan: SubscriptionPlan): boolean {
+  return isCurrentPlan(plan) && !trialEnded.value
+}
+
 function isPendingPlan(plan: SubscriptionPlan): boolean {
   return normalizePlanId(pendingChange.value?.targetPlan) === plan.id
 }
@@ -177,14 +203,15 @@ function isBusy(planId: string): boolean {
 }
 
 function badgeLabel(plan: SubscriptionPlan): string | null {
-  if (isCurrentPlan(plan)) return 'Current'
+  if (isTrialPlanCard(plan)) return 'Trial plan'
+  if (isLockedCurrentPlan(plan)) return 'Current'
   if (isPendingPlan(plan)) return 'Pending'
   if (plan.id === recommendedPlanId.value) return 'Recommended'
   return null
 }
 
 async function handlePlanAction(plan: SubscriptionPlan) {
-  if (!authStore.user?.uid || isCurrentPlan(plan)) return
+  if (!authStore.user?.uid || isLockedCurrentPlan(plan)) return
   if (plan.id === 'free') {
     await Swal.fire({
       icon: 'info',
@@ -369,32 +396,36 @@ async function cancelPendingCheckout() {
 
 <template>
   <div class="space-y-5">
-    <section class="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-      <div class="border-b border-border bg-muted/60 px-5 py-5 sm:px-6">
+    <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-white">
+      <div class="border-b border-slate-200 bg-slate-50/80 px-5 py-5 dark:border-slate-800 dark:bg-slate-900/80 sm:px-6">
         <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div class="flex items-start gap-3">
             <div :class="['flex h-11 w-11 items-center justify-center rounded-2xl', roleTheme.soft]">
               <component :is="roleIcon" class="h-5 w-5" />
             </div>
             <div>
-              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{{ roleLabel }} billing</p>
-              <h2 class="mt-1 text-2xl font-semibold tracking-tight text-foreground">
-                {{ currentPlan ? `${currentPlan.name} plan` : 'Choose a plan' }}
+              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">{{ roleLabel }} billing</p>
+              <h2 class="mt-1 text-2xl font-semibold tracking-tight text-slate-900 dark:text-white">
+                {{ planHeading }}
               </h2>
-              <p class="mt-1 text-sm text-muted-foreground">
+              <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
                 Manage capacity and upgrades with PayMongo checkout.
               </p>
             </div>
           </div>
           <span class="inline-flex w-fit rounded-full px-3 py-1 text-xs font-semibold" :class="statusTone">
-            {{ capitalize(currentSubscription?.status ?? 'inactive') }}
+            {{ displayStatus }}
           </span>
         </div>
 
         <div v-if="summaryMetrics.length" class="mt-5 grid gap-3 sm:grid-cols-3">
-          <div v-for="metric in summaryMetrics" :key="metric.label" class="rounded-xl border border-border bg-card px-4 py-3">
-            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{{ metric.label }}</p>
-            <p class="mt-1 text-xl font-semibold text-foreground">{{ metric.value }}</p>
+          <div
+            v-for="metric in summaryMetrics"
+            :key="metric.label"
+            class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-800/50"
+          >
+            <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ metric.label }}</p>
+            <p class="mt-1 text-xl font-semibold text-slate-900 dark:text-white">{{ metric.value }}</p>
           </div>
         </div>
       </div>
@@ -439,7 +470,10 @@ async function cancelPendingCheckout() {
         </div>
       </div>
 
-      <div class="grid gap-3 px-5 py-4 sm:grid-cols-2 sm:px-6">
+      <div
+        class="grid gap-3 px-5 py-4 sm:px-6"
+        :class="displayStatus === 'Active' ? 'sm:grid-cols-1' : 'sm:grid-cols-2'"
+      >
         <div :class="['rounded-xl border p-4', roleTheme.panel]">
           <div class="flex items-center gap-2 text-sm font-semibold text-foreground">
             <CreditCard class="h-4 w-4" />
@@ -449,12 +483,15 @@ async function cancelPendingCheckout() {
             Checkout asks PayMongo for GCash, Maya, GrabPay, ShopeePay, card, and related options. Only methods enabled on the PayMongo account appear on the payment page. QR “scan to pay” shows when wallets are not enabled there. PayPal is not supported.
           </p>
         </div>
-        <div class="rounded-xl border border-border bg-muted p-4">
-          <div class="flex items-center gap-2 text-sm font-semibold text-foreground">
+        <div
+          v-if="displayStatus !== 'Active'"
+          class="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-800/50"
+        >
+          <div class="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
             <BadgeCheck class="h-4 w-4" />
             Activation
           </div>
-          <p class="mt-2 text-sm text-muted-foreground">
+          <p class="mt-2 text-sm text-slate-600 dark:text-slate-400">
             New organizations start on a time-limited trial with Standard plan limits. Paid limits apply only after a real PayMongo payment is verified — or after a platform admin activates a plan manually.
           </p>
         </div>
@@ -462,7 +499,7 @@ async function cancelPendingCheckout() {
 
       <div
         v-if="!paymentConnected"
-        class="border-t border-border bg-muted/40 px-5 py-3 text-sm text-muted-foreground sm:px-6"
+        class="border-t border-slate-200 bg-slate-50/60 px-5 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-400 sm:px-6"
         data-testid="payment-not-connected"
       >
         Payment is not connected on this environment. Online checkout is unavailable; ask a platform admin to activate a paid plan if your trial ends.
@@ -470,24 +507,25 @@ async function cancelPendingCheckout() {
 
       <div
         v-if="subscriptionAccess"
-        class="border-t border-border px-5 py-3 text-sm sm:px-6"
+        class="border-t border-slate-200 px-5 py-3 text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300 sm:px-6"
         data-testid="subscription-access-summary"
       >
-        <span class="font-medium text-foreground">Access:</span>
-        {{ subscriptionAccess.status }}
-        <template v-if="subscriptionAccess.daysRemaining != null">
-          · {{ subscriptionAccess.daysRemaining }} day(s) remaining
-        </template>
+        <span class="font-medium text-slate-900 dark:text-white">Access:</span>
+        {{ displayStatus }}
       </div>
     </section>
 
     <div v-if="loading" class="grid gap-4 lg:grid-cols-3">
-      <Card v-for="index in 3" :key="index" class="border-border shadow-sm">
+      <Card
+        v-for="index in 3"
+        :key="index"
+        class="border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"
+      >
         <CardContent class="space-y-4 p-6">
-          <div class="h-4 w-24 animate-pulse rounded bg-muted" />
-          <div class="h-9 w-40 animate-pulse rounded bg-muted" />
-          <div class="h-3 animate-pulse rounded bg-muted" />
-          <div class="h-3 w-5/6 animate-pulse rounded bg-muted" />
+          <div class="h-4 w-24 animate-pulse rounded bg-slate-100 dark:bg-slate-800" />
+          <div class="h-9 w-40 animate-pulse rounded bg-slate-100 dark:bg-slate-800" />
+          <div class="h-3 animate-pulse rounded bg-slate-100 dark:bg-slate-800" />
+          <div class="h-3 w-5/6 animate-pulse rounded bg-slate-100 dark:bg-slate-800" />
         </CardContent>
       </Card>
     </div>
@@ -497,26 +535,26 @@ async function cancelPendingCheckout() {
         v-for="plan in selectablePlans"
         :key="plan.id"
         :class="[
-          'border-border shadow-sm',
-          isCurrentPlan(plan) ? 'ring-2 ring-emerald-300 dark:ring-emerald-700' : '',
-          isPendingPlan(plan) ? 'ring-2 ring-amber-300 dark:ring-amber-700' : '',
-          plan.id === recommendedPlanId && !isCurrentPlan(plan) && !isPendingPlan(plan) ? `ring-2 ${roleTheme.ring}` : '',
+          'border-slate-200 bg-white text-slate-900 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-white',
+          isLockedCurrentPlan(plan) ? 'ring-2 ring-emerald-300 dark:ring-emerald-700' : '',
+          isTrialPlanCard(plan) || isPendingPlan(plan) ? 'ring-2 ring-amber-300 dark:ring-amber-700' : '',
+          plan.id === recommendedPlanId && !isLockedCurrentPlan(plan) && !isTrialPlanCard(plan) && !isPendingPlan(plan) ? `ring-2 ${roleTheme.ring}` : '',
         ].filter(Boolean).join(' ')"
       >
         <CardHeader class="space-y-3 p-5">
           <div class="flex items-start justify-between gap-3">
             <div>
-              <p class="text-lg font-semibold text-foreground">{{ plan.name }}</p>
-              <p class="mt-1 text-sm text-muted-foreground">{{ plan.description }}</p>
+              <p class="text-lg font-semibold text-slate-900 dark:text-white">{{ plan.name }}</p>
+              <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">{{ plan.description }}</p>
             </div>
             <span
               v-if="badgeLabel(plan)"
               class="inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
               :class="
-                isCurrentPlan(plan)
-                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200'
-                  : isPendingPlan(plan)
-                    ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200'
+                isLockedCurrentPlan(plan)
+                  ? 'border border-amber-500/50 bg-amber-50/50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400'
+                  : isTrialPlanCard(plan) || isPendingPlan(plan)
+                    ? 'border border-amber-500/50 bg-amber-50/50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400'
                     : roleTheme.badge
               "
             >
@@ -526,36 +564,36 @@ async function cancelPendingCheckout() {
 
           <div>
             <template v-if="priceForRole(plan) === 0">
-              <p class="text-3xl font-semibold text-foreground">{{ formatPrice(0) }}</p>
+              <p class="text-3xl font-semibold text-slate-900 dark:text-white">{{ formatPrice(0) }}</p>
             </template>
             <div v-else class="flex items-end gap-2">
-              <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">PHP</span>
-              <p class="text-3xl font-semibold leading-none text-foreground">{{ formatPriceAmount(priceForRole(plan)) }}</p>
-              <span class="pb-0.5 text-sm text-muted-foreground">/mo</span>
+              <span class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">PHP</span>
+              <p class="text-3xl font-semibold leading-none text-slate-900 dark:text-white">{{ formatPriceAmount(priceForRole(plan)) }}</p>
+              <span class="pb-0.5 text-sm text-slate-500 dark:text-slate-400">/mo</span>
             </div>
           </div>
         </CardHeader>
 
         <CardContent class="space-y-4 p-5 pt-0">
-          <div class="grid grid-cols-2 gap-2 rounded-xl border border-border bg-muted p-3">
+          <div class="grid grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-800/50">
             <template v-if="props.role === 'school'">
               <div>
-                <p class="text-xs text-muted-foreground">Coordinators</p>
-                <p class="font-semibold text-foreground">{{ formatLimit(plan.limits.school.coordinators) }}</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Coordinators</p>
+                <p class="font-semibold text-slate-900 dark:text-white">{{ formatLimit(plan.limits.school.coordinators) }}</p>
               </div>
               <div>
-                <p class="text-xs text-muted-foreground">Students</p>
-                <p class="font-semibold text-foreground">{{ formatLimit(plan.limits.school.students) }}</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Students</p>
+                <p class="font-semibold text-slate-900 dark:text-white">{{ formatLimit(plan.limits.school.students) }}</p>
               </div>
             </template>
             <template v-else>
               <div>
-                <p class="text-xs text-muted-foreground">Accounts</p>
-                <p class="font-semibold text-foreground">{{ formatLimit(plan.limits.company.accounts) }}</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Accounts</p>
+                <p class="font-semibold text-slate-900 dark:text-white">{{ formatLimit(plan.limits.company.accounts) }}</p>
               </div>
               <div>
-                <p class="text-xs text-muted-foreground">Internships</p>
-                <p class="font-semibold text-foreground">{{ formatLimit(plan.limits.company.internships) }}</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Internships</p>
+                <p class="font-semibold text-slate-900 dark:text-white">{{ formatLimit(plan.limits.company.internships) }}</p>
               </div>
             </template>
           </div>
@@ -564,7 +602,7 @@ async function cancelPendingCheckout() {
             <li
               v-for="feature in compactFeatures[plan.id] ?? []"
               :key="feature"
-              class="flex items-start gap-2 text-sm text-muted-foreground"
+              class="flex items-start gap-2 text-sm text-slate-600 dark:text-slate-400"
             >
               <BadgeCheck class="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
               <span>{{ feature }}</span>
@@ -573,15 +611,15 @@ async function cancelPendingCheckout() {
 
           <Button
             class="w-full gap-2"
-            :class="isCurrentPlan(plan) ? 'bg-emerald-600 hover:bg-emerald-600' : roleTheme.button"
-            :disabled="isCurrentPlan(plan) || isBusy(plan.id) || (!!pendingChange && priceForRole(plan) !== 0)"
+            :class="isLockedCurrentPlan(plan) ? 'bg-emerald-600 hover:bg-emerald-600' : roleTheme.button"
+            :disabled="isLockedCurrentPlan(plan) || isBusy(plan.id) || (!!pendingChange && priceForRole(plan) !== 0)"
             @click="handlePlanAction(plan)"
           >
             <LoaderCircle v-if="isBusy(plan.id)" class="h-4 w-4 animate-spin" />
-            <BadgeCheck v-else-if="isCurrentPlan(plan)" class="h-4 w-4" />
+            <BadgeCheck v-else-if="isLockedCurrentPlan(plan)" class="h-4 w-4" />
             <ArrowRight v-else class="h-4 w-4" />
             {{
-              isCurrentPlan(plan)
+              isLockedCurrentPlan(plan)
                 ? 'Current plan'
                 : pendingChange && priceForRole(plan) !== 0
                   ? 'Resolve pending first'
@@ -594,16 +632,16 @@ async function cancelPendingCheckout() {
       </Card>
     </div>
 
-    <section class="rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-6">
-      <h3 class="text-base font-semibold text-foreground">How upgrades work</h3>
-      <ol class="mt-3 grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
-        <li class="rounded-xl border border-border bg-muted px-4 py-3">1. Choose a paid plan and open PayMongo checkout.</li>
-        <li class="rounded-xl border border-border bg-muted px-4 py-3">2. Complete payment in the PayMongo window.</li>
-        <li class="rounded-xl border border-border bg-muted px-4 py-3">3. Return here and verify to activate the plan.</li>
+    <section class="rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900/60 sm:p-6">
+      <h3 class="text-base font-semibold text-slate-900 dark:text-white">How upgrades work</h3>
+      <ol class="mt-3 grid gap-3 text-sm sm:grid-cols-3">
+        <li class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-700 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-300">1. Choose a paid plan and open PayMongo checkout.</li>
+        <li class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-700 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-300">2. Complete payment in the PayMongo window.</li>
+        <li class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-700 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-300">3. Return here and verify to activate the plan.</li>
       </ol>
-      <p v-if="currentSubscription?.subscriptionCode" class="mt-4 text-sm text-muted-foreground">
+      <p v-if="currentSubscription?.subscriptionCode" class="mt-4 text-sm text-slate-600 dark:text-slate-400">
         Subscription code:
-        <span class="font-medium text-foreground">{{ currentSubscription.subscriptionCode }}</span>
+        <span class="font-medium text-slate-900 dark:text-white">{{ currentSubscription.subscriptionCode }}</span>
       </p>
     </section>
   </div>

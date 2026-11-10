@@ -1,21 +1,97 @@
 ================================================================================
 CAPSTONE / OJT INTERN PATH — FULL SYSTEM BRIEF FOR AI ASSISTANTS
 ================================================================================
-Last updated: 2026-10-08
+Last updated: 2026-11-04
 Repo root: CAPSTONE (Windows paths like C:\Users\...\Codes\CAPSTONE)
+Production: https://ojtpath.online  (Hostinger; SPA + Laravel /api same-origin)
 
 PURPOSE OF THIS FILE
 --------------------
-Give another AI (or developer) enough context to understand the whole product,
-architecture, features, auth, APIs, roles, how to run it, and known conventions
-without reading the entire codebase first.
+Give another AI (Gemini, Claude, Cursor, or a developer) enough context to
+understand the whole product, architecture, features, auth, APIs, roles, how
+to run it, known conventions, recent features, Hostinger deploy, and remaining
+gaps without reading the entire codebase first.
+
+Prefer minimal diffs, match existing Tailwind/shadcn patterns, do NOT invent
+features, do NOT commit or push unless the user asks, do NOT weaken
+auth/RBAC/PayMongo. After UI/API fixes meant for production, update Hostinger
+(see Hostinger deploy below) when the user asks.
 
 PRODUCT IN ONE SENTENCE
 -----------------------
 OJT Intern Path is a multi-tenant web platform that connects schools, companies,
-and student interns for internship discovery, school endorsement, company hiring,
-school–company agreements (MOAs), OJT hour logging, assessments, KPIs, reports,
-and certificates — with subscription billing via PayMongo.
+municipal halls (LGU hosts), and student interns for internship discovery,
+school endorsement, host hiring, exclusive placement (one active accept),
+school–company agreements (MOAs), OJT hour logging / DTR, assessments, KPIs,
+reports, and certificates — with subscription billing via PayMongo.
+
+================================================================================
+0. PRODUCTION READINESS (UPDATED 2026-11-04)
+================================================================================
+
+VERDICT: Core SEO / CORS / throttle / Vue errorHandler / .env gitignore items
+from the 2026-11-03 audit are DONE on code + live ojtpath.online. Remaining
+polish is incremental (Form Requests, more field-level 422 mapping, keep
+Hostinger .env APP_DEBUG=false). Do not re-do the SEO/title/sitemap work.
+
+--- A) SEO / META — DONE ---
+  Live title: "OJT Intern Path | Student Internship & Placement Platform"
+  index.html / backend/public/index.html / hostinger-update/public: lang=en,
+  description, canonical, OG/Twitter, theme-color, apple-touch-icon, manifest
+  robots.txt has Sitemap: https://ojtpath.online/sitemap.xml
+  Real public/sitemap.xml; web.php SPA fallback EXCLUDES robots.txt, sitemap.xml,
+  manifest.webmanifest, .well-known
+  Router afterEach sets document.title from route meta / path
+
+--- B) VALIDATION / RATE LIMIT — MOSTLY DONE ---
+  OK:
+    - Login/Register: vee-validate + Zod
+    - AuthController validate; password policy shared with AccountSetup where wired
+    - throttle:login on POST /api/auth/login and register (5/min by IP|email)
+      RateLimiter in AppServiceProvider
+    - Student number required + unique per school (StudentNumber support)
+  Gaps (non-blocking):
+    - Few/no Form Request classes; inline $request->validate still dominant
+    - Prefer mapping more 422 errors onto form fields (not only toast)
+
+--- C) ENV / CORS — DONE IN CODE ---
+  OK:
+    - Production build: empty VITE_API_BASE_URL → same-origin /api
+    - Root .gitignore ignores .env / .env.*
+    - cors.php: never "*" with credentials; falls back to FRONTEND_URL
+      default https://ojtpath.online
+  Hostinger .env (do NOT overwrite from local): APP_ENV=production,
+  APP_DEBUG=false, APP_URL + FRONTEND_URL = https://ojtpath.online
+
+--- D) ERROR HANDLING UX — DONE ---
+  OK:
+    - vue-sonner + useToast
+    - app.config.errorHandler in main.ts (toast; DEV logs only)
+    - Bootstrap console noise gated behind import.meta.env.DEV
+
+HOSTINGER DEPLOY (when user says "update the hostinger")
+  Domain: ojtpath.online  username: u251228774
+  Layout: public_html = Laravel root; SPA assets under public_html/public/
+  1) npm run build-only   (prefer over npm run build if vue-tsc fails pre-existing)
+  2) npm run deploy:backend-public   (scripts/stage-frontend.ps1)
+  3) Stage PHP deltas + public/* into .tmp-deploy-ojtpath
+     (backend files map to public_html paths; assets under public/)
+  4) Hostinger MCP: hosting_files_generate-upload-url → scripts/hostinger-tus-upload.mjs
+  5) Clear caches (one-shot public/__cache_clear_once.php or artisan)
+  Do NOT upload local .env. Prefer selective PHP + full public/assets replace.
+  Fallback zip: hostinger-update/ + hostinger-update.zip
+
+RECENT PRODUCT FIXES (2026-11-04) — DO NOT RE-IMPLEMENT
+  - Progress Overview required hours = hours-agreement agreed_hours when Agreed
+    (RequiredOjtHoursAccessor); else application.required_ojt_hours snapshot
+  - Required hours refresh after school/company hours-agreement confirm
+  - Company Intern Summary uses GET /api/ojt-logs/progress (includes DTR hours)
+  - Agreement amend: partner can View changes; POST multipart for document upload
+    (routes: PATCH + POST agreements/{id}/amend; ContractRequestService::storeAttachments)
+  - Certificates eligible for accepted | placement_ended
+  - School Interns Progress keeps company/placement after placement_ended
+  - Student number required on school create; agreement request multi-step wizard;
+    school course → skill category defaults in Settings
 
 ================================================================================
 1. HIGH-LEVEL ARCHITECTURE
@@ -27,26 +103,45 @@ Monorepo-style layout:
     src/                     Vue 3 SPA (frontend)
     backend/                 Laravel 12 API + can also serve built SPA from public/
     package.json             Frontend npm scripts
-    .env                     Frontend Vite env (VITE_API_BASE_URL)
+    .env                     Frontend Vite env (VITE_API_BASE_URL) — gitignored
+    .env.production          VITE_API_BASE_URL= (empty = same-origin /api)
     scripts/stage-frontend.ps1
                            Copies dist/ → backend/public/
+    scripts/hostinger-tus-upload.mjs
+                           TUS upload of a local tree to Hostinger public_html
+    hostinger-update/        Last staged Hostinger package (+ UPLOAD_INSTRUCTIONS)
+    SYSTEM_BRIEF_FOR_AI.txt  This file
+    tmp/                     Local QA screenshots/scripts (not production)
 
 Pattern:
   - Frontend talks to Laravel REST API under /api
   - Auth = Laravel Sanctum personal access tokens (Bearer)
   - Not a classic cookie SPA session as primary auth
-  - Organizations (school | company) are tenants; users have memberships + roles
+  - Organizations (school | company | municipal_hall) are tenants;
+    users have memberships + roles
+  - Municipal Hall reuses the company host workspace/nav (role municipal_hall
+    maps to company nav shell)
 
 Typical local run (TWO processes):
   1) backend:  php artisan serve --host=127.0.0.1 --port=8000
   2) root:     npm run dev   → http://127.0.0.1:5173
-  Frontend .env: VITE_API_BASE_URL=http://127.0.0.1:8000/api
+  Frontend .env: leave VITE_API_BASE_URL empty so Vite proxies /api → :8000
+                 (avoids CORS localhost vs 127.0.0.1 mismatch)
+                 OR set VITE_API_BASE_URL=http://127.0.0.1:8000/api
   Backend .env:  APP_URL=http://127.0.0.1:8000
                  FRONTEND_URL=http://127.0.0.1:5173
                  DB_CONNECTION=sqlite (default in many local setups)
 
+Production (Hostinger / ojtpath.online):
+  - SPA + API same origin; build with empty VITE_API_BASE_URL
+  - Prefer: npm run build-only && npm run deploy:backend-public
+    then TUS upload (section 0). npm run build also runs vue-tsc; type-check
+    may fail on pre-existing unrelated errors — do not block deploy on that.
+  - FRONTEND_URL=https://ojtpath.online
+  - APP_ENV=production, APP_DEBUG=false
+
 Production-ish local (SPA served by Laravel):
-  npm run build
+  npm run build-only
   npm run deploy:backend-public   # stages dist into backend/public
   php artisan serve
   Then open http://127.0.0.1:8000 — if VITE_API_BASE_URL was empty at build time,
@@ -54,7 +149,7 @@ Production-ish local (SPA served by Laravel):
 
 Frontend checks:
   npm run type-check
-  npm run build
+  npm run build-only   /   npm run build
   npm test   (vitest; navigation permission tests live in src/layouts/navigation.test.ts)
 
 ================================================================================
@@ -69,14 +164,14 @@ FRONTEND
   - Tailwind CSS + local shadcn-like UI under src/components/ui/
   - vee-validate + zod
   - axios (apiClient) + fetch (apiFetch in http.ts)
-  - lucide-vue-next, sweetalert2, vue-sonner, xlsx
+  - lucide-vue-next, sweetalert2, vue-sonner, xlsx, leaflet (maps)
 
 BACKEND
   - PHP 8.2+
   - Laravel 12
   - Laravel Sanctum 4
   - Custom RBAC (no Spatie): Permission, Role, OrgPermissions, PermissionGate
-  - SQLite or MySQL via .env
+  - SQLite or MySQL via .env (Hostinger production typically MySQL)
 
 ================================================================================
 3. TWO ROLE LAYERS (READ THIS BEFORE CHANGING ACCESS)
@@ -86,8 +181,8 @@ There are two different "role" concepts. Most access bugs come from treating
 them as one.
 
 A) APP WORKSPACE ROLE
-  User.role / User::effectiveAppRole() is only:
-    admin | school | company | student | guest | null
+  User.role / User::effectiveAppRole() includes:
+    admin | school | company | municipal_hall | student | guest | null
   This chooses the workspace shell and the route's requiresRole.
 
   effectiveAppRole() (backend/app/Models/User.php):
@@ -96,15 +191,21 @@ A) APP WORKSPACE ROLE
     - school-org membership with no role slug, if the user has a student row → student
     - EVERY other school-org membership → school
       (School Admin, Department Head, Teacher, Registrar, custom subuser)
-    - any company-org membership → company
+    - any company-org OR municipal_hall-org membership → company / municipal_hall
+      (municipal_hall reuses company workspace)
     - otherwise users.role, with guest stored as null
 
   Post-login landing (src/router/index.ts getRoleDashboard):
-    admin   → /admin/overview
-    student → /intern   (product language: Intern; API/DB role is often "student")
-    guest   → /guest
-    school  → first school nav page the membership permissions allow, else /settings
-    company → first company nav page the membership permissions allow, else /settings
+    admin          → /admin/overview
+    student        → /intern   (product language: Intern; API/DB role often "student")
+    guest          → /guest
+    school         → first school nav page the membership permissions allow, else /settings
+    company /
+    municipal_hall → first company nav page the membership permissions allow, else /settings
+                     (navRole for municipal_hall = company)
+
+  Pending org verification (school | company | municipal_hall):
+    forced to /organization-verification until approved/verified.
 
   There is no ojt_admin slug and no "OJT Office" role. "CvSU OJT Office" is the
   display name of the primary school account (school@cvsu.edu.ph). Its membership
@@ -125,7 +226,7 @@ GLOBAL SEEDED SLUGS (RbacSeeder) vs TENANT DEFAULT SLUGS (TenantRoleService)
 
   New school tenants also get (TenantRoleService::defaultDefinitionsForType):
     school_admin, department_head, teacher, registrar, intern
-  New company tenants also get:
+  New company / municipal tenants also get:
     company_admin, manager, hr, finance
 
   The demo department head uses the GLOBAL slug school_department_head,
@@ -175,12 +276,11 @@ PERMISSION CATALOG (canonical org.* keys)
             unless asked.
 
 ================================================================================
-4. NAVIGATION AND ROUTE PERMISSIONS (UPDATED 2026-10-08)
+4. NAVIGATION AND ROUTE PERMISSIONS
 ================================================================================
 
-School and company sidebars used to be a hardcoded list for everyone with
-effectiveAppRole school or company. Limited subusers still saw and could open
-every page. That is fixed.
+School and company sidebars are permission-filtered (not a flat list for every
+user with app role school/company).
 
 Source of truth: src/layouts/navigation.ts
   visibleNavItems(), assignedPermissionAllows(), firstAllowedOrgPath(),
@@ -225,15 +325,15 @@ PAGE → ANY OF THESE ASSIGNED KEYS
       org.view_ojt_progress, org.approve_ojt_logs
   Company dashboard (/dashboard)
       internship keys or application keys
+  Company DTR (/dashboard/dtr)
+      org.approve_ojt_logs (and related dtr keys in navigation.ts)
 
 Students and platform admins can still open /ojt-hours. The permission check
 runs only when the signed-in app role is school or company.
 
 If a school/company user has no allowed nav item, landing is /settings.
 Direct navigation to a disallowed named route redirects to the first allowed
-page. Verified with depthead@cvsu.edu.ph: Student Accounts, Role Management,
-Permissions, and Subscription are hidden; /school/students and /access/roles
-return to /school. School Admin still sees the full menu.
+page.
 
 BACKEND ALIASES STILL EXIST — do not delete them unless a task says so.
 PermissionGate::ALIASES can let an API succeed when a related key is still on,
@@ -260,6 +360,7 @@ ALREADY FIXED AND SHOULD STAY FIXED
 
 Run: cd backend && php artisan db:seed --class=DemoAccountsSeeder
 (Also called from DatabaseSeeder with RbacSeeder + ContractTypeSeeder)
+Only runs when APP_ENV is local or testing.
 
   Email                      Password          What they are
   -------------------------  ----------------  --------------------------------
@@ -271,29 +372,92 @@ Run: cd backend && php artisan db:seed --class=DemoAccountsSeeder
                                                slug school_department_head.
   company@techcorp.com       Company@2026!     Company admin (TechCorp)
   student@cvsu.edu.ph        Student@2026!     Intern. Course BS Computer Science.
+  municipal@naic.gov.ph      Municipal@2026!   Municipal Hall demo host
+                                               (reuses company workspace)
 
 School subscription code for students: CVSU-2026
+
+Local placement-exclusivity QA accounts (seeded by backend/tmp_seed_placement_qa.php,
+NOT DemoAccountsSeeder):
+  placement.intern@cvsu.edu.ph
+  placement.company.a@techcorp.com / placement.company.b@techcorp.com
+  placement.muni@hall.local
+  Password: QaPass@2026!
 
 ================================================================================
 6. CORE DOMAIN FLOWS
 ================================================================================
 
-A) INTERNSHIP / APPLICATION PIPELINE (implemented order)
-  Company creates the posting in the UI (eligible courses, skills, duration
-  text). School-hosted internships exist on the API; there is no school
-  "create posting" screen.
-  Student applies → status submitted.
+A) INTERNSHIP / APPLICATION PIPELINE
+  Company (or municipal hall) creates the posting in the UI (eligible courses,
+  skills, duration text). School-hosted internships exist on the API; there is
+  no school "create posting" screen.
+  Student applies → status submitted (blocked if active placement — see 6A2).
   School endorses or school-rejects. Endorsement is required BEFORE interview
   and BEFORE company acceptance. API permission: org.approve_applications.
   Interview is optional and a separate record. The proposer cannot confirm
   their own proposal.
+  Application tracker stages (ApplicationTracker service):
+    applied → endorsed → interview_scheduled → interviewed → assessed → accepted
+    Terminal / special: rejected, withdrawn_placed_elsewhere,
+    placement_cancelled | placement_declined | placement_ended
   Company accepts or rejects only after endorsement → accepted | rejected.
   OJT logs exist only after accepted.
   Duplicate application guard and duplicate agreement guard are in place.
-  Statuses: submitted → endorsed | school_rejected → accepted | rejected.
   School.vue endorsement confirm snapshots the decision locally before await.
   AlertDialog emits action then close; reading pendingDecision after close
   used to throw "Cannot read properties of null (reading 'action')".
+
+A2) PLACEMENT EXCLUSIVITY (ONE ACTIVE ACCEPT) — ADDED 2026-11-03
+  Rule: an intern with an active placement cannot apply to or be accepted by
+  any other company or municipal hall.
+
+  Active placement =
+    application status/tracker Accepted at a company OR municipal host,
+    AND not cancelled / declined / ended / completed,
+    AND applications.active_placement_key = student_id (unique constraint).
+  An intern can have at most one active placement.
+
+  On host accept (same DB transaction via PlacementExclusivityService):
+    - lock student row (lockForUpdate) + unique active_placement_key
+    - set all other open apps to withdrawn_placed_elsewhere
+      (status + tracker_stage; withdrawal_reason "Placed elsewhere";
+       do NOT delete)
+    - cancel scheduled interviews with other hosts
+    - notify intern + each affected host
+    - concurrent second accept → ConflictHttpException / clear error
+
+  Apply endpoints (jobs + municipal programs share POST /api/applications):
+    reject with 422 code active_placement + message naming the host/role.
+  Accept of already-placed intern: blocked (conflict / validation).
+
+  UI: FindInternships / InternshipDetail / Intern apply controls show
+      "Already placed" + reason when active placement exists
+      (useActivePlacement / GET /api/student/active-placement).
+
+  Hosts and school see withdrawn applicants with label
+  "Withdrawn — placed elsewhere" (not silent disappearance).
+  School endorsements page has a "Withdrawn — placed elsewhere" section.
+
+  Closing / releasing placement:
+    POST /api/applications/{id}/placement/close  body: { reason }
+    Reasons: cancelled | declined | ended | completed
+    Who can close:
+      Host (company/municipal) + School: cancelled, ended, completed
+      Admin: all of the above
+      Intern: declined only
+    After close: active_placement_key cleared; intern may apply again.
+    Withdrawn apps STAY withdrawn (not restored).
+
+  Audit only (do not auto-fix multi-accepted legacy rows):
+    php artisan placements:audit-multi-accepted
+
+  Key files:
+    backend/app/Services/PlacementExclusivityService.php
+    backend/app/Services/ApplicationTracker.php
+    backend/database/migrations/2026_11_03_180000_add_placement_exclusivity_to_applications.php
+    src/composables/useActivePlacement.ts (or equivalent)
+    src/services/applications.ts (activePlacement / closePlacement)
 
 B) AGREEMENTS (formerly Contracts)
   School ↔ Company partnership documents / MOAs.
@@ -301,70 +465,99 @@ B) AGREEMENTS (formerly Contracts)
   User-facing term: Agreement. Routes: /agreements (alias /contracts).
   API: /api/agreements (canonical) and /api/contracts (legacy aliases).
   DB: migration may rename contracts → agreements; models dual-table aware.
-  Amendment: PATCH .../amend → status pending_amendment; both sides re-approve.
+  New request UI: multi-step wizard (DynamicContractRequestForm /
+  useDynamicContractForm) — partner → type → details → review.
+  Amendment:
+    PATCH or POST /api/agreements/{id}/amend → status pending_amendment;
+    both sides re-approve. POST is used when attaching files (FormData).
+    Partner UI: "View changes" dialog in Contracts.vue shows latest amendment
+    metadata; upload via ContractRequestService::storeAttachments (public).
   Types: agreement-types / contract-types.
   Creating/managing agreement types requires org.manage_agreements.
+  School–company partnership also gates who can apply to a company's jobs
+  (Find Internships may show "Ask your school to partner…").
 
 C) FLEXIBLE INTERNSHIP SCHEDULE
   Fields on internships: schedule_type, weekly_hours, schedule_days, time_in/out,
   timezone, is_flexible (+ legacy free-text schedule).
   internships.duration is display text, not the course hour requirement.
-  Demo job "website development" duration is "486 hours", weekly_hours 5.
 
 D) INTERVIEWS
   ApplicationInterview model + InterviewController
-  UI: ApplicationInterviewPanel.vue on company/school applicant views
+  UI: ApplicationInterviewPanel.vue / ApplicationTrackerPanel.vue on host/school
 
-E) OJT LOGS / HOURS
+E) OJT LOGS / HOURS / DTR / HOURS AGREEMENT
   Real API OjtLogController (not localStorage-only).
   Student submits logs. Company approves each pending log in the UI.
   School OJT screen is monitoring. API permission org.approve_ojt_logs exists
   for school admin and department head, but the school UI is read-only monitoring.
-  Required hours used by OJT math and certificates:
-    organization settings required_ojt_hours / requiredHours if set,
-    otherwise DEFAULT_REQUIRED_HOURS = 500.
-  Changing the org-wide number requires org.approve_ojt_logs, not manage_profile.
-  GET required hours is still school/company app role.
+  DTR submissions: OjtDtrController + company/school DTR review routes.
+  Progress APIs:
+    GET /api/ojt-logs/progress   — student + company Intern Summary (DTR hours)
+    GET /api/student-progress    — school Interns Progress list
+  Both include placements with status accepted | placement_ended (ended stays listed).
 
-F) SCHOOL + COURSE REQUIRED HOURS (foundation + school-admin UI only)
+  Required hours (single read path — RequiredOjtHoursAccessor):
+    1) If ApplicationHoursAgreement status=Agreed and agreed_hours >= 1 → that value
+    2) Else applications.required_ojt_hours snapshot if set
+    3) Org settings required_ojt_hours / requiredHours or DEFAULT 500 may still
+       seed snapshots earlier; Progress Overview must NOT hardcode 500 when an
+       agreed hours-agreement exists.
+  Hours agreement API (per application):
+    GET  /api/applications/{id}/hours-agreement
+    POST .../propose | confirm | decline
+    Service: HoursAgreementService; after confirm, Progress Overview / certificates
+    use the new agreed hours via the accessor.
+  Changing org-wide required hours requires org.approve_ojt_logs, not manage_profile.
+  Company Intern Summary cards must load from /ojt-logs/progress (not a stale
+  local-only total that ignores DTR).
+
+F) SCHOOL + COURSE REQUIRED HOURS (foundation + school-admin UI)
   Table school_course_requirements:
     school_id, course_name, course_name_key (lowercase collapsed),
     required_hours unsigned integer >= 1, unique (school_id, course_name_key).
   applications.required_ojt_hours is a nullable unsigned snapshot.
-  Null is allowed. A non-null value below 1 is rejected on save.
-  Backfill (ApplicationRequiredOjtHoursBackfill) copies an explicit positive
-  school org setting only. It never invents 500. Live CvSU has no org-wide
-  hours configured, so the existing accepted application snapshot stays null.
-  Updating a course row does NOT rewrite existing application snapshots.
   API (behind org.verified, permission org.manage_students):
     GET/POST /api/school-course-requirements
     PATCH /api/school-course-requirements/{schoolCourseRequirement}
-  Settings UI (SettingsPanel.vue) shows "Course OJT Requirements" only when
+  Settings UI shows "Course OJT Requirements" only when
   app role is school AND hasPermission('org.manage_students').
-  Teacher with only manage_profile is 403. The org-wide "OJT Required Hours"
-  block is still there.
-  NOT WIRED, and do not change unless a task explicitly asks:
-    job posting duration, application eligibility, acceptance blocking,
-    OJT hour calculations, certificate hour checks, DTR, interviews, assessments.
-  The settings empty state says application blocking is not active yet.
+  Course → skill category defaults: SettingsPanel + courseSkillCategoryDefaults
+  (school maps courses to suggested skill categories for student skills UX).
+  Course hours may participate in apply eligibility via CourseYearLevels /
+  related services — verify current wiring before changing; do not assume
+  "not wired" without checking ApplicationController.
 
-G) ASSESSMENTS
+G) SKILLS CATALOG (ADDED ~2026-11)
+  Shared skills catalog + student skills wizard (catalog pick, custom pending,
+  draft autosave, chips, limits). SkillsWizard.vue.
+  Admin reviews pending custom skills: /admin/skills
+  API:
+    GET/POST /api/skills, GET /api/skills/suggest
+    GET/PUT /api/student/skills
+    Admin: /api/admin/skills*, approve/merge/reject
+
+H) ASSESSMENTS
   ApplicationAssessment — scored/stage assessments on applications.
-  UI: ApplicationAssessmentPanel.vue
+  UI: ApplicationAssessmentPanel / tracker assessment step.
   Wording should stay cautious; do not claim an AI decision.
 
-H) KPI / REPORTS / CERTIFICATES
+I) KPI / REPORTS / CERTIFICATES
   GET /api/reports/kpi          requires org.reports_view or org.view_reports
   GET /api/reports/export       requires org.reports_export only
   Certificates:
     Issuing requires org.approve_certificates only.
     Index/download may still allow report-view permission to VIEW certificates.
+    Eligibility includes application status accepted OR placement_ended
+    (placement ended must still allow View/Print when eligible).
+    Required hours for eligibility come from RequiredOjtHoursAccessor.
     The certificate is printable HTML from CertificateController::buildCertificateHtml
     (Georgia, double #1e3a5f border, centered). It is not a generated PDF.
-    A local preview file may exist at backend/public/certificate-preview.html.
-    Do not treat that preview as the production download.
+    Do not treat local preview HTML as the production download.
+    School.vue Interns Progress: placement_ended rows stay visible; cert actions
+    respect certificateEligible / alreadyIssued.
 
-I) SUBSCRIPTIONS / PAYMONGO
+J) SUBSCRIPTIONS / PAYMONGO
   Plans: free | standard | premium (SubscriptionPlanDefinition)
   Org billing page: /billing (OrganizationSubscription.vue + SubscriptionManager.vue)
   Paid upgrade: POST /subscriptions/checkout → PayMongo → return → POST /subscriptions/verify
@@ -376,36 +569,38 @@ I) SUBSCRIPTIONS / PAYMONGO
   code paymongo_not_configured BEFORE any subscription mutation.
   The UI shows an info dialog and refreshes. It does not fake success, skip
   verify, or invent a mock provider. Do not add a fake payment path.
+  Host org.verified / subscription.write middleware can 402 new host actions
+  when subscription/verification is missing.
 
-J) SCHOOL STUDENT ACCOUNTS
+K) SCHOOL STUDENT ACCOUNTS
   /school/students — temporary student logins, roster, setup links.
   Visible only with student-manage keys (see section 4).
   Students are school-provisioned; they use the school subscription code.
+  student_id_number / studentNumber is REQUIRED on school create (and unique
+  within the school). Validation: App\Support\StudentNumber + src/utils/studentNumber.ts.
+  Students generally cannot change an existing number; may fill once if missing
+  (ProfileController rules).
 
-K) ORGANIZATION VERIFICATION
-  School and company users with verificationStatus pending, rejected, or null
-  are forced to /organization-verification until approved.
-  Sub-accounts (teachers, department heads, custom subusers) often have no
-  School or Company row of their own. formatUserProfile inherits verification
-  from organizationSchool() / organizationCompany() (the parent org).
-  Do not send them to "Awaiting organization verification" just because their
-  own school/company row is null. Middleware EnsureOrganizationVerified already
-  uses the parent org. Do not weaken verification.
+L) ORGANIZATION VERIFICATION
+  School, company, and municipal_hall users with verificationStatus pending,
+  under_review, or rejected are forced to /organization-verification until
+  approved/verified (router needsOrganizationVerification).
+  Sub-accounts inherit verification from parent org via formatUserProfile.
+  Do not weaken verification.
 
-L) FORCED PASSWORD CHANGE
+M) FORCED PASSWORD CHANGE
   mustChangePassword still goes to Change Password, then
   authStore.refreshUser(), then the role dashboard.
-  Do not skip that refresh (P0-01). The local dashboard helper does not decide
-  verification; the router guard does.
+  Do not skip that refresh (P0-01).
 
 ================================================================================
 7. FRONTEND STRUCTURE (KEY PATHS)
 ================================================================================
 
-  src/main.ts                 Boot Pinia, auth init, router
+  src/main.ts                 Boot Pinia, auth init, router, errorHandler
   src/config/auth.ts          AUTH_DISABLED (currently false — auth ON)
   src/stores/auth.ts          Session user + login/logout/refresh
-  src/router/index.ts         All routes + guards + permission redirect
+  src/router/index.ts         All routes + guards + permission redirect + titles
   src/layouts/MainLayout.vue  Authenticated shell; filters school/company nav
   src/layouts/navigation.ts   Nav items, permission groups, route requirements
   src/layouts/navigation.test.ts
@@ -413,68 +608,88 @@ L) FORCED PASSWORD CHANGE
   src/services/apiClient.ts   Axios with Bearer
   src/services/auth.ts        login/register/me mapping (memberships[].permissions)
   src/services/permissions.ts Client hasPermission + ALIASES (in-page checks)
-  src/services/schoolPrograms.ts  Course requirement API client (errors throw)
+  src/services/applications.ts  Applications + activePlacement + closePlacement
+  src/services/applicationTracker.ts  Stage labels including withdrawn/placement_*
+  src/services/contracts.ts   Agreements + amend (JSON or FormData POST)
+  src/services/schoolPrograms.ts  Course requirement API client
+  src/composables/useToast.ts
+  src/composables/useActivePlacement.ts (placement exclusivity UI)
+  src/composables/useDynamicContractForm.ts  Agreement request wizard state
+  src/utils/passwordPolicy.ts
+  src/utils/studentNumber.ts
+  src/utils/courseSkillCategoryDefaults.ts
   src/services/*.ts           Domain API clients
 
 Major views:
   src/views/Landing.vue
   src/views/Login.vue
-  src/views/RegisterSimple.vue          School/company signup (Cavite address UX)
-  src/views/FindInternships.vue         Public opportunities
-  src/views/school/School.vue           School workspace (route name picks the section)
-  src/views/company/Company.vue         Company workspace (route name picks the section)
+  src/views/RegisterSimple.vue          School/company/municipal signup
+  src/views/FindInternships.vue         Public opportunities (+ Already placed)
+  src/views/InternshipDetail.vue
+  src/views/school/School.vue           School workspace (withdrawn + placement_ended)
+  src/views/company/Company.vue         Company / municipal host workspace
   src/views/intern/Intern.vue           Student/intern workspace
-  src/views/admin/*                     Platform admin
-  src/views/TenantRbac.vue              Roles + permission matrix
+  src/views/admin/*                     Platform admin (+ skills review)
+  src/views/TenantRbac.vue
   src/views/OrganizationSubscription.vue
   src/components/SubscriptionManager.vue
-  src/components/layout/SettingsPanel.vue   Org hours + course OJT requirements
-  src/views/Contracts.vue               Agreements UI
-  src/views/OJTHours.vue
-  src/views/OrganizationVerification.vue
-  src/views/ChangePassword.vue
+  src/components/layout/SettingsPanel.vue  (+ course hours + skill categories)
+  src/components/DynamicContractRequestForm.vue  Agreement wizard
+  src/components/skills/SkillsWizard.vue
+  src/components/ApplicationTrackerPanel.vue
   src/components/ApplicationInterviewPanel.vue
   src/components/ApplicationAssessmentPanel.vue
-  src/components/PublicSiteHeader.vue
+  src/views/Contracts.vue               Agreements list + View changes / amend files
+  src/views/OJTHours.vue                Progress + company Intern Summary from progress API
+  src/views/OrganizationVerification.vue
+  src/views/ChangePassword.vue
 
 School.vue and Company.vue are one component per workspace. The route name
-selects the section (dashboard, interns, endorsements, and so on). Pushing a
-route the user cannot open is rejected by the router guard.
-
-Recent UX redesigns:
-  - School dashboard: metrics, KPI, needs-attention, compact quick actions
-  - Company dashboard: same pattern (emerald theme)
-  - TenantRbac: cleaner roles layout; sticky permissions matrix with View/Manage/Reports/Approve groups
-  - Billing UI cleaned; PayMongo kept
-  - Quick actions are filtered by the same permission groups as the sidebar
+selects the section. Municipal Hall uses Company.vue shell.
 
 ================================================================================
 8. BACKEND STRUCTURE (KEY PATHS)
 ================================================================================
 
   backend/routes/api.php
-  backend/app/Http/Controllers/AuthController.php          formatUserProfile inherits parent verification
-  backend/app/Http/Controllers/ContractController.php      (+ amend, agreements aliases)
+  backend/routes/web.php                  SPA fallback; excludes robots/sitemap/manifest
+  backend/bootstrap/app.php
+  backend/config/cors.php                 FRONTEND_URL fallback https://ojtpath.online
+  backend/app/Providers/AppServiceProvider.php  RateLimiter login 5/min
+  backend/app/Http/Controllers/AuthController.php
+  backend/app/Http/Controllers/ApplicationController.php
+      store (apply + active_placement assert), activePlacement, closePlacement
+  backend/app/Http/Controllers/ApplicationTrackerController.php
   backend/app/Http/Controllers/InternshipController.php
-  backend/app/Http/Controllers/ApplicationController.php   index requires view/manage/approve applications
-  backend/app/Http/Controllers/SchoolCourseRequirementController.php
+  backend/app/Http/Controllers/SkillController.php
+  backend/app/Http/Controllers/StudentSkillController.php
+  backend/app/Http/Controllers/AdminSkillController.php
   backend/app/Http/Controllers/OjtLogController.php
+      progress() — required hours via accessor; accepted|placement_ended
+  backend/app/Http/Controllers/StudentProgressController.php
+  backend/app/Http/Controllers/OjtDtrController.php
   backend/app/Http/Controllers/CertificateController.php
-  backend/app/Http/Controllers/KpiReportController.php
-  backend/app/Http/Controllers/ReportExportController.php
+      eligibility accepted|placement_ended; hours via accessor
+  backend/app/Http/Controllers/ContractController.php
+      amend (PATCH/POST + attachments); flips requester for re-approve
+  backend/app/Http/Controllers/HoursAgreementController.php
   backend/app/Http/Controllers/SubscriptionCheckoutController.php
-  backend/app/Models/SchoolCourseRequirement.php
-  backend/app/Models/Application.php                       required_ojt_hours snapshot
-  backend/app/Services/ApplicationRequiredOjtHoursBackfill.php
+  backend/app/Services/PlacementExclusivityService.php
+  backend/app/Services/ApplicationTracker.php
+  backend/app/Services/RequiredOjtHoursAccessor.php
+  backend/app/Services/HoursAgreementService.php
+  backend/app/Services/Contracts/ContractRequestService.php
   backend/app/Services/PermissionGate.php
   backend/app/Services/TenantRoleService.php
   backend/app/Services/SubscriptionPlanService.php
   backend/app/Support/OrgPermissions.php
-  backend/database/seeders/RbacSeeder.php
+  backend/app/Support/StudentNumber.php
+  backend/app/Console/Commands/AuditMultiAcceptedPlacementsCommand.php
+      signature: placements:audit-multi-accepted
   backend/database/seeders/DemoAccountsSeeder.php
-  backend/database/migrations/2026_10_08_000001_create_school_course_requirements_and_application_ojt_hours.php
+  backend/database/migrations/2026_11_03_180000_add_placement_exclusivity_to_applications.php
 
-Most org APIs sit behind middleware org.verified.
+Most org write APIs sit behind middleware org.verified (+ often subscription.write).
 
 ================================================================================
 9. API SURFACE (SUMMARY)
@@ -486,16 +701,22 @@ Public:
   POST /api/auth/account-setup/validate|complete
   GET  /api/internships (public browse)
   GET  /api/subscription-plans
+  Health: GET /up (Laravel) — not necessarily /api/health
 
 Authenticated (auth:sanctum) highlights:
   POST /api/auth/logout
   GET  /api/auth/me          includes memberships[].permissions
   POST /api/auth/password
   PATCH /api/profile
-  Internships CRUD, applications + status
+  Internships CRUD, applications + status + tracker
+  GET  /api/student/active-placement
+  POST /api/applications/{application}/placement/close
+  GET/POST /api/skills*, GET/PUT /api/student/skills, /api/admin/skills*
   /api/agreements* and /api/contracts* (dual)
+      PATCH|POST agreements/{id}/amend (POST for multipart files)
   /api/interviews*
-  /api/ojt-logs* (+ progress)
+  /api/ojt-logs* (+ GET ojt-logs/progress), /api/ojt-dtr*
+  /api/applications/{id}/hours-agreement(+ /propose|/confirm|/decline)
   /api/assessments*
   /api/student-progress
   /api/reports/kpi, /api/reports/export
@@ -503,7 +724,7 @@ Authenticated (auth:sanctum) highlights:
   /api/subscriptions/checkout, /api/subscriptions/verify, free, cancel-pending
   /api/school-course-requirements
   /api/rbac/tenants...
-  /api/school-students*
+  /api/school-students*   (studentNumber required on create)
   notifications, admin users, directory, etc.
 
 Token: Authorization: Bearer <token>
@@ -516,8 +737,8 @@ Stored client-side as localStorage key: capstone_auth_token
 src/config/auth.ts:
   export const AUTH_DISABLED = false
 
-When true: router skips guards, including the new permission redirects.
-Leave false for real testing. Turning it on breaks login/RBAC/billing QA.
+When true: router skips guards, including permission redirects.
+Leave false for real testing and production. Turning it on breaks login/RBAC/billing QA.
 
 ================================================================================
 11. FEATURE CHECKLIST (STAKEHOLDER REQUIREMENTS — STATUS)
@@ -525,31 +746,43 @@ Leave false for real testing. Turning it on breaks login/RBAC/billing QA.
 
   [x] Flexible internship schedule
   [x] Terminology Contracts → Agreement (UI + /agreements; legacy aliases remain)
-  [x] Agreement modification/customization (amend + pending_amendment)
+  [x] Agreement modification/customization (amend + pending_amendment + file upload)
+  [x] Agreement request multi-step wizard
   [x] Interview scheduling
+  [x] Application tracker stages (assessed → accepted, etc.)
+  [x] Placement exclusivity (one active accept; withdraw others; cancel interviews)
+  [x] Municipal Hall host role (company workspace reuse)
+  [x] Shared skills catalog + student wizard + admin review
+  [x] Course → skill category defaults (school Settings)
+  [x] Required student number on school-provisioned accounts
+  [x] Hours agreement propose/confirm; Progress uses agreed_hours via accessor
+  [x] Company Intern Summary + school Interns Progress after DTR / placement_ended
+  [x] Certificates after placement_ended when eligible
   [x] RBAC View / Manage / Reports / Approve permissions
   [x] School/company sidebar and direct routes follow membership permissions
   [x] Department head can monitor student progress
   [x] Assessment on OJT application
-  [x] KPI
-  [x] Certificate of completion (printable HTML, not a generated PDF)
-  [x] Generation of reports
-  [x] School + course required-hours data model and School Admin settings UI
-  [ ] Course hours do NOT yet block applications or drive OJT/certificate math
+  [x] KPI / reports / certificates (printable HTML)
+  [x] School + course required-hours settings UI
+  [x] DTR upload / review paths (company/school)
+  [x] Production SEO polish (title/OG/sitemap/robots) — live on ojtpath.online
+  [x] Login/register throttle (5/min)
+  [x] Global Vue errorHandler
+  [ ] Form Request classes for high-traffic writes (optional polish)
+  [ ] Broader field-level 422 mapping in UI (optional polish)
 
 Caveats for another AI:
   - Some filenames still say Contract; prefer Agreement in user-facing copy
   - Dual API routes during transition are intentional
-  - Company/School list pages (interns, endorsements tables) may still look older
-    than the redesigned dashboards
-  - Guest signup / account-distribution flow has known orphaned edges; primary path
-    is Landing → Subscription → Register
-  - Frontend nav gating and backend PermissionGate aliases are different.
-    A page can be hidden while a related API alias would still allow the call,
-    or the reverse if only a legacy duplicate key remains on.
+  - Frontend nav gating and backend PermissionGate aliases are different
   - Endorsement buttons inside School.vue are not all individually hidden;
-    the API still requires org.approve_applications. The route itself requires
-    an application key, which includes view-only keys.
+    the API still requires org.approve_applications
+  - QA tmp_*.php scripts under backend/ are local helpers — do not deploy as features
+  - Do not auto-fix multi-accepted placement legacy data; audit command only
+  - vue-tsc / npm run build type-check failures may be pre-existing; use
+    build-only for Hostinger updates when type-check is unrelated
+  - Do not re-implement placement exclusivity, skills catalog, SEO shell, or
+    RequiredOjtHoursAccessor unless fixing a real bug
 
 ================================================================================
 12. HOW TO RUN / FIX COMMON ERRORS
@@ -569,18 +802,23 @@ DAILY DEV:
   Terminal B: cd CAPSTONE && npm run dev
   Open: http://127.0.0.1:5173/
 
-Error: "Cannot reach the API server. Set VITE_API_BASE_URL..."
+Error: "Cannot reach the API server..." / Failed to fetch
   Means Laravel is not running OR wrong VITE_API_BASE_URL OR Vite not restarted
-  after .env change. Fix:
+  after .env change OR CORS localhost vs 127.0.0.1 mismatch.
+  Fix:
     1) Start artisan serve on :8000
-    2) Root .env: VITE_API_BASE_URL=http://127.0.0.1:8000/api
+    2) Prefer empty VITE_API_BASE_URL + Vite /api proxy (http.ts DEV behavior)
     3) Restart npm run dev
     4) Confirm GET http://127.0.0.1:8000/api/subscription-plans returns JSON
 
 UI changes not showing when using artisan-served SPA:
   Source in src/ is not live — rebuild:
-    npm run build && npm run deploy:backend-public
+    npm run build-only && npm run deploy:backend-public
   Or use npm run dev for HMR.
+
+Hostinger live site stale after local fixes:
+  User must ask to "update the hostinger". Then: build-only → stage-frontend →
+  TUS upload of PHP deltas + public/assets (section 0). Hard-refresh Ctrl+F5.
 
 Limited subuser still sees a page after permissions were turned off:
   1) Log out and back in so memberships[0].permissions refreshes.
@@ -594,6 +832,12 @@ PayMongo upgrades:
   org.manage_subscription or manage_subscription.
   Empty secret → 422 paymongo_not_configured. Do not fake a successful payment.
 
+Placement exclusivity QA:
+  php backend/tmp_seed_placement_qa.php
+  php artisan placements:audit-multi-accepted
+  Accept via ApplicationTracker::transition(... STAGE_ACCEPTED ...)
+  Race helper: backend/tmp_race_accept.php
+
 ================================================================================
 13. DATA MODEL (SIMPLIFIED)
 ================================================================================
@@ -604,7 +848,7 @@ User
   ├─ school | company | student profile rows
   └─ effectiveAppRole() is derived; it is not the membership role name
 
-Organization (type: school|company)
+Organization (type: school | company | municipal_hall)
   ├─ subscription (plan, status, billing_cycle)
   ├─ settings.pending_plan_change (PayMongo pending)
   ├─ settings.required_ojt_hours / requiredHours (org-wide; 500 fallback if absent)
@@ -614,63 +858,91 @@ Organization (type: school|company)
 School / Company
   └─ owned by a user + linked to organization
   School has many school_course_requirements
+  Company may represent private firm OR municipal hall (company_type / lgu fields)
 
-Internship (company or school hosted)
+Student
+  └─ student_id_number (required, unique per school)
+
+Internship (company or school hosted; municipal posts as company host)
   └─ duration is display text
   └─ Applications
-       ├─ required_ojt_hours nullable snapshot (not yet used by OJT math)
+       ├─ required_ojt_hours nullable snapshot
+       ├─ ApplicationHoursAgreement (proposed/agreed hours; drives Progress when Agreed)
+       ├─ tracker_stage / status (incl. placement_ended, withdrawn_placed_elsewhere)
+       ├─ active_placement_key (unique; student_id when actively placed, else NULL)
+       ├─ withdrawal_reason, placement_closed_at, placement_close_reason
        ├─ Interviews
        ├─ Assessments
-       ├─ OjtLogs
-       └─ Certificates
+       ├─ OjtLogs / DTR submissions
+       └─ Certificates (eligible while accepted or placement_ended)
+
+Skills
+  └─ catalog skills + pending custom skills; student_skills pivot / JSON as implemented
+  └─ school course → skill category defaults (settings)
 
 Agreement (MOA between school & company orgs)
-  └─ type, status (pending, active, pending_amendment, rejected, cancelled...), amend fields
+  └─ type, status (pending, active, pending_amendment, rejected, cancelled...),
+     amend metadata + optional uploaded attachments
 
 ================================================================================
 14. CONVENTIONS FOR FUTURE AI WORK
 ================================================================================
 
-- Prefer additive changes; do not break working application/agreement flows
+- Prefer additive changes; do not break working application/agreement/placement flows
 - User-facing: say "Agreement" not "Contract" (keep API aliases if needed)
-- School-first redesigns often share TenantRbac / SubscriptionManager with Company
 - Do NOT edit plan files in .cursor/plans unless user asks
 - Do NOT commit unless user asks
-- After UI changes for artisan-served mode: build + deploy:backend-public
+- After UI changes for artisan-served mode: build-only + deploy:backend-public
+- When user asks to update Hostinger: TUS deploy (section 0); never upload .env
 - Keep PayMongo as payment provider unless user explicitly changes it
 - Do not fake PayMongo success, skip verify, or add a mock provider
-- Do not change cancel-pending or the pending-plan limit unless asked
 - AUTH_DISABLED should stay false unless debugging
 - Do not rename or delete RBAC keys, and do not remove PermissionGate aliases,
   unless a task explicitly asks. Nav gating intentionally ignores cross-feature aliases.
-- Do not give Teachers course-hour management just because they have manage_profile
-- Do not wire course required hours into eligibility, acceptance, OJT math,
-  or certificates unless a task explicitly asks
 - Do not invent an "OJT Office" or ojt_admin role
 - Forced password change must still refresh the user before routing
 - Subusers inherit parent organization verification
+- Placement exclusivity: never delete withdrawn apps; never restore them on release
+- Do not auto-mutate multi-accepted legacy placements; audit and report only
+- Municipal Hall = company workspace; do not fork a separate host UI unless asked
+- Progress / certificates required hours: use RequiredOjtHoursAccessor, not hardcoded 500
+- placement_ended must remain visible for school progress + cert print when eligible
 - Ask before large design assumptions; match existing Tailwind/shadcn patterns
 - When serving via Laravel public/, remember Vite source ≠ live assets until rebuild
+- SEO shell is already branded; do not revert title/OG/sitemap to Vite defaults
 
 ================================================================================
 15. QUICK FILE INDEX FOR HOTSPOTS
 ================================================================================
 
 Auth flag:           src/config/auth.ts
-API base:            src/services/http.ts , project root .env
+API base:            src/services/http.ts , project root .env / .env.production
 Router guards:       src/router/index.ts
 Nav permissions:     src/layouts/navigation.ts
-                     src/layouts/navigation.test.ts
-                     src/layouts/MainLayout.vue
+SEO shell:           index.html , backend/public/index.html , hostinger-update/public
+CORS:                backend/config/cors.php
 School UI:           src/views/school/School.vue
-Company UI:          src/views/company/Company.vue
+Company/Municipal:   src/views/company/Company.vue
+Intern UI:           src/views/intern/Intern.vue
+Find jobs:           src/views/FindInternships.vue , InternshipDetail.vue
+OJT / progress:      src/views/OJTHours.vue
+                     OjtLogController, StudentProgressController
+                     RequiredOjtHoursAccessor, HoursAgreementService
+Placement exclusivity:
+                     backend/app/Services/PlacementExclusivityService.php
+                     backend/app/Services/ApplicationTracker.php
+                     src/services/applications.ts
+                     src/services/applicationTracker.ts
+Skills:              SkillController, StudentSkillController, AdminSkillController
+                     SkillsWizard.vue , courseSkillCategoryDefaults.ts
+Student number:      App\Support\StudentNumber , src/utils/studentNumber.ts
 RBAC UI:             src/views/TenantRbac.vue
 Client permissions:  src/services/permissions.ts
 Billing UI:          src/views/OrganizationSubscription.vue
                      src/components/SubscriptionManager.vue
-Course hours UI:     src/components/layout/SettingsPanel.vue
-                     src/services/schoolPrograms.ts
-Agreements UI:       src/views/Contracts.vue
+Agreements UI:       src/views/Contracts.vue , DynamicContractRequestForm.vue
+                     ContractController , ContractRequestService
+Hostinger upload:    scripts/hostinger-tus-upload.mjs , hostinger-update/
 API routes:          backend/routes/api.php
 Permissions catalog: backend/app/Support/OrgPermissions.php
 Permission aliases:  backend/app/Services/PermissionGate.php
@@ -678,10 +950,28 @@ Tenant role packs:   backend/app/Services/TenantRoleService.php
 App role derivation: backend/app/Models/User.php  effectiveAppRole()
 Demo users:          backend/database/seeders/DemoAccountsSeeder.php
 PayMongo checkout:   backend/app/Http/Controllers/SubscriptionCheckoutController.php
-Plan limits:         backend/app/Services/SubscriptionPlanService.php
-Course hours API:    backend/app/Http/Controllers/SchoolCourseRequirementController.php
-OJT hours:           backend/app/Http/Controllers/OjtLogController.php
 Certificate HTML:    backend/app/Http/Controllers/CertificateController.php
+Multi-accept audit:  php artisan placements:audit-multi-accepted
+
+================================================================================
+16. COPY-PASTE PROMPT STARTER FOR GEMINI / CLAUDE
+================================================================================
+
+You are working on CAPSTONE / OJT Intern Path (https://ojtpath.online).
+Read SYSTEM_BRIEF_FOR_AI.txt first. Stack: Vue 3 + Vite SPA, Laravel 12 + Sanctum,
+Hostinger same-origin /api. AUTH_DISABLED must stay false. Do not commit unless asked.
+Do not invent features. Prefer minimal diffs matching existing patterns.
+
+Already done (do not redo): branded SEO/title/OG/sitemap/robots, CORS FRONTEND_URL
+fallback, login throttle, Vue errorHandler, .env gitignore, placement exclusivity,
+skills catalog, RequiredOjtHoursAccessor / hours agreement → Progress, amend partner
+View changes + file upload, certificates + school progress after placement_ended,
+required student number, agreement wizard, course→skill category defaults.
+Hostinger deploy = build-only + stage + TUS (section 0); never upload local .env.
+
+Remaining optional polish: Form Requests, more field-level 422 mapping.
+
+Task: <PASTE SPECIFIC TASK HERE>
 
 ================================================================================
 END OF SYSTEM BRIEF

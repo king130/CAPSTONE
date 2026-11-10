@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/auth'
 import {
   createOrganizationMember,
   getOrganizationAccess,
+  resendOrganizationMemberSetupLink,
   updateOrganizationMember,
   type OrganizationAccessMember,
   type OrganizationAccessRole,
@@ -191,15 +192,57 @@ async function createMember() {
     })
 
     members.value = [...members.value, res.member].sort((a, b) => a.user.name.localeCompare(b.user.name))
+    const createdEmail = res.email || res.member.user.email
+    const createdMembershipId = res.member.id
     newMember.value = { name: '', email: '', roleId: '', title: '' }
     await authStore.refreshUser()
 
-    await Swal.fire({
-      icon: 'success',
-      title: 'Member Account Created',
-      html: `<strong>Temporary password:</strong> ${res.temporaryPassword}<br><br>The new user will be forced to change it on first login.`,
-      confirmButtonColor: '#2563eb',
-    })
+    if (res.inviteSent !== false) {
+      await Swal.fire({
+        icon: 'success',
+        title: 'Member Account Created',
+        text: `Account created. A password setup link was sent to ${createdEmail}.`,
+        confirmButtonColor: '#2563eb',
+      })
+    } else {
+      const result = await Swal.fire({
+        icon: 'warning',
+        title: 'Created, but email failed',
+        text: res.message || `The account was created, but the setup email could not be sent to ${createdEmail}.`,
+        showCancelButton: true,
+        confirmButtonText: 'Resend',
+        cancelButtonText: 'Close',
+        confirmButtonColor: '#2563eb',
+      })
+
+      if (result.isConfirmed) {
+        try {
+          const invite = await resendOrganizationMemberSetupLink(createdMembershipId)
+          if (invite.inviteSent) {
+            await Swal.fire({
+              icon: 'success',
+              title: 'Setup Link Sent',
+              text: `A fresh setup link was sent to ${invite.email || createdEmail}.`,
+              confirmButtonColor: '#2563eb',
+            })
+          } else {
+            await Swal.fire({
+              icon: 'error',
+              title: 'Resend Failed',
+              text: invite.invite?.errorMessage || invite.message || 'Could not send the setup link.',
+              confirmButtonColor: '#2563eb',
+            })
+          }
+        } catch (resendError) {
+          await Swal.fire({
+            icon: 'error',
+            title: 'Resend Failed',
+            text: resendError instanceof Error ? resendError.message : 'Could not resend the setup link.',
+            confirmButtonColor: '#2563eb',
+          })
+        }
+      }
+    }
   } catch (error) {
     await Swal.fire({
       icon: 'error',

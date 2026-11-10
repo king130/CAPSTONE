@@ -1,3 +1,4 @@
+import { TRACKER_STAGE_LABELS as SHARED_TRACKER_LABELS, statusLabel } from '@/utils/statusLabels'
 import { apiFetch } from './http'
 
 export type TrackerStage =
@@ -9,6 +10,10 @@ export type TrackerStage =
   | 'accepted'
   | 'rejected'
   | 'school_rejected'
+  | 'withdrawn_placed_elsewhere'
+  | 'placement_cancelled'
+  | 'placement_declined'
+  | 'placement_ended'
 
 export interface TrackerHistoryEvent {
   id: string
@@ -92,15 +97,19 @@ export async function unlockTrackerAssessment(
   return res.data
 }
 
-export const TRACKER_STAGE_LABELS: Record<string, string> = {
-  applied: 'Applied',
-  endorsed: 'Endorsed',
-  interview_scheduled: 'Interview Scheduled',
-  interviewed: 'Interviewed',
-  assessed: 'Assessed',
-  accepted: 'Accepted',
-  rejected: 'Rejected',
-  school_rejected: 'Not Endorsed',
+export const TRACKER_STAGE_LABELS: Record<string, string> = { ...SHARED_TRACKER_LABELS }
+
+export function applicationStatusLabel(status?: string | null, trackerStage?: string | null, withdrawalReason?: string | null): string {
+  const stage = String(trackerStage || '').toLowerCase()
+  if (stage && TRACKER_STAGE_LABELS[stage]) return TRACKER_STAGE_LABELS[stage]
+  const raw = String(status || '').toLowerCase()
+  if (raw === 'withdrawn_placed_elsewhere' || withdrawalReason === 'Placed elsewhere') {
+    return statusLabel('withdrawn_placed_elsewhere')
+  }
+  if (TRACKER_STAGE_LABELS[raw]) return TRACKER_STAGE_LABELS[raw]
+  if (raw === 'submitted' || raw === 'pending') return statusLabel('applied')
+  if (!raw) return 'Unknown'
+  return statusLabel(raw)
 }
 
 export const TRACKER_FLOW: TrackerStage[] = [

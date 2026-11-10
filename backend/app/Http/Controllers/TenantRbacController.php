@@ -7,12 +7,14 @@ use App\Models\OrganizationMembership;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
+use App\Services\AccountSetupInviteService;
 use App\Services\OrganizationAccountProvisioner;
 use App\Services\SubscriptionPlanService;
 use App\Services\TenantRoleService;
 use App\Support\OrgPermissions;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 class TenantRbacController extends Controller
@@ -21,6 +23,7 @@ class TenantRbacController extends Controller
         private readonly TenantRoleService $tenantRoleService,
         private readonly OrganizationAccountProvisioner $organizationAccountProvisioner,
         private readonly SubscriptionPlanService $subscriptionPlans,
+        private readonly AccountSetupInviteService $accountSetupInvites,
     )
     {
     }
@@ -304,7 +307,6 @@ class TenantRbacController extends Controller
             }
         }
 
-        $temporaryPassword = 'Temp@'.strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
         $legacyRole = $tenant->type;
         if ($tenant->type === 'school') {
             $legacyRole = in_array($role->slug, ['intern', 'student_member'], true) ? 'student' : 'school';
@@ -336,7 +338,7 @@ class TenantRbacController extends Controller
         $newUser = User::query()->create([
             'name' => trim($data['name']),
             'email' => strtolower(trim($data['email'])),
-            'password' => $temporaryPassword,
+            'password' => Str::random(32).'!Aa1',
             'role' => $legacyRole,
             'profile' => $profile,
             'is_active' => true,
@@ -356,10 +358,66 @@ class TenantRbacController extends Controller
             'invited_by_user_id' => $user->id,
         ]);
 
+        $inviteDelivery = $this->accountSetupInvites->sendStaffInvite(
+            $newUser,
+            $tenant,
+            $user,
+            24,
+        );
+
         return response()->json([
             'member' => $this->serializeMembership($membership->fresh(['user', 'role.permissions', 'organization'])),
-            'temporaryPassword' => $temporaryPassword,
+            'inviteSent' => $inviteDelivery['sent'],
+            'email' => $newUser->email,
+            'message' => $inviteDelivery['sent']
+                ? 'Account created. A password setup link was sent to '.$newUser->email.'.'
+                : ($inviteDelivery['errorMessage'] ?? 'Account created, but the setup email could not be sent.'),
+            'invite' => $inviteDelivery,
         ], Response::HTTP_CREATED);
+    }
+
+    public function resendMemberSetupLink(Request $request, Organization $tenant, OrganizationMembership $membership)
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        if (! $this->canManageTenantMembers($user, $tenant)) {
+            return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
+        }
+
+        if ((int) $membership->organization_id !== (int) $tenant->id) {
+            return response()->json(['message' => 'Member not found for this account.'], Response::HTTP_NOT_FOUND);
+        }
+
+        $targetUser = $membership->user;
+        if (! $targetUser) {
+            return response()->json([
+                'message' => 'This member account is missing its login record.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        if (! $targetUser->must_change_password) {
+            return response()->json([
+                'message' => 'This member already finished account setup.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $inviteDelivery = $this->accountSetupInvites->sendStaffInvite(
+            $targetUser,
+            $tenant,
+            $user,
+            24,
+            true,
+        );
+
+        return response()->json([
+            'message' => $inviteDelivery['sent']
+                ? 'A fresh setup link was sent to the member email.'
+                : ($inviteDelivery['errorMessage'] ?? 'The setup link was generated, but the email could not be delivered.'),
+            'inviteSent' => $inviteDelivery['sent'],
+            'email' => $targetUser->email,
+            'invite' => $inviteDelivery,
+        ]);
     }
 
     public function storeRole(Request $request, Organization $tenant)
@@ -400,6 +458,24 @@ class TenantRbacController extends Controller
 
         if ((int) $role->tenant_id !== (int) $tenant->id) {
             return response()->json(['message' => 'Role does not belong to the selected tenant.'], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $protectedSlugs = [
+            'school_admin',
+            'department_head',
+            'teacher',
+            'registrar',
+            'intern',
+            'company_admin',
+            'manager',
+            'hr',
+            'finance',
+        ];
+
+        if (in_array((string) $role->slug, $protectedSlugs, true)) {
+            return response()->json([
+                'message' => 'Default system roles cannot be deleted.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
         if ($role->memberships()->exists()) {

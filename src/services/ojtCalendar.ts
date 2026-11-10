@@ -8,6 +8,9 @@ export interface OjtCalendarDay {
   holidayName?: string | null
   inApprovedDtrPeriod?: boolean
   hoursOverScheduled?: boolean
+  absenceType?: string | null
+  absenceReason?: string | null
+  approvedMakeupHours?: number | null
 }
 
 export interface OjtCalendarSummary {
@@ -46,5 +49,39 @@ export async function updateOjtStartDate(applicationId: string, ojtStartDate: st
     method: 'PATCH',
     body: JSON.stringify({ ojt_start_date: ojtStartDate }),
   })
+  return res.data
+}
+
+export interface OjtAttendanceEvent {
+  id: number
+  applicationId: string
+  studentId: number
+  date: string
+  type: 'absent_excused' | 'absent_unexcused' | string
+  reason: string
+  markedByUserId?: string
+  markedByName?: string | null
+}
+
+export async function markOjtAbsence(
+  applicationId: string,
+  payload: { date: string; type: 'absent_excused' | 'absent_unexcused'; reason: string },
+): Promise<OjtAttendanceEvent> {
+  const res = await apiFetch<{ data: OjtAttendanceEvent }>(`/applications/${applicationId}/attendance`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  return res.data
+}
+
+export async function clearOjtAbsence(applicationId: string, attendanceEventId: number): Promise<void> {
+  await apiFetch(`/applications/${applicationId}/attendance/${attendanceEventId}`, {
+    method: 'DELETE',
+    body: JSON.stringify({}),
+  })
+}
+
+export async function listOjtAbsences(applicationId: string): Promise<OjtAttendanceEvent[]> {
+  const res = await apiFetch<{ data: OjtAttendanceEvent[] }>(`/applications/${applicationId}/attendance`)
   return res.data
 }

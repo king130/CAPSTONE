@@ -4,21 +4,28 @@ namespace App\Http\Controllers;
 
 use App\Models\Application;
 use App\Models\Notification;
+use App\Models\OjtAttendanceEvent;
 use App\Models\OjtDtrSubmission;
 use App\Models\OjtLog;
 use App\Models\Organization;
+use App\Models\SchoolCourseRequirement;
 use App\Models\Student;
+use App\Services\OjtCalendarService;
 use App\Services\PermissionGate;
+use App\Services\RequiredOjtHoursAccessor;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Carbon;
+use Illuminate\Validation\ValidationException;
 
 class OjtLogController extends Controller
 {
     public const DEFAULT_REQUIRED_HOURS = 500;
 
-    public function __construct(private readonly PermissionGate $permissions)
-    {
+    public function __construct(
+        private readonly PermissionGate $permissions,
+        private readonly RequiredOjtHoursAccessor $requiredOjtHours,
+    ) {
     }
 
     public function index(Request $request)
@@ -96,6 +103,8 @@ class OjtLogController extends Controller
             'application_id' => ['nullable', 'integer', 'exists:applications,id'],
             'internship_id' => ['nullable', 'integer', 'exists:internships,id'],
             'mood' => ['nullable', 'string', 'max:50'],
+            'isMakeup' => ['sometimes', 'boolean'],
+            'is_makeup' => ['sometimes', 'boolean'],
         ]);
 
         $application = $this->resolveAcceptedApplicationForStudent(
@@ -108,7 +117,13 @@ class OjtLogController extends Controller
             return $application;
         }
 
+        $tz = OjtCalendarService::TIMEZONE;
+        $logDate = Carbon::parse($data['date'], $tz)->toDateString();
+        $this->assertDateNotMarkedAbsent((int) $application->id, $logDate);
+
         $hours = $this->hoursBetween($data['timeIn'], $data['timeOut']);
+        $this->assertDailyHoursWithinCap($hours);
+        $isMakeup = (bool) ($data['isMakeup'] ?? $data['is_makeup'] ?? false);
         $organizationId = $student->organization_id
             ?? $user->activeOrganization()?->id
             ?? $application->company?->organization_id;
@@ -118,10 +133,11 @@ class OjtLogController extends Controller
             'application_id' => $application->id,
             'internship_id' => $application->internship_id,
             'organization_id' => $organizationId,
-            'log_date' => $data['date'],
+            'log_date' => $logDate,
             'time_in' => $data['timeIn'],
             'time_out' => $data['timeOut'],
             'hours' => $hours,
+            'is_makeup' => $isMakeup,
             'tasks' => $data['tasksDone'],
             'status' => 'pending',
         ]);
@@ -153,15 +169,30 @@ class OjtLogController extends Controller
             'timeIn' => ['required', 'date_format:H:i'],
             'timeOut' => ['required', 'date_format:H:i', 'after:timeIn'],
             'tasksDone' => ['required', 'string'],
+            'isMakeup' => ['sometimes', 'boolean'],
+            'is_makeup' => ['sometimes', 'boolean'],
         ]);
 
-        $ojtLog->update([
-            'log_date' => $data['date'],
+        $tz = OjtCalendarService::TIMEZONE;
+        $logDate = Carbon::parse($data['date'], $tz)->toDateString();
+        if ($ojtLog->application_id) {
+            $this->assertDateNotMarkedAbsent((int) $ojtLog->application_id, $logDate);
+        }
+        $hours = $this->hoursBetween($data['timeIn'], $data['timeOut']);
+        $this->assertDailyHoursWithinCap($hours);
+
+        $updates = [
+            'log_date' => $logDate,
             'time_in' => $data['timeIn'],
             'time_out' => $data['timeOut'],
-            'hours' => $this->hoursBetween($data['timeIn'], $data['timeOut']),
+            'hours' => $hours,
             'tasks' => $data['tasksDone'],
-        ]);
+        ];
+        if (array_key_exists('isMakeup', $data) || array_key_exists('is_makeup', $data)) {
+            $updates['is_makeup'] = (bool) ($data['isMakeup'] ?? $data['is_makeup']);
+        }
+
+        $ojtLog->update($updates);
 
         return response()->json(['data' => $this->serialize($ojtLog->fresh([
             'student:id,user_id,school_id,school_name,organization_id',
@@ -356,14 +387,24 @@ class OjtLogController extends Controller
                 }
             });
         } elseif ($appRole === 'company' && $company) {
-            $studentsQuery->whereHas('applications', fn ($q) => $q->where('company_id', $company->id)->where('status', 'accepted'));
+            $studentsQuery->whereHas(
+                'applications',
+                fn ($q) => $q->where('company_id', $company->id)
+                    ->whereIn('status', ['accepted', 'placement_ended'])
+            );
         } elseif ($appRole !== 'admin') {
             return response()->json(['data' => []]);
         }
 
-        $requiredHours = $this->requiredHoursForOrg($user->activeOrganization());
+        $orgFallback = $this->requiredHoursForOrg($user->activeOrganization());
 
-        $summaries = $studentsQuery->get()->map(function (Student $student) use ($requiredHours) {
+        $summaries = $studentsQuery->get()->map(function (Student $student) use ($orgFallback, $appRole, $company) {
+            $placementApp = $this->resolvePlacementApplicationForProgress(
+                $student,
+                $appRole === 'company' ? (int) ($company?->id ?? 0) : null
+            );
+            $requiredHours = $this->resolveRequiredHoursForStudent($student, $placementApp, $orgFallback);
+
             $logs = OjtLog::query()->where('student_id', $student->id)->get();
             $approved = (float) $logs->where('status', 'approved')->sum('hours')
                 + OjtDtrSubmission::hoursForStudent((int) $student->id, 'approved');
@@ -376,22 +417,16 @@ class OjtLogController extends Controller
                 ? 'completed'
                 : ($approved <= 0 && $totalLogged <= 0 ? 'not_started' : ($percent >= 60 ? 'on_track' : 'at_risk'));
 
-            $acceptedApp = Application::query()
-                ->with('company:id,company_name')
-                ->where('student_id', $student->id)
-                ->where('status', 'accepted')
-                ->orderByDesc('updated_at')
-                ->first();
-
             return [
                 'internId' => (int) $student->id,
                 'internName' => $student->user?->name ?? $student->user?->email ?? 'Intern',
-                'company' => $acceptedApp?->company?->company_name ?? '',
+                'company' => $placementApp?->company?->company_name ?? '',
                 'school' => $student->school_name ?? '',
                 'approvedHours' => round($approved, 2),
                 'requiredHours' => $requiredHours,
                 'status' => $status,
                 'totalLoggedHours' => round($totalLogged, 2),
+                'placementStatus' => $placementApp?->status ?? null,
             ];
         })->values();
 
@@ -404,10 +439,15 @@ class OjtLogController extends Controller
     private function progressForStudent(Student $student): array
     {
         $logs = OjtLog::query()->where('student_id', $student->id)->get();
-        $requiredHours = $this->requiredHoursForOrg(
-            $student->organization_id
-                ? Organization::query()->find($student->organization_id)
-                : null
+        $placementApp = $this->resolvePlacementApplicationForProgress($student);
+        $requiredHours = $this->resolveRequiredHoursForStudent(
+            $student,
+            $placementApp,
+            $this->requiredHoursForOrg(
+                $student->organization_id
+                    ? Organization::query()->find($student->organization_id)
+                    : null
+            )
         );
 
         $studentId = (int) $student->id;
@@ -430,6 +470,47 @@ class OjtLogController extends Controller
             'requiredHours' => $requiredHours,
             'percentComplete' => $requiredHours > 0 ? min(100, ($totalApproved / $requiredHours) * 100) : 0,
         ];
+    }
+
+    private function resolvePlacementApplicationForProgress(Student $student, ?int $companyId = null): ?Application
+    {
+        $query = Application::query()
+            ->with(['company:id,company_name', 'hoursAgreement'])
+            ->where('student_id', $student->id)
+            ->whereIn('status', ['accepted', 'placement_ended'])
+            ->orderByDesc('updated_at');
+
+        if ($companyId) {
+            $query->where('company_id', $companyId);
+        }
+
+        return $query->first();
+    }
+
+    private function resolveRequiredHoursForStudent(
+        Student $student,
+        ?Application $application,
+        int $fallback,
+    ): int {
+        if ($application) {
+            $fromAgreement = $this->requiredOjtHours->forApplication($application);
+            if ($fromAgreement !== null && $fromAgreement >= 1) {
+                return $fromAgreement;
+            }
+        }
+
+        $course = trim((string) ($student->course ?? ''));
+        if ($student->school_id && $course !== '') {
+            $fromCourse = SchoolCourseRequirement::query()
+                ->where('school_id', $student->school_id)
+                ->where('course_name_key', SchoolCourseRequirement::courseNameKey($course))
+                ->value('required_hours');
+            if (is_numeric($fromCourse) && (int) $fromCourse >= 1) {
+                return (int) $fromCourse;
+            }
+        }
+
+        return max(1, $fallback);
     }
 
     /**
@@ -544,11 +625,35 @@ class OjtLogController extends Controller
     {
         $in = Carbon::createFromFormat('H:i', $timeIn);
         $out = Carbon::createFromFormat('H:i', $timeOut);
+        // Same-day only: overnight (timeOut <= timeIn) yields 0, unchanged.
         if ($out->lessThanOrEqualTo($in)) {
             return 0;
         }
 
         return round($in->diffInMinutes($out) / 60, 2);
+    }
+
+    private function assertDailyHoursWithinCap(float $hours): void
+    {
+        if ($hours > OjtLog::MAX_DAILY_HOURS) {
+            throw ValidationException::withMessages([
+                'timeOut' => ['Daily OJT logs cannot exceed '.rtrim(rtrim(number_format(OjtLog::MAX_DAILY_HOURS, 2, '.', ''), '0'), '.').' hours.'],
+            ]);
+        }
+    }
+
+    private function assertDateNotMarkedAbsent(int $applicationId, string $date): void
+    {
+        $absent = OjtAttendanceEvent::query()
+            ->where('application_id', $applicationId)
+            ->whereDate('date', $date)
+            ->exists();
+
+        if ($absent) {
+            throw ValidationException::withMessages([
+                'date' => ['This day is marked absent. Log make-up hours on another day, or ask the host to clear the absence first.'],
+            ]);
+        }
     }
 
     /**
@@ -566,6 +671,7 @@ class OjtLogController extends Controller
             'timeIn' => substr((string) $log->time_in, 0, 5),
             'timeOut' => substr((string) $log->time_out, 0, 5),
             'hoursRendered' => (float) $log->hours,
+            'isMakeup' => (bool) $log->is_makeup,
             'tasksDone' => $log->tasks,
             'status' => $log->status,
             'rejectionReason' => $log->rejection_reason,

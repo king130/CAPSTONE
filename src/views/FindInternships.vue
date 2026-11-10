@@ -13,6 +13,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import ApplicationCapacity from '@/components/internships/ApplicationCapacity.vue'
 import SaveInternshipButton from '@/components/internships/SaveInternshipButton.vue'
 import PublicSiteHeader from '@/components/PublicSiteHeader.vue'
+import SkillChips from '@/components/skills/SkillChips.vue'
 import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
 import Card from '@/components/ui/card/Card.vue'
@@ -28,12 +29,22 @@ import {
   type InternshipSearchParams,
   type InternshipSortOption,
 } from '@/services/internships'
+import { useActivePlacement } from '@/composables/useActivePlacement'
 import { useAuthStore } from '@/stores/auth'
 import {
   matchCourseProgram,
   stableSortByCourseMatchLevel,
   type CourseMatchLevel,
 } from '@/utils/courseMatch'
+import { formatAllowanceDisplay } from '@/utils/formatAllowance'
+
+const props = withDefaults(
+  defineProps<{
+    /** Render inside intern workspace (no public chrome; partner-eligible catalog copy). */
+    embedded?: boolean
+  }>(),
+  { embedded: false },
+)
 
 const PAGE_SIZE = 9
 const SEARCH_DEBOUNCE_MS = 350
@@ -264,6 +275,17 @@ const filteredCards = computed<ListingCard[]>(() => {
 
 const visibleCards = computed(() => filteredCards.value.slice(0, visibleCount.value))
 const hasMore = computed(() => visibleCount.value < filteredCards.value.length)
+const hasActiveFilters = computed(
+  () =>
+    Boolean(
+      debouncedSearch.value.trim() ||
+        filterCity.value ||
+        filterWorkSetup.value ||
+        filterCourse.value ||
+        filterAllowance.value ||
+        filterScheduleType.value,
+    ),
+)
 const resultCountLabel = computed(() => {
   const n = filteredCards.value.length
   return `${n} opening${n === 1 ? '' : 's'}`
@@ -347,13 +369,16 @@ function scheduleReload() {
   }, 150)
 }
 
+const { hasActivePlacement, placementBlockMessage, refreshActivePlacement } = useActivePlacement()
+
 function applyPath(card: ListingCard) {
   if (!isAuthenticatedStudent.value) {
-    void router.push({ name: 'login', query: { redirect: '/intern/opportunities' } })
+    void router.push({ name: 'login', query: { redirect: '/intern/openings' } })
     return
   }
+  if (hasActivePlacement.value) return
   if (!card.partnered) return
-  void router.push({ name: 'intern-opportunities', query: { focus: card.id } })
+  void router.push({ name: 'intern-openings', query: { focus: card.id } })
 }
 
 function setCatalogSaved(internshipId: string, saved: boolean) {
@@ -376,16 +401,23 @@ watch(
 )
 
 onMounted(() => {
-  if (authStore.user?.role === 'school') {
+  if (!props.embedded && authStore.user?.role === 'school') {
     router.replace('/school')
     return
   }
 
-  if (authStore.user?.role === 'company') {
+  if (!props.embedded && authStore.user?.role === 'company') {
     router.replace('/dashboard')
     return
   }
 
+  // Authenticated interns use the in-workspace openings page (partner-filtered API).
+  if (!props.embedded && isAuthenticatedStudent.value) {
+    router.replace({ name: 'intern-openings' })
+    return
+  }
+
+  void refreshActivePlacement()
   void loadCatalog()
 })
 
@@ -397,24 +429,42 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-background text-foreground">
-    <PublicSiteHeader active="opportunities" />
+  <div :class="embedded ? 'bg-background text-foreground' : 'min-h-screen bg-background text-foreground'">
+    <PublicSiteHeader v-if="!embedded" active="opportunities" />
 
     <main>
-      <section class="border-b border-border bg-muted/40">
-        <div class="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8 lg:py-12">
-          <h1 class="max-w-2xl text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-            Find internships in Cavite
+      <section :class="embedded ? 'pb-2' : 'border-b border-border bg-muted/40'">
+        <div :class="embedded ? 'space-y-1' : 'mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8 lg:py-12'">
+          <h1
+            :class="
+              embedded
+                ? 'text-xl font-semibold text-foreground md:text-2xl'
+                : 'max-w-2xl text-3xl font-semibold tracking-tight text-foreground sm:text-4xl'
+            "
+          >
+            {{ embedded ? 'Internship Opportunities' : 'Find internships in Cavite' }}
           </h1>
-          <p class="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
-            Browse openings the way you’d scan hotel stays — cover, host, location, and availability first.
-            Each posting lists the courses that company accepts. School partnerships control who can apply.
+          <p
+            :class="
+              embedded
+                ? 'text-sm text-muted-foreground'
+                : 'mt-3 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base'
+            "
+          >
+            <template v-if="embedded">
+              Active internship postings from companies and municipal halls that have an eligible agreement with your
+              school. Open a posting to view details and apply.
+            </template>
+            <template v-else>
+              Browse openings the way you’d scan hotel stays — cover, host, location, and availability first.
+              Each posting lists the courses that company accepts. School partnerships control who can apply.
+            </template>
           </p>
         </div>
       </section>
 
-      <section class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        <div class="sticky top-0 z-sticky -mx-4 space-y-3 border-b border-border bg-background/95 px-4 py-4 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+      <section :class="embedded ? 'pt-4' : 'mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8'">
+        <div class="static z-sticky -mx-4 space-y-3 border-b border-border bg-background/95 px-4 py-4 backdrop-blur md:sticky md:top-[4.75rem] sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
           <div class="relative">
             <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -520,7 +570,7 @@ onUnmounted(() => {
                   <span class="text-xs font-medium">No company logo</span>
                 </div>
               </RouterLink>
-              <div class="pointer-events-none absolute left-3 top-3">
+              <div v-if="!embedded || !isAuthenticatedStudent" class="pointer-events-none absolute left-3 top-3">
                 <Badge
                   :variant="card.partnered ? 'success' : 'outline'"
                   :class="
@@ -530,6 +580,14 @@ onUnmounted(() => {
                   "
                 >
                   {{ card.partnered ? 'Partnered with your school' : 'Not yet available' }}
+                </Badge>
+              </div>
+              <div
+                v-else-if="card.courseMatchLabel"
+                class="pointer-events-none absolute left-3 top-3"
+              >
+                <Badge :variant="card.courseMatchVariant" class="bg-background/90">
+                  {{ card.courseMatchLabel }}
                 </Badge>
               </div>
               <div class="absolute right-3 top-3 z-10">
@@ -582,7 +640,7 @@ onUnmounted(() => {
                 </span>
                 <span class="inline-flex items-center gap-1.5">
                   <Wallet class="h-3.5 w-3.5 shrink-0" />
-                  {{ card.allowance?.trim() || 'No allowance' }}
+                  {{ formatAllowanceDisplay(card.allowance) }}
                 </span>
               </div>
 
@@ -591,6 +649,18 @@ onUnmounted(() => {
                 :slots-remaining="card.slotsRemaining"
                 :filled-slots="card.filledSlots"
                 compact
+              />
+
+              <SkillChips
+                v-if="card.skills?.length"
+                :skills="card.skills.map((skill) => ({
+                  id: skill.id,
+                  name: skill.name,
+                  category: skill.category || 'Other',
+                  status: (skill.status as any) || 'approved',
+                  importance: skill.importance || 'required',
+                }))"
+                mode="job"
               />
 
               <div class="flex flex-wrap items-center gap-2">
@@ -607,7 +677,13 @@ onUnmounted(() => {
                 <Badge v-if="!(card.eligibleCourses || []).length" variant="outline">Open to all courses</Badge>
               </div>
 
-              <p v-if="isAuthenticatedStudent && !card.partnered" class="text-xs leading-5 text-muted-foreground">
+              <p v-if="isAuthenticatedStudent && hasActivePlacement" class="text-xs leading-5 text-muted-foreground">
+                {{ placementBlockMessage }}
+              </p>
+              <p
+                v-else-if="isAuthenticatedStudent && !card.partnered && !embedded"
+                class="text-xs leading-5 text-muted-foreground"
+              >
                 Ask your school to partner with this company
               </p>
               <p v-else-if="isGuestOrPublic" class="text-xs leading-5 text-muted-foreground">
@@ -617,14 +693,16 @@ onUnmounted(() => {
               <div class="mt-auto flex flex-wrap gap-2 pt-1">
                 <Button
                   class="flex-1"
-                  :disabled="isAuthenticatedStudent && !card.partnered"
+                  :disabled="isAuthenticatedStudent && (!card.partnered || hasActivePlacement)"
                   @click="applyPath(card)"
                 >
                   {{
                     isAuthenticatedStudent
-                      ? card.partnered
-                        ? 'View & Apply'
-                        : 'Not yet available'
+                      ? hasActivePlacement
+                        ? 'Already placed'
+                        : card.partnered || embedded
+                          ? 'Apply'
+                          : 'Not yet available'
                       : 'Log in to Apply'
                   }}
                 </Button>
@@ -632,7 +710,7 @@ onUnmounted(() => {
                   class="inline-flex h-10 flex-1 items-center justify-center rounded-md border border-border bg-background px-4 text-sm font-medium text-foreground transition hover:bg-accent hover:text-accent-foreground"
                   :to="{ name: 'internship-detail', params: { id: card.id } }"
                 >
-                  Details
+                  View Details
                 </RouterLink>
               </div>
             </div>
@@ -644,11 +722,33 @@ onUnmounted(() => {
             <div class="rounded-2xl bg-muted p-3 text-muted-foreground">
               <BriefcaseBusiness class="h-6 w-6" />
             </div>
-            <h3 class="text-lg font-semibold text-foreground">No openings match these filters</h3>
+            <h3 class="text-lg font-semibold text-foreground">
+              {{
+                isAuthenticatedStudent && catalog.length === 0 && !hasActiveFilters
+                  ? 'No partnered openings yet'
+                  : 'No openings match these filters'
+              }}
+            </h3>
             <p class="max-w-md text-sm text-muted-foreground">
-              Try another city, work setup, or course — or clear filters to see every active Cavite posting.
+              <template v-if="isAuthenticatedStudent && catalog.length === 0 && !hasActiveFilters">
+                Your school has no active host partnerships with published internship openings yet. Ask your
+                coordinator about company or municipal hall agreements, or browse Partner Companies once partnerships
+                are in place.
+              </template>
+              <template v-else>
+                Try another city, work setup, or course — or clear filters to see available openings.
+              </template>
             </p>
-            <Button variant="outline" @click="clearFilters">Clear filters</Button>
+            <div class="flex flex-wrap justify-center gap-2">
+              <Button v-if="hasActiveFilters" variant="outline" @click="clearFilters">Clear filters</Button>
+              <RouterLink
+                v-if="embedded && isAuthenticatedStudent && catalog.length === 0 && !hasActiveFilters"
+                :to="{ name: 'intern-opportunities' }"
+                class="inline-flex h-10 items-center justify-center rounded-md border border-border bg-background px-4 text-sm font-medium text-foreground hover:bg-accent"
+              >
+                View Partner Companies
+              </RouterLink>
+            </div>
           </CardContent>
         </Card>
 
@@ -660,7 +760,7 @@ onUnmounted(() => {
       </section>
     </main>
 
-    <footer class="border-t border-border bg-card">
+    <footer v-if="!embedded" class="border-t border-border bg-card">
       <div
         class="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-8 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8"
       >

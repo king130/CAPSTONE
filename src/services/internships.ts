@@ -68,6 +68,13 @@ export interface InternshipRecord {
   saved?: boolean
   tasks?: string
   requiredSkills?: string[]
+  skills?: Array<{
+    id: string
+    name: string
+    category?: string
+    status?: string
+    importance?: 'required' | 'nice_to_have'
+  }>
   internGains?: string
   requiredDocuments?: string[]
   requiresResume?: boolean
@@ -75,7 +82,7 @@ export interface InternshipRecord {
   contactInfo?: string
   approvalStatus?: 'pending' | 'approved' | 'declined'
   approvalNotes?: string
-  status: 'active' | 'draft' | 'closed'
+  status: 'active' | 'draft' | 'closed' | 'filled'
   createdAt?: unknown
   updatedAt?: unknown
 }
@@ -214,6 +221,9 @@ export function normalizeInternshipRecord(raw: unknown): InternshipRecord {
     saved: asBoolean(row.saved),
     tasks: asOptionalString(row.tasks) ?? undefined,
     requiredSkills: asStringArray(row.requiredSkills ?? row.required_skills),
+    skills: Array.isArray(row.skills)
+      ? (row.skills as InternshipRecord['skills'])
+      : [],
     internGains: asOptionalString(row.internGains ?? row.intern_gains) ?? undefined,
     requiredDocuments: asStringArray(row.requiredDocuments ?? row.required_documents),
     applicationInstructions:
@@ -327,8 +337,12 @@ export async function getInternship(internshipId: string): Promise<InternshipRec
   try {
     const res = await apiFetch<{ data: unknown }>(`/internships/${internshipId}`)
     return res.data ? normalizeInternshipRecord(res.data) : null
-  } catch {
-    return null
+  } catch (err) {
+    // Preserve agreement/auth failures for callers that show a clear message.
+    // Only map hard-missing resources to null.
+    const status = typeof err === 'object' && err && 'status' in err ? Number((err as { status: unknown }).status) : 0
+    if (status === 404) return null
+    throw err
   }
 }
 
@@ -363,6 +377,10 @@ export async function createInternship(payload: CreateInternshipPayload): Promis
       is_flexible: payload.isFlexible,
       tasks: payload.tasks,
       required_skills: payload.requiredSkills,
+      skills: (payload.skills || []).map((skill) => ({
+        id: skill.id,
+        importance: skill.importance || 'required',
+      })),
       intern_gains: payload.internGains,
       required_documents: ['Endorsement'],
       requires_resume: false,
@@ -404,6 +422,12 @@ export async function updateInternship(internshipId: string, payload: Partial<In
       is_flexible: payload.isFlexible,
       tasks: payload.tasks,
       required_skills: payload.requiredSkills,
+      skills: payload.skills
+        ? payload.skills.map((skill) => ({
+            id: skill.id,
+            importance: skill.importance || 'required',
+          }))
+        : undefined,
       intern_gains: payload.internGains,
       required_documents: ['Endorsement'],
       requires_resume: false,

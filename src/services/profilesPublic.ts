@@ -4,6 +4,7 @@ export type AgreementDirectoryStatus = 'pending' | 'active' | null
 
 export interface PublicProfile {
   uid: string
+  organizationId?: string
   displayName: string
   role: 'school' | 'company' | 'student'
   orgName?: string
@@ -72,8 +73,13 @@ export async function listPublicProfiles(role: 'school' | 'company'): Promise<Pu
         ? verificationRaw.trim().toLowerCase()
         : 'pending'
 
+    const organizationIdRaw = row.organizationId ?? row.organization_id
     return {
       uid: String(row.uid ?? ''),
+      organizationId:
+        typeof organizationIdRaw === 'string' || typeof organizationIdRaw === 'number'
+          ? String(organizationIdRaw)
+          : undefined,
       displayName: String(row.displayName ?? row.display_name ?? ''),
       role: (row.role as PublicProfile['role']) ?? role,
       orgName: typeof row.orgName === 'string' ? row.orgName : typeof row.org_name === 'string' ? row.org_name : undefined,

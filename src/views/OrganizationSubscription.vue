@@ -27,11 +27,11 @@ function goBack() {
 
 <template>
   <MainLayout :role="role" :title="title" active-item="subscription">
-    <div class="space-y-5">
+    <div class="space-y-5 text-slate-900 dark:text-white">
       <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 class="text-2xl font-semibold tracking-tight text-foreground">Subscription</h2>
-          <p class="mt-1 text-sm text-muted-foreground">
+          <h2 class="text-2xl font-semibold tracking-tight text-slate-900 dark:text-white">Subscription</h2>
+          <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
             {{
               role === 'school'
                 ? 'Manage school plan limits, PayMongo upgrades, and verification.'

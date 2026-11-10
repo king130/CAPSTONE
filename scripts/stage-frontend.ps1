@@ -17,6 +17,10 @@ $frontendEntries = @(
     'icons',
     'favicon.ico',
     'index.html',
+    'manifest.webmanifest',
+    '.well-known',
+    'robots.txt',
+    'sitemap.xml',
     'undraw_working-remotely_ivtz-1024x815.webp'
 )
 

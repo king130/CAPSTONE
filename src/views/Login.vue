@@ -17,6 +17,7 @@ import FormItem from '@/components/ui/form/FormItem.vue'
 import FormLabel from '@/components/ui/form/FormLabel.vue'
 import FormMessage from '@/components/ui/form/FormMessage.vue'
 import Input from '@/components/ui/input/Input.vue'
+import PasswordInput from '@/components/ui/password-input/PasswordInput.vue'
 import { useToast } from '@/composables/useToast'
 import AuthLayout from '@/layouts/AuthLayout.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -165,9 +166,8 @@ const onSubmit = handleSubmit(async (values) => {
             <FormItem>
               <FormLabel for="password">Password</FormLabel>
               <FormControl>
-                <Input
+                <PasswordInput
                   id="password"
-                  type="password"
                   placeholder="Enter your password"
                   autocomplete="current-password"
                   v-bind="componentField"

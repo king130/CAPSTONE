@@ -24,6 +24,7 @@ import FormItem from '@/components/ui/form/FormItem.vue'
 import FormLabel from '@/components/ui/form/FormLabel.vue'
 import FormMessage from '@/components/ui/form/FormMessage.vue'
 import Input from '@/components/ui/input/Input.vue'
+import PasswordInput from '@/components/ui/password-input/PasswordInput.vue'
 import Select from '@/components/ui/select/Select.vue'
 import { caviteBarangaysByLocation, caviteLocationGroups } from '@/config/courseCatalog'
 import { useToast } from '@/composables/useToast'
@@ -592,10 +593,10 @@ const onSubmit = handleSubmit(async (formValues) => {
               <FormItem>
                 <FormLabel for="registerPassword">Password</FormLabel>
                 <FormControl>
-                  <Input
+                  <PasswordInput
                     id="registerPassword"
-                    type="password"
-                    placeholder="Min. 8 chars, letter + number"
+                    placeholder="8+ chars, letter + number"
+                    class="placeholder:text-muted-foreground/45"
                     autocomplete="new-password"
                     :form="registerFormId"
                     :disabled="submitting || !!successMessage"
@@ -611,9 +612,8 @@ const onSubmit = handleSubmit(async (formValues) => {
               <FormItem>
                 <FormLabel for="confirmPassword">Confirm Password</FormLabel>
                 <FormControl>
-                  <Input
+                  <PasswordInput
                     id="confirmPassword"
-                    type="password"
                     placeholder="Re-enter your password"
                     autocomplete="new-password"
                     :form="registerFormId"
@@ -720,12 +720,12 @@ const onSubmit = handleSubmit(async (formValues) => {
         </Alert>
 
         <form :id="registerFormId" class="space-y-4" novalidate @submit="onSubmit">
-          <div class="rounded-2xl border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 px-3 py-2.5 text-sm text-amber-950">
-            <div class="flex items-center gap-2 font-semibold">
-              <GraduationCap class="h-4 w-4" />
+          <div class="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950 dark:border-amber-500/50 dark:bg-amber-950/50 dark:text-amber-50">
+            <div class="flex items-center gap-2 font-semibold text-amber-950 dark:text-amber-50">
+              <GraduationCap class="h-4 w-4 shrink-0" />
               <span>Student accounts are not created here</span>
             </div>
-            <p class="mt-1.5 text-xs leading-4 text-amber-900/80">
+            <p class="mt-1.5 text-xs leading-4 text-amber-900/90 dark:text-amber-100/90">
               Schools invite students so intern records stay linked to the correct institution.
             </p>
           </div>
@@ -758,7 +758,8 @@ const onSubmit = handleSubmit(async (formValues) => {
                     <FormControl>
                       <Input
                         id="schoolName"
-                        placeholder="Enter your institution name"
+                        placeholder="Institution name"
+                        class="placeholder:text-muted-foreground/45"
                         :disabled="submitting || !!successMessage"
                         v-bind="componentField"
                         @update:modelValue="setFieldValue('schoolName', $event)"
@@ -901,7 +902,8 @@ const onSubmit = handleSubmit(async (formValues) => {
                       id="contactPhone"
                       type="tel"
                       inputmode="tel"
-                      placeholder="09171234567"
+                      placeholder="e.g. 09XXXXXXXXX"
+                      class="placeholder:text-muted-foreground/45"
                       autocomplete="tel"
                       :disabled="submitting || !!successMessage"
                       v-bind="componentField"
@@ -922,7 +924,7 @@ const onSubmit = handleSubmit(async (formValues) => {
                       :disabled="submitting || !!successMessage"
                       @update:model-value="setFieldValue('locationArea', $event)"
                     >
-                      <option value="" disabled>Select city or municipality</option>
+                      <option value="" disabled>Select city / municipality</option>
                       <optgroup
                         v-for="group in caviteLocationGroups"
                         :key="group.label"

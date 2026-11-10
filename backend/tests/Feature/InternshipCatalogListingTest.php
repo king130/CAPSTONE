@@ -218,9 +218,10 @@ class InternshipCatalogListingTest extends TestCase
         $internship = $this->makeInternship($ctx);
 
         Sanctum::actingAs($ctx['studentUser']);
+        // Students only receive partnered/host-eligible listings.
         $this->getJson('/api/internships?status=active')
             ->assertOk()
-            ->assertJsonPath('data.0.partnered_with_my_school', false);
+            ->assertJsonPath('data', []);
 
         Contract::query()->create([
             'school_user_id' => $ctx['schoolUser']->id,
@@ -235,12 +236,12 @@ class InternshipCatalogListingTest extends TestCase
         ]);
         $this->getJson('/api/internships?status=active')
             ->assertOk()
-            ->assertJsonPath('data.0.partnered_with_my_school', false);
+            ->assertJsonPath('data', []);
 
         Contract::query()->where('status', 'pending')->update(['status' => 'cancelled']);
         $this->getJson('/api/internships?status=active')
             ->assertOk()
-            ->assertJsonPath('data.0.partnered_with_my_school', false);
+            ->assertJsonPath('data', []);
 
         Contract::query()->create([
             'school_user_id' => $ctx['schoolUser']->id,
@@ -255,6 +256,7 @@ class InternshipCatalogListingTest extends TestCase
         ]);
         $this->getJson('/api/internships?status=active')
             ->assertOk()
+            ->assertJsonPath('data.0.id', (string) $internship->id)
             ->assertJsonPath('data.0.partnered_with_my_school', true);
 
         $schoolHosted = Internship::query()->create([

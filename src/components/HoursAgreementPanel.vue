@@ -11,6 +11,7 @@ import {
   type HoursAgreementRecord,
 } from '@/services/applications'
 import { useToast } from '@/composables/useToast'
+import { statusLabel } from '@/utils/statusLabels'
 
 const props = defineProps<{
   applicationId: string
@@ -177,7 +178,7 @@ async function decline() {
     <template v-else-if="agreement">
       <p class="text-muted-foreground">
         Status:
-        <span class="font-medium capitalize text-foreground">{{ agreement.status }}</span>
+        <span class="font-medium text-foreground">{{ statusLabel(agreement.status) }}</span>
         <span v-if="agreement.proposedHours"> · Proposed: {{ agreement.proposedHours }}h</span>
         <span v-if="agreement.schoolConfirmed"> · School confirmed</span>
         <span v-if="agreement.hostConfirmed"> · Host confirmed</span>

@@ -34,9 +34,9 @@ const emit = defineEmits<{
         <p class="text-sm leading-6 text-muted-foreground">{{ description }}</p>
       </DialogHeader>
 
-      <div class="mt-6 flex justify-end gap-3">
-        <Button variant="outline" @click="close">{{ cancelLabel }}</Button>
-        <Button :variant="actionVariant" @click="emit('action'); close()">{{ actionLabel }}</Button>
+      <div class="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end sm:gap-3">
+        <Button variant="outline" class="w-full sm:w-auto" @click="close">{{ cancelLabel }}</Button>
+        <Button :variant="actionVariant" class="w-full sm:w-auto" @click="emit('action'); close()">{{ actionLabel }}</Button>
       </div>
     </template>
   </Dialog>

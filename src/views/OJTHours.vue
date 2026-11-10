@@ -71,8 +71,8 @@ import {
   type OJTLog,
   type OJTProgress,
 } from '@/services/ojtService'
-import { fetchOrgOjtSettings } from '@/services/settings'
 import { useAuthStore } from '@/stores/auth'
+import { statusLabel as formatStatusLabel } from '@/utils/statusLabels'
 
 type WorkspaceRole = 'student' | 'company' | 'school' | 'admin'
 type CompanyTab = 'pending' | 'approved' | 'rejected'
@@ -83,6 +83,7 @@ interface OJTLogForm {
   timeOut: string
   tasksDone: string
   mood: '' | 'productive' | 'okay' | 'difficult' | 'great'
+  isMakeup: boolean
 }
 
 interface RejectForm {
@@ -187,13 +188,7 @@ function statusBadgeVariant(status: string) {
 }
 
 function statusLabel(status: string) {
-  return status
-    .split('_')
-    .join(' ')
-    .split(' ')
-    .filter(Boolean)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(' ')
+  return formatStatusLabel(status)
 }
 
 function roleFromUser(role: string | null | undefined): WorkspaceRole {
@@ -240,7 +235,7 @@ const authStore = useAuthStore()
 const { success, error } = useToast()
 
 const currentRole = computed<WorkspaceRole>(() => roleFromUser(authStore.user?.role))
-const pageTitle = computed(() => 'OJT Hours')
+const pageTitle = computed(() => (currentRole.value === 'student' ? 'DTR' : 'OJT Hours'))
 const today = todayIsoString()
 
 const internLoading = ref(true)
@@ -270,12 +265,12 @@ const deleteDialogOpen = ref(false)
 const selectedLog = ref<OJTLog | null>(null)
 
 const companyTab = ref<CompanyTab>('pending')
-const companyRequiredHours = ref(0)
 const companyLogsByStatus = ref<Record<CompanyTab, OJTLog[]>>({
   pending: [],
   approved: [],
   rejected: [],
 })
+const companyInternSummaries = ref<InternOJTSummary[]>([])
 const selectedCompanyLogIds = ref<number[]>([])
 const rejectDialogOpen = ref(false)
 const rejectTargetLog = ref<OJTLog | null>(null)
@@ -322,6 +317,7 @@ const internLogSchema = toTypedSchema(
       timeOut: z.string().min(1, 'Time out is required.'),
       tasksDone: z.string().min(1, 'Tasks done is required.'),
       mood: z.enum(['', 'productive', 'okay', 'difficult', 'great']).optional(),
+      isMakeup: z.boolean().optional(),
     })
     .superRefine((values, context) => {
       if (!values.timeIn || !values.timeOut) return
@@ -362,6 +358,7 @@ const {
     timeOut: '',
     tasksDone: '',
     mood: '',
+    isMakeup: false,
   },
 })
 
@@ -378,6 +375,7 @@ const {
     timeOut: '',
     tasksDone: '',
     mood: '',
+    isMakeup: false,
   },
 })
 
@@ -418,38 +416,36 @@ const paginatedInternLogs = computed(() => {
 const internHistoryTotalPages = computed(() => Math.max(1, Math.ceil(filteredInternLogs.value.length / internHistoryPageSize)))
 
 const activeCompanyLogs = computed(() => companyLogsByStatus.value[companyTab.value])
-const companySummaryCards = computed<CompanySummaryCard[]>(() => {
-  const approvedLogs = companyLogsByStatus.value.approved
-  const map = new Map<number, CompanySummaryCard>()
+const companySummaryCards = computed<CompanySummaryCard[]>(() =>
+  companyInternSummaries.value
+    .map((summary) => {
+      const requiredHours = Number(summary.requiredHours || 0)
+      const approvedHours = Number(summary.approvedHours || 0)
+      const percent = requiredHours > 0 ? Math.min(100, (approvedHours / requiredHours) * 100) : 0
+      const status: CompanySummaryCard['status'] =
+        (summary.status as CompanySummaryCard['status']) ||
+        (approvedHours >= requiredHours && requiredHours > 0
+          ? 'completed'
+          : percent >= 60
+            ? 'on_track'
+            : approvedHours > 0
+              ? 'at_risk'
+              : 'not_started')
 
-  approvedLogs.forEach((log) => {
-    const existing = map.get(log.internId)
-    const approvedHours = (existing?.approvedHours ?? 0) + log.hoursRendered
-    const percent = companyRequiredHours.value ? Math.min(100, (approvedHours / companyRequiredHours.value) * 100) : 0
-    const status: CompanySummaryCard['status'] =
-      approvedHours >= companyRequiredHours.value && companyRequiredHours.value > 0
-        ? 'completed'
-        : percent >= 60
-          ? 'on_track'
-          : approvedHours > 0
-            ? 'at_risk'
-            : 'not_started'
-
-    map.set(log.internId, {
-      internId: log.internId,
-      internName: log.internName,
-      company: log.company ?? '',
-      school: log.school ?? '',
-      approvedHours,
-      requiredHours: companyRequiredHours.value,
-      status,
-      initials: initialsFromName(log.internName),
-      percent,
+      return {
+        internId: summary.internId,
+        internName: summary.internName,
+        company: summary.company ?? '',
+        school: summary.school ?? '',
+        approvedHours,
+        requiredHours,
+        status,
+        initials: summary.avatarFallback || initialsFromName(summary.internName),
+        percent,
+      }
     })
-  })
-
-  return Array.from(map.values()).sort((left, right) => left.internName.localeCompare(right.internName))
-})
+    .sort((left, right) => left.internName.localeCompare(right.internName)),
+)
 
 const schoolStats = computed(() => {
   const total = schoolSummaries.value.length
@@ -506,6 +502,7 @@ function openEditDialog(log: OJTLog) {
       timeOut: log.timeOut,
       tasksDone: log.tasksDone,
       mood: log.mood ?? '',
+      isMakeup: Boolean(log.isMakeup),
     },
   })
   editDialogOpen.value = true
@@ -558,14 +555,14 @@ async function loadInternData() {
 async function loadCompanyData() {
   companyLoading.value = true
   try {
-    const [pending, approved, rejected, ojtSettings] = await Promise.all([
+    const [pending, approved, rejected, summaries] = await Promise.all([
       listCompanyOJTLogs('pending'),
       listCompanyOJTLogs('approved'),
       listCompanyOJTLogs('rejected'),
-      fetchOrgOjtSettings().catch(() => ({ requiredHours: 500 })),
+      fetchSchoolOJTSummaries().catch(() => [] as InternOJTSummary[]),
     ])
     companyLogsByStatus.value = { pending, approved, rejected }
-    companyRequiredHours.value = Number(ojtSettings?.requiredHours ?? 500)
+    companyInternSummaries.value = summaries
     selectedCompanyLogIds.value = selectedCompanyLogIds.value.filter((logId) => pending.some((log) => log.id === logId))
   } catch (caughtError) {
     error(caughtError, { fallback: 'Unable to load company OJT approvals.' })
@@ -615,6 +612,7 @@ const submitNewLog = handleCreateSubmit(async (values) => {
       timeOut: values.timeOut,
       tasksDone: values.tasksDone,
       mood: values.mood || undefined,
+      isMakeup: Boolean(values.isMakeup),
     }
     await createOJTLog(payload)
     success('Hours logged successfully')
@@ -625,6 +623,7 @@ const submitNewLog = handleCreateSubmit(async (values) => {
         timeOut: '',
         tasksDone: '',
         mood: '',
+        isMakeup: false,
       },
     })
     await loadInternData()
@@ -645,6 +644,7 @@ const submitEditedLog = handleEditSubmit(async (values) => {
       timeOut: values.timeOut,
       tasksDone: values.tasksDone,
       mood: values.mood || undefined,
+      isMakeup: Boolean(values.isMakeup),
     })
     success('Log updated successfully')
     editDialogOpen.value = false
@@ -803,6 +803,7 @@ onMounted(() => {
       timeOut: '',
       tasksDone: '',
       mood: '',
+      isMakeup: false,
     },
   })
   void refreshCurrentRoleData()
@@ -916,6 +917,25 @@ onMounted(() => {
                 </FormItem>
               </FormField>
 
+              <FormField v-slot="{ value }" name="isMakeup">
+                <FormItem class="md:col-span-2">
+                  <label class="flex items-start gap-3 text-sm">
+                    <input
+                      type="checkbox"
+                      class="mt-1 h-4 w-4 rounded border-input"
+                      :checked="Boolean(value)"
+                      @change="setCreateFieldValue('isMakeup', ($event.target as HTMLInputElement).checked)"
+                    >
+                    <span>
+                      <span class="font-medium text-foreground">Make-up hours</span>
+                      <span class="block text-muted-foreground">
+                        Use this when logging hours on another day to cover an absence. Still needs host approval.
+                      </span>
+                    </span>
+                  </label>
+                </FormItem>
+              </FormField>
+
               <div class="md:col-span-2">
                 <Button type="submit" class="w-full" :disabled="logSubmitting || hasTodaysLog">
                   <LoaderCircle v-if="logSubmitting" class="h-4 w-4 animate-spin" />
@@ -988,8 +1008,48 @@ onMounted(() => {
               <Skeleton v-for="index in 6" :key="index" class="h-14 rounded-xl" />
             </div>
 
-            <div v-else class="overflow-hidden rounded-xl border border-border">
-              <Table>
+            <div v-else-if="!paginatedInternLogs.length" class="rounded-xl border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
+              No OJT logs match the selected date range.
+            </div>
+
+            <div v-else class="responsive-table-mobile space-y-3">
+              <article
+                v-for="log in paginatedInternLogs"
+                :key="`mobile-${log.id}`"
+                class="rounded-xl border border-border bg-card p-4"
+              >
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <p class="font-semibold text-foreground">
+                      {{ formatDate(log.date) }}
+                      <span
+                        v-if="log.isMakeup"
+                        class="ml-2 rounded-full bg-violet-500/15 px-2 py-0.5 text-[11px] font-medium text-violet-700 dark:text-violet-300"
+                      >Make-up</span>
+                    </p>
+                    <p class="mt-1 text-sm text-muted-foreground">{{ log.timeIn }} – {{ log.timeOut }} · {{ formatHours(log.hoursRendered) }}h</p>
+                  </div>
+                  <Badge :variant="statusBadgeVariant(log.status)">{{ statusLabel(log.status) }}</Badge>
+                </div>
+                <p class="mt-3 line-clamp-3 text-sm text-slate-600 dark:text-slate-300">{{ log.tasksDone }}</p>
+                <p v-if="log.status === 'rejected' && log.rejectionReason" class="mt-2 text-xs text-muted-foreground">
+                  {{ log.rejectionReason }}
+                </p>
+                <div v-if="log.status === 'pending'" class="mt-4 flex gap-2">
+                  <Button class="min-h-11 flex-1" variant="outline" @click="openEditDialog(log)">
+                    <Pencil class="h-4 w-4" />
+                    Edit
+                  </Button>
+                  <Button class="min-h-11 flex-1 text-red-600" variant="outline" @click="openDeleteDialog(log)">
+                    <Trash2 class="h-4 w-4" />
+                    Delete
+                  </Button>
+                </div>
+              </article>
+            </div>
+
+            <div v-if="paginatedInternLogs.length" class="responsive-table-desktop overflow-x-auto rounded-xl border border-border">
+              <Table class="min-w-[48rem]">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Date</TableHead>
@@ -1009,15 +1069,20 @@ onMounted(() => {
                     <TableCell>{{ formatHours(log.hoursRendered) }}</TableCell>
                     <TableCell class="max-w-xs truncate">{{ log.tasksDone }}</TableCell>
                     <TableCell>
-                      <HoverCard v-if="log.status === 'rejected' && log.rejectionReason">
-                        <template #trigger>
-                          <Badge :variant="statusBadgeVariant(log.status)">{{ statusLabel(log.status) }}</Badge>
-                        </template>
-                        <div class="space-y-1">
-                          <p class="font-semibold">Rejection reason</p>
-                          <p class="text-muted-foreground">{{ log.rejectionReason }}</p>
-                        </div>
-                      </HoverCard>
+                      <div v-if="log.status === 'rejected' && log.rejectionReason" class="space-y-1">
+                        <Badge :variant="statusBadgeVariant(log.status)">{{ statusLabel(log.status) }}</Badge>
+                        <HoverCard>
+                          <template #trigger>
+                            <button type="button" class="min-h-11 text-xs text-primary underline-offset-2 hover:underline">
+                              Why rejected?
+                            </button>
+                          </template>
+                          <div class="space-y-1">
+                            <p class="font-semibold">Rejection reason</p>
+                            <p class="text-muted-foreground">{{ log.rejectionReason }}</p>
+                          </div>
+                        </HoverCard>
+                      </div>
                       <Badge v-else :variant="statusBadgeVariant(log.status)">{{ statusLabel(log.status) }}</Badge>
                     </TableCell>
                     <TableCell>
@@ -1039,24 +1104,19 @@ onMounted(() => {
                       </div>
                     </TableCell>
                   </TableRow>
-                  <TableRow v-if="!paginatedInternLogs.length">
-                    <TableCell colspan="7" class="py-10 text-center text-muted-foreground">
-                      No OJT logs match the selected date range.
-                    </TableCell>
-                  </TableRow>
                 </TableBody>
               </Table>
             </div>
 
-            <div class="mt-4 flex items-center justify-between text-sm text-muted-foreground">
+            <div class="mt-4 flex flex-col gap-3 pb-[var(--shell-chat-clearance)] text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between md:pb-0">
               <p>Page {{ internHistoryPage }} of {{ internHistoryTotalPages }}</p>
               <div class="flex gap-2">
-                <Button variant="outline" size="sm" :disabled="internHistoryPage <= 1" @click="internHistoryPage -= 1">
+                <Button variant="outline" class="min-h-11 flex-1 sm:flex-none" :disabled="internHistoryPage <= 1" @click="internHistoryPage -= 1">
                   Previous
                 </Button>
                 <Button
                   variant="outline"
-                  size="sm"
+                  class="min-h-11 flex-1 sm:flex-none"
                   :disabled="internHistoryPage >= internHistoryTotalPages"
                   @click="internHistoryPage += 1"
                 >
@@ -1095,7 +1155,7 @@ onMounted(() => {
           </CardHeader>
           <CardContent>
             <Tabs v-model="companyTab">
-              <TabsList class="grid w-full grid-cols-3">
+              <TabsList class="grid w-full grid-cols-3 text-xs sm:text-sm">
                 <TabsTrigger value="pending">Pending</TabsTrigger>
                 <TabsTrigger value="approved">Approved</TabsTrigger>
                 <TabsTrigger value="rejected">Rejected</TabsTrigger>
@@ -1110,8 +1170,8 @@ onMounted(() => {
                 <div v-if="companyLoading" class="space-y-3">
                   <Skeleton v-for="index in 5" :key="index" class="h-14 rounded-xl" />
                 </div>
-                <div v-else class="overflow-hidden rounded-xl border border-border">
-                  <Table>
+                <div v-else class="overflow-x-auto rounded-xl border border-border">
+                  <Table class="min-w-[48rem]">
                     <TableHeader>
                       <TableRow>
                         <TableHead class="w-28">
@@ -1149,7 +1209,13 @@ onMounted(() => {
                           />
                         </TableCell>
                         <TableCell class="font-medium">{{ log.internName }}</TableCell>
-                        <TableCell>{{ formatDate(log.date) }}</TableCell>
+                        <TableCell>
+                          {{ formatDate(log.date) }}
+                          <span
+                            v-if="log.isMakeup"
+                            class="ml-1 rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300"
+                          >Make-up</span>
+                        </TableCell>
                         <TableCell>{{ log.timeIn }}</TableCell>
                         <TableCell>{{ log.timeOut }}</TableCell>
                         <TableCell>{{ formatHours(log.hoursRendered) }}</TableCell>
@@ -1181,8 +1247,8 @@ onMounted(() => {
                 <div v-if="companyLoading" class="space-y-3">
                   <Skeleton v-for="index in 4" :key="index" class="h-14 rounded-xl" />
                 </div>
-                <div v-else class="overflow-hidden rounded-xl border border-border">
-                  <Table>
+                <div v-else class="overflow-x-auto rounded-xl border border-border">
+                  <Table class="min-w-[48rem]">
                     <TableHeader>
                       <TableRow>
                         <TableHead>Intern Name</TableHead>
@@ -1216,8 +1282,8 @@ onMounted(() => {
                 <div v-if="companyLoading" class="space-y-3">
                   <Skeleton v-for="index in 4" :key="index" class="h-14 rounded-xl" />
                 </div>
-                <div v-else class="overflow-hidden rounded-xl border border-border">
-                  <Table>
+                <div v-else class="overflow-x-auto rounded-xl border border-border">
+                  <Table class="min-w-[48rem]">
                     <TableHeader>
                       <TableRow>
                         <TableHead>Intern Name</TableHead>
@@ -1283,7 +1349,7 @@ onMounted(() => {
               </Card>
               <Card v-if="!companySummaryCards.length" class="border-dashed">
                 <CardContent class="flex min-h-40 items-center justify-center p-6 text-center text-muted-foreground">
-                  Intern progress cards will appear after approved OJT logs start coming in.
+                  Intern progress cards will appear after approved OJT logs or DTR hours start coming in.
                 </CardContent>
               </Card>
             </div>
@@ -1318,7 +1384,7 @@ onMounted(() => {
             <CardContent class="space-y-2 p-5">
               <p class="text-sm text-muted-foreground">Not Yet Started</p>
               <Skeleton v-if="schoolLoading" class="h-8 w-20" />
-              <p v-else class="text-3xl font-semibold text-red-600">{{ schoolStats.notYetStarted }}</p>
+              <p v-else class="text-3xl font-semibold text-muted-foreground">{{ schoolStats.notYetStarted }}</p>
             </CardContent>
           </Card>
         </div>
@@ -1344,8 +1410,8 @@ onMounted(() => {
             <div v-if="schoolLoading" class="space-y-3">
               <Skeleton v-for="index in 6" :key="index" class="h-14 rounded-xl" />
             </div>
-            <div v-else class="overflow-hidden rounded-xl border border-border">
-              <Table>
+            <div v-else class="overflow-x-auto rounded-xl border border-border">
+              <Table class="min-w-[48rem]">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Intern Name</TableHead>
@@ -1463,8 +1529,8 @@ onMounted(() => {
             <div v-if="adminLoading" class="space-y-3">
               <Skeleton v-for="index in 6" :key="index" class="h-14 rounded-xl" />
             </div>
-            <div v-else class="overflow-hidden rounded-xl border border-border">
-              <Table>
+            <div v-else class="overflow-x-auto rounded-xl border border-border">
+              <Table class="min-w-[48rem]">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Intern</TableHead>
@@ -1626,6 +1692,22 @@ onMounted(() => {
                 <FormMessage :message="errorMessage || editErrors.tasksDone" />
               </FormItem>
             </FormField>
+            <FormField v-slot="{ value }" name="isMakeup">
+              <FormItem class="md:col-span-2">
+                <label class="flex items-start gap-3 text-sm">
+                  <input
+                    type="checkbox"
+                    class="mt-1 h-4 w-4 rounded border-input"
+                    :checked="Boolean(value)"
+                    @change="setEditFieldValue('isMakeup', ($event.target as HTMLInputElement).checked)"
+                  >
+                  <span>
+                    <span class="font-medium text-foreground">Make-up hours</span>
+                    <span class="block text-muted-foreground">Mark when this entry covers an absence on another day.</span>
+                  </span>
+                </label>
+              </FormItem>
+            </FormField>
             <div class="flex justify-end gap-3 md:col-span-2">
               <Button variant="outline" @click="close">Cancel</Button>
               <Button type="submit" :disabled="editSubmitting">
@@ -1689,8 +1771,8 @@ onMounted(() => {
               Full read-only OJT log history for the selected intern.
             </p>
           </DialogHeader>
-          <div class="mt-6 overflow-hidden rounded-xl border border-border">
-            <Table>
+          <div class="mt-6 overflow-x-auto rounded-xl border border-border">
+            <Table class="min-w-[48rem]">
               <TableHeader>
                 <TableRow>
                   <TableHead>Date</TableHead>

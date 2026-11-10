@@ -5,6 +5,7 @@ import { computed, h, onMounted, ref, watch } from 'vue'
 
 import AdminEntityTable from '@/components/admin/AdminEntityTable.vue'
 import AdminRowActions from '@/components/admin/AdminRowActions.vue'
+import FilePreviewActions from '@/components/FilePreviewActions.vue'
 import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
 import Card from '@/components/ui/card/Card.vue'
@@ -13,9 +14,9 @@ import Select from '@/components/ui/select/Select.vue'
 import Textarea from '@/components/ui/textarea/Textarea.vue'
 import { useToast } from '@/composables/useToast'
 import { fetchAdminApplications, fetchAdminUsers, updateAdminApplicationStatus, updateAdminUser, type AdminApplicationRecord, type AdminUserRecord, type VerificationStatus } from '@/services/admin'
+import { fetchApiFileBlob } from '@/services/fileBlob'
 import {
   documentTypeLabel,
-  downloadOrganizationVerificationDocument,
   listAdminVerificationDocuments,
   markAdminVerificationDocumentViewed,
   reviewAdminVerificationDocument,
@@ -578,16 +579,18 @@ async function openOrganizationDetails(row: OrganizationRow) {
   }
 }
 
-async function downloadAdminDoc(doc: OrganizationVerificationDocument) {
-  try {
-    const marked = await markAdminVerificationDocumentViewed(doc.id)
-    await downloadOrganizationVerificationDocument(doc.id, doc.fileName, true)
-    verificationDocs.value = verificationDocs.value.map((row) => (row.id === marked.id ? marked : row))
-    if (selectedRecord.value && 'userId' in selectedRecord.value) {
-      syncDocViewProgress(selectedRecord.value.userId, verificationDocs.value)
+function adminVerificationDocLoader(doc: OrganizationVerificationDocument) {
+  return async () => {
+    try {
+      const marked = await markAdminVerificationDocumentViewed(doc.id)
+      verificationDocs.value = verificationDocs.value.map((row) => (row.id === marked.id ? marked : row))
+      if (selectedRecord.value && 'userId' in selectedRecord.value) {
+        syncDocViewProgress(selectedRecord.value.userId, verificationDocs.value)
+      }
+    } catch {
+      // Preview can still proceed if mark-viewed fails.
     }
-  } catch (caughtError) {
-    error(caughtError, { fallback: 'Unable to download the document.' })
+    return fetchApiFileBlob(`/admin/verification-documents/${doc.id}/file`)
   }
 }
 
@@ -782,7 +785,12 @@ onMounted(() => {
                       {{ doc.history.length }} previous version(s) retained
                     </p>
                   </div>
-                  <Button size="sm" variant="outline" @click="downloadAdminDoc(doc)">View file</Button>
+                  <FilePreviewActions
+                    :file-name="doc.fileName || 'verification-document'"
+                    :mime-type="doc.fileMime"
+                    :file-size="doc.fileSize"
+                    :loader="adminVerificationDocLoader(doc)"
+                  />
                 </div>
                 <div class="flex flex-wrap gap-2">
                   <Button size="sm" variant="outline" @click="openDocReview(doc, 'approved')">Approve file</Button>

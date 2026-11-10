@@ -1,0 +1,1 @@
+import{c as o}from"./utils-C8nBGPD0.js";import{d as n,c as t,e as c,j as l,m}from"./index-Cup9-gzb.js";const i=n({__name:"Skeleton",props:{class:{default:""}},setup(e){const s=e,a=m(()=>o("animate-pulse rounded-md bg-muted",s.class));return(r,p)=>(t(),c("div",{class:l(a.value)},null,2))}});export{i as _};

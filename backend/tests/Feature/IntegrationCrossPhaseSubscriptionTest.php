@@ -145,7 +145,7 @@ class IntegrationCrossPhaseSubscriptionTest extends TestCase
             );
             Sanctum::actingAs($ctx['hostUser']);
             $state = app(SubscriptionAccessService::class)->resolve($ctx['hostOrg']->fresh('subscription'));
-            $this->assertSame('grace', $state['status'], $type);
+            $this->assertSame('past_due', $state['status'], $type);
             $this->assertTrue($state['canWrite'], $type);
 
             $this->patchJson('/api/internships/'.$ctx['internship']->id, [

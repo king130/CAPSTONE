@@ -20,7 +20,7 @@ const features = [
     icon: Sparkles,
     title: 'Smarter Matching',
     description:
-      'Connect students to the right internships faster using structured profiles, fit signals, and guided workflows.',
+      'Match students to internships using course, year level, and skills.',
   },
   {
     icon: LayoutDashboard,
@@ -179,7 +179,7 @@ const rolePaths = [
           </p>
         </div>
 
-        <div class="mt-10 grid gap-6 lg:grid-cols-3">
+        <div class="mt-10 grid gap-6 sm:grid-cols-2 xl:grid-cols-4">
           <Card
             v-for="rolePath in rolePaths"
             :key="rolePath.title"

@@ -41,8 +41,19 @@ export interface ApplicationRecord {
   studentName?: string
   studentEmail?: string
   studentCourse?: string
+  studentSkills?: Array<{
+    id: string
+    name: string
+    category?: string
+    status?: string
+    level?: string
+  }>
   status: string
   trackerStage?: string | null
+  withdrawalReason?: string | null
+  placementClosedAt?: string | null
+  placementCloseReason?: string | null
+  hasActivePlacement?: boolean
   resume?: string | null
   documents?: string[] | null
   documentsPending?: boolean
@@ -54,6 +65,14 @@ export interface ApplicationRecord {
   hoursAgreement?: HoursAgreementRecord | null
   createdAt?: string
   updatedAt?: string
+}
+
+export interface ActivePlacementSummary {
+  applicationId: string
+  internshipTitle: string
+  hostName: string
+  hostType?: string
+  message: string
 }
 
 export async function fetchHoursAgreement(applicationId: string) {
@@ -90,9 +109,46 @@ export async function declineHoursAgreement(applicationId: string, note?: string
   )
 }
 
+let cachedActivePlacement: ActivePlacementSummary | null = null
+
+export function getCachedActivePlacement(): ActivePlacementSummary | null {
+  return cachedActivePlacement
+}
+
+export async function fetchActivePlacement(): Promise<ActivePlacementSummary | null> {
+  if (!getToken()) {
+    cachedActivePlacement = null
+    return null
+  }
+  try {
+    const res = await apiFetch<{ data: ActivePlacementSummary | null }>('/student/active-placement')
+    cachedActivePlacement = res.data ?? null
+    return cachedActivePlacement
+  } catch {
+    cachedActivePlacement = null
+    return null
+  }
+}
+
+export async function closePlacement(
+  applicationId: string,
+  reason: 'cancelled' | 'declined' | 'ended' | 'completed',
+): Promise<ApplicationRecord> {
+  const res = await apiFetch<{ data: ApplicationRecord }>(`/applications/${applicationId}/placement/close`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  })
+  await applicationsResource.refresh()
+  await fetchActivePlacement()
+  return res.data
+}
+
 async function loadAllApplications(): Promise<ApplicationRecord[]> {
   if (!getToken()) return []
-  const res = await apiFetch<{ data: ApplicationRecord[] }>('/applications')
+  const res = await apiFetch<{ data: ApplicationRecord[]; activePlacement?: ActivePlacementSummary | null }>('/applications')
+  if (Object.prototype.hasOwnProperty.call(res, 'activePlacement')) {
+    cachedActivePlacement = res.activePlacement ?? null
+  }
   return res.data ?? []
 }
 

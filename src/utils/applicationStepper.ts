@@ -1,6 +1,7 @@
 import type { AssessmentRecord } from '@/services/assessments'
 import type { InterviewRecord } from '@/services/interviews'
 import type { OJTLog } from '@/services/ojtService'
+import { statusLabel } from '@/utils/statusLabels'
 
 export type ApplicationStepperTone = 'pending' | 'active' | 'complete' | 'error' | 'warning'
 
@@ -68,9 +69,13 @@ function pickInterview(interviews: InterviewRecord[]): InterviewRecord | null {
 
 function formatWhen(value?: string | null): string {
   if (!value) return ''
-  const date = new Date(value)
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/)
+  const date = match
+    ? new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5])))
+    : new Date(value)
   if (Number.isNaN(date.getTime())) return ''
   return date.toLocaleString('en-US', {
+    timeZone: 'UTC',
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -80,11 +85,9 @@ function formatWhen(value?: string | null): string {
 }
 
 function stageLabel(stage?: string | null): string {
-  const raw = String(stage || '').trim().toLowerCase()
-  if (raw === 'pre_screen') return 'Pre-screen'
-  if (raw === 'interview') return 'Interview'
-  if (raw === 'final') return 'Final'
-  return raw ? raw.split('_').join(' ') : 'Assessment'
+  const raw = String(stage || '').trim()
+  if (!raw) return 'Assessment'
+  return statusLabel(raw)
 }
 
 function latestAssessment(assessments: AssessmentRecord[]): AssessmentRecord | null {
@@ -140,8 +143,9 @@ export function deriveApplicationStepper(input: ApplicationStepperInput): Applic
     || trackerStage === 'assessed'
     || accepted
   const interviewConfirmed = interview?.status === 'confirmed' || interviewCompleted
-  const interviewScheduled = interview?.status === 'proposed' || interviewConfirmed
-    || trackerStage === 'interview_scheduled'
+  const interviewScheduled = interview?.status === 'proposed'
+    || interviewConfirmed
+    || (trackerStage === 'interview_scheduled' && interview?.status !== 'cancelled')
   const interviewCancelled = interview?.status === 'cancelled' && !interviewScheduled
   const when = formatWhen(interview?.scheduledAt)
   const hasAssessment = Boolean(assessment) || trackerStage === 'assessed'
@@ -317,7 +321,7 @@ export function deriveApplicationStepper(input: ApplicationStepperInput): Applic
     nextAction = audience === 'school' ? 'Endorse or reject this application.' : 'Waiting for school endorsement.'
   } else if ((status === 'endorsed' || trackerStage === 'endorsed' || trackerStage === 'interview_scheduled') && interview?.status === 'proposed') {
     nextAction = audience === 'intern' ? 'Confirm your interview.' : 'Interview is waiting for confirmation.'
-  } else if ((status === 'endorsed' || trackerStage === 'endorsed') && interviewCancelled) {
+  } else if ((status === 'endorsed' || trackerStage === 'endorsed' || trackerStage === 'interview_scheduled') && interviewCancelled) {
     nextAction = audience === 'company'
       ? 'Interview cancelled. Propose a new time.'
       : 'Interview cancelled. Waiting for a new time.'

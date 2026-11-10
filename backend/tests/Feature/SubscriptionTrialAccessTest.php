@@ -27,13 +27,12 @@ class SubscriptionTrialAccessTest extends TestCase
     {
         parent::setUp();
         config([
-            'subscription.trial_days' => 14,
+            'subscription.trial_days' => 30,
             'subscription.grace_days' => 7,
             'subscription.trial_plan' => 'standard',
             'subscription.timezone' => 'Asia/Manila',
         ]);
 
-        // Ensure catalog flags exist even if an older sqlite fixture skipped the Phase H migration path.
         SubscriptionPlanDefinition::query()->where('slug', 'free')->update([
             'is_selectable' => false,
             'is_legacy' => true,
@@ -47,7 +46,7 @@ class SubscriptionTrialAccessTest extends TestCase
     /**
      * @return array{user: User, organization: Organization, subscription: Subscription}
      */
-    private function createOrg(string $type = 'company'): array
+    private function createOrg(string $type = 'company', string $verificationStatus = 'approved'): array
     {
         Permission::query()->updateOrCreate(
             ['key' => 'org.manage_internships'],
@@ -72,8 +71,8 @@ class SubscriptionTrialAccessTest extends TestCase
         ]);
 
         $subscription = Subscription::query()->create([
-            'plan' => 'standard',
-            'status' => 'trialing',
+            'plan' => 'free',
+            'status' => 'active',
             'billing_cycle' => 'monthly',
         ]);
 
@@ -112,7 +111,7 @@ class SubscriptionTrialAccessTest extends TestCase
                 'organization_id' => $organization->id,
                 'subscription_id' => $subscription->id,
                 'institution_name' => $organization->name,
-                'verification_status' => 'approved',
+                'verification_status' => $verificationStatus,
             ]);
         } else {
             Company::query()->create([
@@ -121,23 +120,39 @@ class SubscriptionTrialAccessTest extends TestCase
                 'subscription_id' => $subscription->id,
                 'company_name' => $organization->name,
                 'company_type' => $type === 'municipal_hall' ? 'municipal_hall' : null,
-                'verification_status' => 'approved',
+                'verification_status' => $verificationStatus,
             ]);
         }
 
         return compact('user', 'organization', 'subscription');
     }
 
-    public function test_new_org_of_each_type_starts_trial(): void
+    public function test_new_org_of_each_type_starts_trial_not_expired(): void
     {
+        Carbon::setTestNow(Carbon::parse('2026-11-04 10:00:00', 'Asia/Manila'));
         foreach (['school', 'company', 'municipal_hall'] as $type) {
-            $context = $this->createOrg($type);
+            $context = $this->createOrg($type, 'approved');
+            $subscription = $context['organization']->fresh('subscription')->subscription;
             $access = app(SubscriptionAccessService::class)->resolve($context['organization']->fresh('subscription'));
             $this->assertSame('trial', $access['status'], $type);
             $this->assertTrue($access['canWrite'], $type);
             $this->assertSame('standard', $access['plan'], $type);
-            $this->assertNotNull($context['organization']->subscription->trial_started_at);
-            $this->assertNotNull($context['organization']->subscription->trial_ends_at);
+            $this->assertNotNull($subscription->trial_ends_at, $type);
+            $this->assertSame(30, $access['daysRemaining'], $type);
+        }
+        Carbon::setTestNow();
+    }
+
+    public function test_unverified_org_is_not_expired(): void
+    {
+        foreach (['school', 'company', 'municipal_hall'] as $type) {
+            $context = $this->createOrg($type, 'pending');
+            $access = app(SubscriptionAccessService::class)->resolve($context['organization']->fresh('subscription'));
+            $this->assertSame('unverified', $access['status'], $type);
+            $this->assertTrue($access['canWrite'], $type);
+            $this->assertSame('free', $access['plan'], $type);
+            $this->assertNotSame('expired', $access['status'], $type);
+            $this->assertNotNull($access['trialEndsAt'], $type);
         }
     }
 
@@ -155,35 +170,82 @@ class SubscriptionTrialAccessTest extends TestCase
         $this->assertContains('standard', $ids);
     }
 
-    public function test_trial_days_use_asia_manila(): void
-    {
-        Carbon::setTestNow(Carbon::parse('2026-10-18 10:00:00', 'Asia/Manila'));
-        $context = $this->createOrg('company');
-        $ends = $context['organization']->fresh('subscription')->subscription->trial_ends_at;
-        $this->assertSame(
-            Carbon::parse('2026-11-01 10:00:00', 'Asia/Manila')->toDateString(),
-            Carbon::parse($ends)->timezone('Asia/Manila')->toDateString()
-        );
-        Carbon::setTestNow();
-    }
-
-    public function test_status_transitions_trial_grace_expired(): void
+    public function test_paid_period_transitions_past_due_then_expired(): void
     {
         $access = app(SubscriptionAccessService::class);
         $context = $this->createOrg('school');
         $subscription = $context['organization']->subscription;
 
-        Carbon::setTestNow(Carbon::parse($subscription->trial_ends_at)->timezone('Asia/Manila')->subDay());
-        $this->assertSame('trial', $access->resolve($context['organization']->fresh('subscription'))['status']);
+        Carbon::setTestNow(Carbon::parse('2026-10-18 10:00:00', 'Asia/Manila'));
+        $access->activatePaid(
+            $subscription,
+            'standard',
+            $context['organization'],
+            $context['user'],
+            'monthly',
+            Carbon::parse('2026-11-01 23:59:59', 'Asia/Manila'),
+            'test activate'
+        );
 
-        Carbon::setTestNow(Carbon::parse($subscription->trial_ends_at)->timezone('Asia/Manila')->addDay());
-        $this->assertSame('grace', $access->resolve($context['organization']->fresh('subscription'))['status']);
+        $this->assertSame('active', $access->resolve($context['organization']->fresh('subscription'))['status']);
 
-        Carbon::setTestNow(Carbon::parse($subscription->grace_ends_at)->timezone('Asia/Manila')->addDay());
+        // Inside grace after paid end.
+        Carbon::setTestNow(Carbon::parse('2026-11-02 10:00:00', 'Asia/Manila'));
+        $pastDue = $access->resolve($context['organization']->fresh('subscription'));
+        $this->assertSame('past_due', $pastDue['status']);
+        $this->assertTrue($pastDue['canWrite']);
+
+        // After grace → expired.
+        Carbon::setTestNow(Carbon::parse('2026-11-10 10:00:00', 'Asia/Manila'));
         $state = $access->resolve($context['organization']->fresh('subscription'));
         $this->assertSame('expired', $state['status']);
         $this->assertFalse($state['canWrite']);
         Carbon::setTestNow();
+    }
+
+    public function test_never_paid_trial_expires_after_grace(): void
+    {
+        $access = app(SubscriptionAccessService::class);
+        $context = $this->createOrg('company');
+        $subscription = $context['organization']->subscription;
+
+        Carbon::setTestNow(Carbon::parse('2026-11-04 10:00:00', 'Asia/Manila'));
+        $subscription->forceFill([
+            'plan' => 'standard',
+            'status' => 'trialing',
+            'trial_ends_at' => Carbon::parse('2026-11-01 10:00:00', 'Asia/Manila'),
+            'grace_ends_at' => Carbon::parse('2026-11-08 10:00:00', 'Asia/Manila'),
+            'ends_at' => null,
+        ])->save();
+
+        $pastDue = $access->resolve($context['organization']->fresh('subscription'));
+        $this->assertSame('past_due', $pastDue['status']);
+        $this->assertTrue($pastDue['canWrite']);
+
+        Carbon::setTestNow(Carbon::parse('2026-11-10 10:00:00', 'Asia/Manila'));
+        $expired = $access->resolve($context['organization']->fresh('subscription'));
+        $this->assertSame('expired', $expired['status']);
+        $this->assertFalse($expired['canWrite']);
+        Carbon::setTestNow();
+    }
+
+    public function test_pending_payment_status(): void
+    {
+        $context = $this->createOrg('company');
+        $org = $context['organization'];
+        $org->forceFill([
+            'settings' => array_merge($org->settings ?? [], [
+                'pending_plan_change' => [
+                    'previousPlan' => 'free',
+                    'targetPlan' => 'standard',
+                    'previousStatus' => 'active',
+                ],
+            ]),
+        ])->save();
+
+        $state = app(SubscriptionAccessService::class)->resolve($org->fresh('subscription'));
+        $this->assertSame('pending_payment', $state['status']);
+        $this->assertTrue($state['canWrite']);
     }
 
     public function test_expired_org_blocked_on_writes_reads_allowed(): void
@@ -217,12 +279,31 @@ class SubscriptionTrialAccessTest extends TestCase
             $blocked->assertStatus(402);
             $blocked->assertJsonPath('code', 'subscription_expired');
 
-            // Reads remain allowed (auth/me and public internship catalog).
             $this->getJson('/api/auth/me')->assertOk()
                 ->assertJsonPath('subscriptionAccess.status', 'expired')
                 ->assertJsonPath('subscriptionAccess.canWrite', false);
             $this->getJson('/api/internships')->assertOk();
         }
+    }
+
+    public function test_verification_and_billing_writable_when_expired(): void
+    {
+        $context = $this->createOrg('company', 'approved');
+        app(SubscriptionAccessService::class)->forceExpired(
+            $context['organization']->subscription,
+            $context['organization'],
+            $context['user'],
+            'expire'
+        );
+
+        Sanctum::actingAs($context['user']);
+
+        // Billing cancel-pending must not 402 (ok or validation — never subscription lock).
+        $cancel = $this->postJson('/api/subscriptions/cancel-pending');
+        $this->assertNotEquals(402, $cancel->status());
+
+        // Profile stays writable.
+        $this->patchJson('/api/profile', ['name' => 'Updated Name'])->assertOk();
     }
 
     private function makePlatformAdmin(): User
@@ -280,7 +361,7 @@ class SubscriptionTrialAccessTest extends TestCase
         ]);
         Sanctum::actingAs($student);
         $this->getJson('/api/auth/me')->assertOk();
-        $this->postJson('/api/saved-internships', ['internship_id' => 1])->assertStatus(422); // validation, not 402
+        $this->postJson('/api/saved-internships', ['internship_id' => 1])->assertStatus(422);
     }
 
     public function test_platform_admin_not_blocked(): void
@@ -324,7 +405,6 @@ class SubscriptionTrialAccessTest extends TestCase
         );
 
         Sanctum::actingAs($context['user']);
-        // Write should work again (may fail validation but not 402).
         $response = $this->postJson('/api/internships', [
             'title' => 'Restored posting',
             'description' => 'After activation',
@@ -333,7 +413,7 @@ class SubscriptionTrialAccessTest extends TestCase
         $this->assertNotEquals(402, $response->status());
     }
 
-    public function test_paid_orgs_untouched_and_free_get_trial_via_helper(): void
+    public function test_paid_orgs_untouched_and_free_get_free_via_helper(): void
     {
         $paid = $this->createOrg('company');
         app(SubscriptionAccessService::class)->activatePaid(
@@ -366,6 +446,7 @@ class SubscriptionTrialAccessTest extends TestCase
         $this->assertSame($before, 'premium');
         $this->assertSame('trialing', $legacyOrg->fresh('subscription')->subscription->status);
         $this->assertSame('standard', $legacyOrg->fresh('subscription')->subscription->plan);
+        $this->assertNotNull($legacyOrg->fresh('subscription')->subscription->trial_ends_at);
     }
 
     public function test_switch_to_free_rejected(): void

@@ -259,9 +259,60 @@ class InterviewWorkflowTest extends TestCase
             ->where('metadata->type', 'interview')
             ->first();
         $this->assertNotNull($studentNotification);
-        $this->assertSame('Interview proposed', $studentNotification->title);
+        $this->assertSame('Interview scheduled', $studentNotification->title);
         $this->assertSame((string) $interview->id, $studentNotification->metadata['interviewId'] ?? null);
         $this->assertSame('/intern/applications', $studentNotification->metadata['redirectTo'] ?? null);
+
+        Sanctum::actingAs($ctx['studentUser']);
+        $listed = $this->getJson('/api/interviews');
+        $listed->assertOk();
+        $listed->assertJsonPath('data.0.applicationId', (string) $application->id);
+        $listed->assertJsonPath('data.0.status', 'proposed');
+        $listed->assertJsonPath('data.0.mode', 'online');
+    }
+
+    public function test_reschedule_replaces_the_pending_interview_and_notifies_student(): void
+    {
+        $ctx = $this->createContext();
+        $application = $this->makeApplication($ctx, 'endorsed');
+
+        Sanctum::actingAs($ctx['companyUser']);
+        $first = $this->postJson('/api/interviews', $this->proposePayload($application));
+        $first->assertCreated();
+        $firstId = (string) $first->json('data.id');
+
+        $secondPayload = $this->proposePayload($application);
+        $secondPayload['scheduled_at'] = now()->addDays(5)->toIso8601String();
+        $secondPayload['location_or_link'] = 'https://meet.example.com/rescheduled';
+        $second = $this->postJson('/api/interviews', $secondPayload);
+        $second->assertCreated();
+        $second->assertJsonPath('data.status', 'proposed');
+
+        $this->assertSame('cancelled', ApplicationInterview::query()->find($firstId)?->status);
+        $this->assertSame('proposed', ApplicationInterview::query()->find($second->json('data.id'))?->status);
+
+        $this->assertSame(
+            1,
+            Notification::query()
+                ->where('user_id', $ctx['studentUser']->id)
+                ->where('title', 'Interview rescheduled')
+                ->where('metadata->type', 'interview')
+                ->count()
+        );
+        $this->assertSame(
+            0,
+            Notification::query()
+                ->where('user_id', $ctx['studentUser']->id)
+                ->where('title', 'Interview cancelled')
+                ->count()
+        );
+
+        Sanctum::actingAs($ctx['studentUser']);
+        $listed = $this->getJson('/api/interviews?application_id='.$application->id);
+        $listed->assertOk();
+        $open = collect($listed->json('data'))->where('status', 'proposed')->values();
+        $this->assertCount(1, $open);
+        $this->assertSame('https://meet.example.com/rescheduled', $open[0]['locationOrLink']);
     }
 
     public function test_school_cannot_schedule_an_interview(): void

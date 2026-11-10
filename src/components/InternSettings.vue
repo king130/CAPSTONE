@@ -4,8 +4,16 @@ import { useAuthStore } from '@/stores/auth'
 import { apiFetch } from '@/services/http'
 import { mapApiUserToProfile, updateCurrentUserPassword } from '@/services/auth'
 import { buildProfileAvatarUrl, uploadProfileAvatar } from '@/services/profileMedia'
+import SkillChips from '@/components/skills/SkillChips.vue'
+import SkillsWizard from '@/components/skills/SkillsWizard.vue'
+import {
+  fetchStudentSkills,
+  saveStudentSkills,
+  type SelectedSkill,
+} from '@/services/skills'
 import Swal from '@/services/swal'
 import { BellIcon } from '@heroicons/vue/24/outline'
+import PasswordInput from '@/components/ui/password-input/PasswordInput.vue'
 
 const authStore = useAuthStore()
 
@@ -76,6 +84,9 @@ const organizationName = computed(() => {
 const loading = ref(true)
 const saving = ref(false)
 const hydrated = ref(false)
+const profileSkills = ref<SelectedSkill[]>([])
+const skillsWizardOpen = ref(false)
+const savingSkills = ref(false)
 
 // Form data - Initialize with empty values
 const personalInfo = ref({
@@ -134,11 +145,52 @@ watch(
       security.value.loginAlerts = profile.loginAlerts as boolean
     }
 
+    const profileSkillsRaw = Array.isArray(profile?.skills) ? (profile?.skills as SelectedSkill[]) : []
+    profileSkills.value = profileSkillsRaw
+    void loadSkillsFromApi()
+
     hydrated.value = true
     loading.value = false
   },
   { immediate: true }
 )
+
+async function loadSkillsFromApi() {
+  try {
+    const res = await fetchStudentSkills()
+    profileSkills.value = res.data || []
+  } catch {
+    // Keep profile-embedded skills if the dedicated endpoint fails.
+  }
+}
+
+async function onSkillsSaved(next: SelectedSkill[]) {
+  savingSkills.value = true
+  try {
+    const res = await saveStudentSkills(
+      next.map((skill) => ({ id: skill.id, level: skill.level || 'beginner' })),
+    )
+    profileSkills.value = res.data || next
+    await authStore.refreshUser()
+    await Swal.fire({
+      icon: 'success',
+      title: 'Skills saved',
+      text: 'Your skills are now on your profile.',
+      confirmButtonColor: '#3b82f6',
+      timer: 1600,
+      showConfirmButton: false,
+    })
+  } catch (error) {
+    await Swal.fire({
+      icon: 'error',
+      title: 'Could not save skills',
+      text: error instanceof Error ? error.message : 'Please try again.',
+      confirmButtonColor: '#3b82f6',
+    })
+  } finally {
+    savingSkills.value = false
+  }
+}
 
 // Functions
 function updateProfilePicture() {
@@ -416,6 +468,27 @@ function handleImageError(event: Event) {
             </div>
           </div>
 
+          <!-- Skills Card -->
+          <div class="settings-card">
+            <div class="card-header">
+              <h3 class="card-title">My Skills</h3>
+              <p class="card-subtitle">
+                Choose skills from the shared list so companies can understand what you already know.
+              </p>
+            </div>
+            <div class="card-body space-y-4">
+              <SkillChips :skills="profileSkills" mode="intern" empty-text="No skills yet. Add a few to help hosts find you." />
+              <button
+                type="button"
+                class="save-changes-btn"
+                :disabled="savingSkills"
+                @click="skillsWizardOpen = true"
+              >
+                {{ savingSkills ? 'Saving…' : profileSkills.length ? 'Edit skills' : 'Add skills' }}
+              </button>
+            </div>
+          </div>
+
           <!-- Password Card -->
           <div class="settings-card">
             <div class="card-header">
@@ -425,21 +498,21 @@ function handleImageError(event: Event) {
             <div class="card-body">
               <div class="form-group">
                 <label class="form-label">New Password</label>
-                <input 
+                <PasswordInput
                   v-model="security.newPassword"
-                  type="password" 
                   class="form-input"
                   placeholder="Enter new password"
+                  autocomplete="new-password"
                 />
               </div>
 
               <div class="form-group">
                 <label class="form-label">Confirm New Password</label>
-                <input 
+                <PasswordInput
                   v-model="security.confirmPassword"
-                  type="password" 
                   class="form-input"
                   placeholder="Confirm new password"
+                  autocomplete="new-password"
                 />
                 <div v-if="security.newPassword" class="password-strength">
                   <div class="strength-bar">
@@ -493,6 +566,14 @@ function handleImageError(event: Event) {
       </div>
     </div>
   </div>
+
+  <SkillsWizard
+    v-model="profileSkills"
+    v-model:open="skillsWizardOpen"
+    mode="intern"
+    :limit="15"
+    @done="onSkillsSaved"
+  />
 </template>
 
 <style scoped>

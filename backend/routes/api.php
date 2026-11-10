@@ -40,8 +40,8 @@ use App\Http\Controllers\TenantRbacController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('auth')->group(function () {
-    Route::post('register', [AuthController::class, 'register']);
-    Route::post('login', [AuthController::class, 'login']);
+    Route::post('register', [AuthController::class, 'register'])->middleware('throttle:login');
+    Route::post('login', [AuthController::class, 'login'])->middleware('throttle:login');
     Route::post('account-setup/validate', [AuthController::class, 'validateAccountSetupToken']);
     Route::post('account-setup/complete', [AuthController::class, 'completeAccountSetup']);
 });
@@ -71,6 +71,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('auth/password', [AuthController::class, 'updatePassword']);
     Route::patch('profile', [ProfileController::class, 'update']);
     Route::post('profile/avatar', [ProfileAvatarController::class, 'store']);
+    Route::get('skills', [\App\Http\Controllers\SkillController::class, 'index']);
+    Route::get('skills/suggest', [\App\Http\Controllers\SkillController::class, 'suggest']);
+    Route::post('skills', [\App\Http\Controllers\SkillController::class, 'store']);
+    Route::get('student/skills', [\App\Http\Controllers\StudentSkillController::class, 'show']);
+    Route::put('student/skills', [\App\Http\Controllers\StudentSkillController::class, 'update']);
+    Route::get('student/active-placement', [ApplicationController::class, 'activePlacement']);
+    Route::post('applications/{application}/placement/close', [ApplicationController::class, 'closePlacement']);
     Route::get('documents', [DocumentController::class, 'index']);
     Route::post('documents', [DocumentController::class, 'store']);
     Route::get('documents/{document}/file', [DocumentController::class, 'download'])->whereNumber('document');
@@ -95,10 +102,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('admin/holidays', [PublicHolidayController::class, 'store']);
     Route::patch('admin/holidays/{publicHoliday}', [PublicHolidayController::class, 'update']);
     Route::delete('admin/holidays/{publicHoliday}', [PublicHolidayController::class, 'destroy']);
+    Route::get('admin/skills', [\App\Http\Controllers\AdminSkillController::class, 'index']);
+    Route::get('admin/skills/pending', [\App\Http\Controllers\AdminSkillController::class, 'pending']);
+    Route::post('admin/skills/{skill}/approve', [\App\Http\Controllers\AdminSkillController::class, 'approve'])->whereNumber('skill');
+    Route::post('admin/skills/{skill}/merge', [\App\Http\Controllers\AdminSkillController::class, 'merge'])->whereNumber('skill');
+    Route::post('admin/skills/{skill}/reject', [\App\Http\Controllers\AdminSkillController::class, 'reject'])->whereNumber('skill');
     Route::get('admin/users/{user}/verification-documents', [OrganizationVerificationDocumentController::class, 'adminIndex']);
-    Route::post('admin/verification-documents/{organizationVerificationDocument}/mark-viewed', [OrganizationVerificationDocumentController::class, 'markAdminViewed'])
-        ->whereNumber('organizationVerificationDocument');
     Route::get('admin/verification-documents/{organizationVerificationDocument}/file', [OrganizationVerificationDocumentController::class, 'download'])
+        ->whereNumber('organizationVerificationDocument');
+    Route::post('admin/verification-documents/{organizationVerificationDocument}/mark-viewed', [OrganizationVerificationDocumentController::class, 'markAdminViewed'])
         ->whereNumber('organizationVerificationDocument');
     Route::patch('admin/verification-documents/{organizationVerificationDocument}', [OrganizationVerificationDocumentController::class, 'adminReview'])
         ->whereNumber('organizationVerificationDocument');
@@ -119,6 +131,17 @@ Route::middleware('auth:sanctum')->group(function () {
         ->whereNumber('organizationVerificationDocument');
     Route::get('organization-verification/documents/{organizationVerificationDocument}/file', [OrganizationVerificationDocumentController::class, 'download'])
         ->whereNumber('organizationVerificationDocument');
+
+    // Messaging stays available without org.verified (pending schools/companies can still chat).
+    // Relationship rules remain enforced inside ChatController / ChatRelationshipGate.
+    Route::get('conversations/eligible-partners', [ChatController::class, 'eligiblePartners']);
+    Route::get('conversations/messages/{message}/attachment', [ChatController::class, 'downloadAttachment'])
+        ->whereNumber('message');
+    Route::get('conversations', [ChatController::class, 'index']);
+    Route::post('conversations', [ChatController::class, 'store']);
+    Route::get('conversations/{conversation}/messages', [ChatController::class, 'messages'])->whereNumber('conversation');
+    Route::post('conversations/{conversation}/messages', [ChatController::class, 'sendMessage'])->whereNumber('conversation');
+    Route::patch('conversations/{conversation}/read', [ChatController::class, 'markRead'])->whereNumber('conversation');
 
     // Consequential school/company organization actions require approved + active org.
     // subscription.write gates org mutate actions when trial/paid access has expired (reads stay open).
@@ -162,6 +185,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('applications/{application}/schedule/requests/{scheduleRequest}/decide', [PlacementScheduleController::class, 'decide']);
         Route::get('applications/{application}/calendar', [OjtCalendarController::class, 'show']);
         Route::patch('applications/{application}/calendar/start-date', [OjtCalendarController::class, 'updateStartDate']);
+        Route::get('applications/{application}/attendance', [\App\Http\Controllers\OjtAttendanceController::class, 'index']);
+        Route::post('applications/{application}/attendance', [\App\Http\Controllers\OjtAttendanceController::class, 'store']);
+        Route::delete('applications/{application}/attendance/{attendanceEvent}', [\App\Http\Controllers\OjtAttendanceController::class, 'destroy'])
+            ->whereNumber('attendanceEvent');
 
         // Legacy /contracts routes (kept during rename transition)
         Route::get('contracts', [ContractController::class, 'index']);
@@ -188,6 +215,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('agreements/{contract}/reject', [ContractController::class, 'reject']);
         Route::patch('agreements/{contract}/cancel', [ContractController::class, 'cancel']);
         Route::patch('agreements/{contract}/amend', [ContractController::class, 'amend']);
+        // POST supports multipart file uploads (PHP often omits files on PATCH).
+        Route::post('agreements/{contract}/amend', [ContractController::class, 'amend']);
 
         Route::get('interviews', [InterviewController::class, 'index']);
         Route::post('interviews', [InterviewController::class, 'store']);
@@ -211,6 +240,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('ojt-dtrs/{ojtDtrSubmission}/approve', [OjtDtrController::class, 'approve'])->whereNumber('ojtDtrSubmission');
         Route::post('ojt-dtrs/{ojtDtrSubmission}/reject', [OjtDtrController::class, 'reject'])->whereNumber('ojtDtrSubmission');
         Route::post('ojt-dtrs/{ojtDtrSubmission}/resubmit', [OjtDtrController::class, 'resubmit'])->whereNumber('ojtDtrSubmission');
+        Route::delete('ojt-dtrs/{ojtDtrSubmission}', [OjtDtrController::class, 'destroy'])->whereNumber('ojtDtrSubmission');
 
         Route::get('assessments', [AssessmentController::class, 'index']);
         Route::post('assessments', [AssessmentController::class, 'store']);
@@ -221,12 +251,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('reports/export', [ReportExportController::class, 'export']);
 
         Route::get('certificates', [CertificateController::class, 'index']);
+        Route::get('certificates/eligible', [CertificateController::class, 'eligible']);
         Route::post('certificates/generate', [CertificateController::class, 'generate']);
+        Route::post('certificates/bulk-generate', [CertificateController::class, 'bulkGenerate']);
         Route::get('certificates/{certificate}/download', [CertificateController::class, 'download']);
 
         Route::get('directory/{role}', [DirectoryController::class, 'index']);
         Route::get('organization/access', [OrganizationAccessController::class, 'index']);
         Route::post('organization/access/members', [OrganizationAccessController::class, 'storeMember']);
+        Route::post('organization/access/members/{membership}/resend-setup-link', [OrganizationAccessController::class, 'resendMemberSetupLink'])
+            ->middleware('throttle:account-setup-resend');
         Route::patch('organization/access/members/{membership}', [OrganizationAccessController::class, 'updateMember']);
 
         Route::get('organization-profile', [OrganizationProfileController::class, 'show']);
@@ -239,17 +273,13 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('rbac/tenants', [TenantRbacController::class, 'storeTenant']);
         Route::get('rbac/tenants/{tenant}/roles', [TenantRbacController::class, 'index']);
         Route::post('rbac/tenants/{tenant}/members', [TenantRbacController::class, 'storeMember']);
+        Route::post('rbac/tenants/{tenant}/members/{membership}/resend-setup-link', [TenantRbacController::class, 'resendMemberSetupLink'])
+            ->middleware('throttle:account-setup-resend');
         Route::post('rbac/tenants/{tenant}/roles', [TenantRbacController::class, 'storeRole']);
         Route::delete('rbac/tenants/{tenant}/roles/{role}', [TenantRbacController::class, 'destroyRole']);
         Route::put('rbac/tenants/{tenant}/roles/{role}/permissions', [TenantRbacController::class, 'syncPermissions']);
         Route::patch('rbac/tenants/{tenant}/members/{membership}', [TenantRbacController::class, 'updateMember']);
 
-        Route::get('conversations/eligible-partners', [ChatController::class, 'eligiblePartners']);
-        Route::get('conversations', [ChatController::class, 'index']);
-        Route::post('conversations', [ChatController::class, 'store']);
-        Route::get('conversations/{conversation}/messages', [ChatController::class, 'messages']);
-        Route::post('conversations/{conversation}/messages', [ChatController::class, 'sendMessage']);
-        Route::patch('conversations/{conversation}/read', [ChatController::class, 'markRead']);
     });
     });
 });

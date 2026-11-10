@@ -10,6 +10,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import ApplicationCapacity from '@/components/internships/ApplicationCapacity.vue'
+import ApplicationTrackerPanel from '@/components/ApplicationTrackerPanel.vue'
 import SaveInternshipButton from '@/components/internships/SaveInternshipButton.vue'
 import PublicSiteHeader from '@/components/PublicSiteHeader.vue'
 import MainLayout from '@/layouts/MainLayout.vue'
@@ -19,12 +20,17 @@ import Button from '@/components/ui/button/Button.vue'
 import Card from '@/components/ui/card/Card.vue'
 import CardContent from '@/components/ui/card/CardContent.vue'
 import Skeleton from '@/components/ui/skeleton/Skeleton.vue'
+import SkillChips from '@/components/skills/SkillChips.vue'
+import { useActivePlacement } from '@/composables/useActivePlacement'
+import { listApplications, type ApplicationRecord } from '@/services/applications'
 import {
   getInternship,
   listEligibleInternshipIds,
   type InternshipRecord,
 } from '@/services/internships'
+import { fetchStudentSkills, type SelectedSkill } from '@/services/skills'
 import { useAuthStore } from '@/stores/auth'
+import { formatAllowanceDisplay } from '@/utils/formatAllowance'
 
 const route = useRoute()
 const router = useRouter()
@@ -39,14 +45,18 @@ const appRole = computed((): LayoutRole | null => {
 const listingsTo = computed(() => {
   if (appRole.value === 'school') return '/school/opportunities'
   if (appRole.value === 'company') return '/dashboard/schools'
-  if (appRole.value === 'student') return '/intern/opportunities'
+  if (appRole.value === 'student') return '/intern/openings'
   return '/find-internships'
 })
 
 const pageShell = computed(() => (appRole.value ? MainLayout : 'div'))
 const pageShellProps = computed(() =>
   appRole.value
-    ? { role: appRole.value, title: appRole.value === 'student' ? 'Companies' : 'Browse', activeItem: 'opportunities' }
+    ? {
+        role: appRole.value,
+        title: appRole.value === 'student' ? 'Internship Opportunities' : 'Browse',
+        activeItem: appRole.value === 'student' ? 'openings' : 'opportunities',
+      }
     : { class: 'min-h-screen bg-background text-foreground' },
 )
 
@@ -54,13 +64,42 @@ const loading = ref(true)
 const notFound = ref(false)
 const errorMessage = ref('')
 const internship = ref<InternshipRecord | null>(null)
+const myApplication = ref<ApplicationRecord | null>(null)
+const mySkills = ref<SelectedSkill[]>([])
 const previewPhotos = computed(() => (internship.value?.previewPhotos ?? internship.value?.organizationMedia ?? []).slice(0, 3))
 const eligibleIds = ref<Set<string>>(new Set())
+
+const jobSkillItems = computed(() =>
+  (internship.value?.skills || []).map((skill) => ({
+    id: skill.id,
+    name: skill.name,
+    category: skill.category || 'Other',
+    status: (skill.status as SelectedSkill['status']) || 'approved',
+    importance: skill.importance || 'required',
+  })),
+)
 
 const isAuthenticatedStudent = computed(() => authStore.user?.role === 'student')
 const isGuestOrPublic = computed(
   () => !authStore.user || authStore.user.role === 'guest' || authStore.user.role === null,
 )
+
+const skillMatchSummary = computed(() => {
+  if (!isAuthenticatedStudent.value || !jobSkillItems.value.length) return null
+  const mine = new Set(mySkills.value.map((skill) => skill.id))
+  const required = jobSkillItems.value.filter((skill) => skill.importance !== 'nice_to_have')
+  const nice = jobSkillItems.value.filter((skill) => skill.importance === 'nice_to_have')
+  const matchedRequired = required.filter((skill) => mine.has(skill.id))
+  const missingRequired = required.filter((skill) => !mine.has(skill.id))
+  const matchedNice = nice.filter((skill) => mine.has(skill.id))
+  return {
+    matchedRequired,
+    missingRequired,
+    matchedNice,
+    requiredTotal: required.length,
+    niceTotal: nice.length,
+  }
+})
 const partnered = computed(() => {
   const item = internship.value
   if (!item) return false
@@ -91,10 +130,13 @@ const orgProfileTo = computed(() => {
   return orgId ? { name: 'organization-public', params: { id: orgId } } : null
 })
 
+const { hasActivePlacement, placementBlockMessage, refreshActivePlacement } = useActivePlacement()
+
 const applyLabel = computed(() => {
   if (isClosed.value) return 'Closed'
   if (isGuestOrPublic.value) return 'Log in to Apply'
   if (!isAuthenticatedStudent.value) return 'Students can apply'
+  if (hasActivePlacement.value) return 'Already placed'
   if (!partnered.value) return 'Not yet available'
   return 'Apply'
 })
@@ -103,6 +145,7 @@ const applyDisabled = computed(() => {
   if (isClosed.value) return true
   if (isGuestOrPublic.value) return false
   if (!isAuthenticatedStudent.value) return true
+  if (hasActivePlacement.value) return true
   if (!partnered.value) return true
   return false
 })
@@ -147,8 +190,32 @@ async function loadDetail() {
     }
 
     internship.value = item
+    myApplication.value = null
+    if (isAuthenticatedStudent.value) {
+      const [applications, skillsRes] = await Promise.all([
+        listApplications().catch(() => [] as ApplicationRecord[]),
+        fetchStudentSkills().catch(() => null),
+      ])
+      myApplication.value = applications.find((application) => String(application.internshipId) === String(item.id)) ?? null
+      if (skillsRes?.data) {
+        mySkills.value = skillsRes.data
+      } else {
+        const embedded = authStore.user?.profile as Record<string, unknown> | undefined
+        mySkills.value = Array.isArray(embedded?.skills) ? (embedded.skills as SelectedSkill[]) : []
+      }
+    } else {
+      mySkills.value = []
+    }
   } catch (err) {
-    errorMessage.value = err instanceof Error ? err.message : 'Unable to load internship.'
+    const code = typeof err === 'object' && err && 'code' in err ? String((err as { code?: unknown }).code || '') : ''
+    if (code === 'agreement_required' || /agreement/i.test(err instanceof Error ? err.message : '')) {
+      errorMessage.value =
+        err instanceof Error
+          ? err.message
+          : 'This internship is not available because your school does not have an active agreement with the company.'
+    } else {
+      errorMessage.value = err instanceof Error ? err.message : 'Unable to load internship.'
+    }
     internship.value = null
   } finally {
     loading.value = false
@@ -161,8 +228,9 @@ function onApply() {
     void router.push({ name: 'login', query: { redirect: `/internships/${route.params.id}` } })
     return
   }
+  if (hasActivePlacement.value) return
   if (!partnered.value) return
-  void router.push({ name: 'intern-opportunities', query: { focus: String(route.params.id) } })
+  void router.push({ name: 'intern-openings', query: { focus: String(route.params.id) } })
 }
 
 watch(
@@ -173,6 +241,7 @@ watch(
 )
 
 onMounted(() => {
+  void refreshActivePlacement()
   void loadDetail()
 })
 </script>
@@ -206,9 +275,20 @@ onMounted(() => {
 
       <Card v-else-if="errorMessage" class="border-border bg-card">
         <CardContent class="space-y-3 px-6 py-16 text-center">
-          <h1 class="text-2xl font-semibold text-foreground">Unable to load internship</h1>
+          <h1 class="text-2xl font-semibold text-foreground">
+            {{ /agreement/i.test(errorMessage) ? 'Not available for your school' : 'Unable to load internship' }}
+          </h1>
           <p class="text-sm text-muted-foreground">{{ errorMessage }}</p>
-          <Button variant="outline" @click="loadDetail">Retry</Button>
+          <div class="flex flex-wrap justify-center gap-2">
+            <RouterLink
+              v-if="appRole === 'student'"
+              :to="listingsTo"
+              class="inline-flex h-10 items-center justify-center rounded-md border border-border bg-background px-4 text-sm font-medium text-foreground hover:bg-accent"
+            >
+              Back to openings
+            </RouterLink>
+            <Button variant="outline" @click="loadDetail">Retry</Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -267,6 +347,12 @@ onMounted(() => {
               {{ internship.title || 'Untitled internship' }}
             </h1>
 
+            <ApplicationTrackerPanel
+              v-if="myApplication"
+              :application-id="myApplication.id"
+              mode="student"
+            />
+
             <div class="flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted-foreground">
               <span class="inline-flex items-center gap-1.5">
                 <MapPin class="h-3.5 w-3.5" />
@@ -278,7 +364,7 @@ onMounted(() => {
               </span>
               <span class="inline-flex items-center gap-1.5">
                 <Wallet class="h-3.5 w-3.5" />
-                {{ internship.allowance?.trim() || 'No allowance' }}
+                {{ formatAllowanceDisplay(internship.allowance) }}
               </span>
               <span class="inline-flex items-center gap-1.5">
                 <CalendarDays class="h-3.5 w-3.5" />
@@ -298,6 +384,44 @@ onMounted(() => {
             <h2 class="text-lg font-semibold text-foreground">Perks</h2>
             <div class="flex flex-wrap gap-2">
               <Badge v-for="perk in internship.perks" :key="perk" variant="secondary">{{ perk }}</Badge>
+            </div>
+          </section>
+
+          <section class="space-y-3">
+            <h2 class="text-lg font-semibold text-foreground">Skills</h2>
+            <SkillChips
+              :skills="jobSkillItems"
+              mode="job"
+              empty-text="No skills listed for this role yet."
+            />
+            <div
+              v-if="skillMatchSummary"
+              class="rounded-xl border border-border bg-muted/40 p-4 text-sm text-muted-foreground"
+            >
+              <p class="font-medium text-foreground">How your skills compare</p>
+              <p class="mt-1">
+                You match
+                <span class="font-semibold text-foreground">
+                  {{ skillMatchSummary.matchedRequired.length }} of {{ skillMatchSummary.requiredTotal }}
+                </span>
+                required skill{{ skillMatchSummary.requiredTotal === 1 ? '' : 's' }}
+                <template v-if="skillMatchSummary.niceTotal">
+                  ·
+                  {{ skillMatchSummary.matchedNice.length }} of {{ skillMatchSummary.niceTotal }} nice-to-have
+                </template>
+                .
+                This is informational only and does not block applying.
+              </p>
+              <div v-if="skillMatchSummary.missingRequired.length" class="mt-3 space-y-2">
+                <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Still missing</p>
+                <SkillChips :skills="skillMatchSummary.missingRequired" mode="job" />
+              </div>
+              <p v-else-if="skillMatchSummary.requiredTotal" class="mt-2 text-foreground">
+                You already cover the required skills listed for this role.
+              </p>
+              <p v-if="!mySkills.length" class="mt-2">
+                Add skills on your Intern profile so hosts can see what you know.
+              </p>
             </div>
           </section>
 
@@ -351,6 +475,9 @@ onMounted(() => {
             />
             <p v-if="isClosed" class="text-sm text-muted-foreground">
               {{ deadlinePassed ? 'The application deadline has passed.' : 'No slots remaining.' }}
+            </p>
+            <p v-else-if="isAuthenticatedStudent && hasActivePlacement" class="text-sm text-muted-foreground">
+              {{ placementBlockMessage }}
             </p>
             <p v-else-if="isAuthenticatedStudent && !partnered" class="text-sm text-muted-foreground">
               Ask your school to partner with this company

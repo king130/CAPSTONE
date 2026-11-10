@@ -394,17 +394,16 @@ class ChatApiAuthorizationTest extends TestCase
         $this->assertNull($peerParticipant->last_read_at);
     }
 
-    public function test_pending_school_cannot_use_chat(): void
+    public function test_pending_school_can_still_use_chat(): void
     {
         $linked = $this->createLinkedStudentAndSchool('pending');
         Sanctum::actingAs($linked['schoolUser']);
 
-        $response = $this->postJson('/api/conversations', [
+        // Chat is outside org.verified so pending orgs can still message relationship peers.
+        $this->getJson('/api/conversations')->assertOk();
+        $this->postJson('/api/conversations', [
             'peerUserId' => $linked['studentUser']->id,
-        ]);
-
-        $response->assertForbidden();
-        $response->assertJsonPath('code', 'organization_verification_pending');
+        ])->assertCreated();
     }
 
     public function test_student_can_chat_even_if_school_is_pending(): void
@@ -416,8 +415,6 @@ class ChatApiAuthorizationTest extends TestCase
             'peerUserId' => $linked['schoolUser']->id,
         ]);
 
-        // Student is not gated by org.verified; school peer may still be messaged if relationship exists.
-        // Opening succeeds for student; school side cannot initiate while pending (covered above).
         $response->assertCreated();
     }
 

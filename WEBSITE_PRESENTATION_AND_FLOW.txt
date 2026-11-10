@@ -1,0 +1,370 @@
+================================================================================
+OJT INTERN PATH — WEBSITE PRESENTATION + END-TO-END USER FLOW
+================================================================================
+For: Claude / other AI assistants / demos / onboarding
+Product URL: https://ojtpath.online
+Stack: Laravel 12 API + Vue 3 SPA + Pinia + Sanctum (Bearer tokens)
+Same-origin: SPA and /api live together on Hostinger (public_html = Laravel root)
+Related deep brief: SYSTEM_BRIEF_FOR_AI.txt (architecture, RBAC, APIs, deploy)
+Last updated: 2026-11-09
+
+PURPOSE OF THIS FILE
+--------------------
+Explain the product as a story: who uses it, how accounts are created, how an
+intern goes from first login to receiving a certificate, and what the system
+is doing underneath. Prefer this for demos and journey questions. Prefer
+SYSTEM_BRIEF_FOR_AI.txt for implementation detail.
+
+
+================================================================================
+1. ONE-SENTENCE PITCH
+================================================================================
+OJT Intern Path connects Cavite students, schools, companies, and municipal
+halls so schools can provision interns, hosts can post openings, schools can
+endorse applications, hosts can hire, interns can log OJT/DTR hours, and
+schools can issue printable certificates when required hours are met.
+
+
+================================================================================
+2. WHO THE PRODUCT IS FOR (ROLES)
+================================================================================
+STUDENT / INTERN
+  - Does NOT publicly self-register.
+  - School creates/invites the account (roster / CSV / invite).
+  - Discovers jobs, applies, interviews, logs hours, downloads certificate.
+
+SCHOOL
+  - Registers as an organization (email OTP verification may apply).
+  - Provisions students, manages courses/year levels, endorses applications,
+    monitors OJT progress, reviews DTR (school stage), issues certificates.
+  - Partners with companies via Agreements (MOAs).
+
+COMPANY (HOST)
+  - Registers as an organization.
+  - Posts internships, reviews applicants after school endorsement,
+    schedules interviews, accepts/rejects, approves daily OJT logs,
+    reviews DTR (host stage), marks absences (A1).
+
+MUNICIPAL HALL (LGU HOST)
+  - Same host workspace pattern as company for placements / OJT.
+  - Registers under municipal-hall path; uses company-like host tools.
+
+ADMIN (PLATFORM)
+  - Approves org verification documents, manages subscriptions/users,
+    reviews custom skills, system overview.
+
+
+================================================================================
+3. ACCOUNT CREATION + LOGIN (START OF THE FLOW)
+================================================================================
+
+---------------------------------------------------------------------------
+3A. ORGANIZATION REGISTRATION (School / Company / Municipal Hall)
+---------------------------------------------------------------------------
+UI entry:
+  /register  → role selection
+  /register/school
+  /register/company
+  /register/municipal-hall
+
+Typical steps:
+  1) Choose role (school / company / municipal hall).
+  2) Fill org + owner account details (email, password policy, org name, etc.).
+  3) Email OTP verification may be required for org self-registration
+     (Task 2 hardening — do not remove).
+  4) After register/login, org may be pending verification.
+  5) Upload verification documents at /organization-verification.
+  6) Admin approves verification before full write access to postings / hiring.
+  7) Subscription / billing lives at /billing (PayMongo: free|standard|premium).
+
+Login:
+  /login  → POST /api/auth/login → Sanctum personal access token stored by SPA
+  Throttle: 5/min by IP|email on login/register.
+
+---------------------------------------------------------------------------
+3B. STUDENT ACCOUNT PROVISIONING (NOT public register)
+---------------------------------------------------------------------------
+Students are school-controlled:
+
+  School → /school/students (Student Accounts)
+    - Create one student, or import CSV
+    - Student number required (unique per school)
+    - System creates User + Student + membership under the school org
+    - Setup email with AccountSetupToken
+    - Student opens /account-setup?token=...
+    - Sets password → can log in at /login
+
+Public POST /api/auth/register with role=student is blocked (422).
+Message concept: student accounts are created by the school.
+
+After login, student lands in Intern workspace (/intern or role dashboard).
+
+
+================================================================================
+4. HAPPY PATH: REGISTER/LOGIN → CERTIFICATE
+================================================================================
+This is the main demo story. Actors: School Admin, Host Company, Intern.
+
+STEP 0 — PREP (organizations ready)
+  - School org verified + subscribed as needed.
+  - Company org verified + subscribed as needed.
+  - Optional but common: School ↔ Company Agreement (MOA) at /agreements
+    so students can apply to that company's postings.
+  - School sets course OJT required hours (Settings → Course OJT Requirements).
+  - Company may set default weekly schedule / posting defaults.
+
+STEP 1 — SCHOOL PROVISIONS THE INTERN
+  School creates student account → intern completes /account-setup → logs in.
+  Intern completes profile / skills (Skills Wizard) as needed.
+
+STEP 2 — HOST POSTS AN INTERNSHIP
+  Company → /dashboard/jobs (or Create Internship flow)
+  Fields include title, location (Cavite), type/work setup, duration text,
+  slots, eligible courses, skills, schedule, endorsement requirement, etc.
+  Publish when required fields are complete.
+
+STEP 3 — INTERN DISCOVERS + APPLIES
+  Intern → /find-internships (or Opportunities)
+  Opens internship detail → Apply.
+  Guardrails:
+    - Must belong to school / meet course-year rules when enforced
+    - Must not already have an ACTIVE placement elsewhere
+      (exclusive placement: one active accept)
+    - Partnership/agreement gates may apply for some hosts
+
+  Application status starts as applied/submitted.
+
+STEP 4 — SCHOOL ENDORSES
+  School → /school/endorsements
+  Endorses (or school-rejects) the application.
+  Endorsement is REQUIRED before host interview/accept.
+  Tracker stage moves toward endorsed.
+
+STEP 5 — OPTIONAL INTERVIEW + ASSESSMENT
+  Host/school can propose interview via Application Interview panel.
+  Intern confirms/cancels as allowed (proposer cannot confirm own proposal).
+  Assessment stage may be recorded on the tracker (scored/stage notes).
+  Tracker can show: applied → endorsed → interview_scheduled → interviewed
+  → assessed → accepted (plus terminal states).
+
+STEP 6 — HOST ACCEPTS (PLACEMENT STARTS)
+  Host → /dashboard/applicants
+  Accept only after endorsement.
+  On accept (exclusive placement transaction):
+    - This application becomes the active placement
+    - Other open applications for that student become
+      withdrawn_placed_elsewhere
+    - Other hosts/school see “Withdrawn — placed elsewhere”
+    - Concurrent second accept is blocked
+  Placement schedule / OJT start date can be set on the calendar tools.
+  Hours agreement (optional propose/confirm) can lock required hours for
+  Progress Overview + certificates.
+
+STEP 7 — INTERN LOGS OJT HOURS (DAILY LOGS)
+  Intern → /ojt-hours
+  Submits daily log: date, time in/out, tasks, optional mood, optional make-up.
+  Rules (A1 + integrity):
+    - Must be tied to an accepted application
+    - Max 12 hours per day on create/update (existing bad rows not rewritten)
+    - Overnight timeOut < timeIn rejected (same-day only)
+    - Cannot log on a day the host marked ABSENT
+      (log make-up hours on another day instead)
+  Host approves/rejects pending logs (same approve path for make-up).
+  School OJT view is monitoring (read-only in UI).
+
+STEP 7B — ABSENCES / MAKE-UP (A1, live)
+  Host marks excused/unexcused absence on a placement date (Asia/Manila DATE).
+  Conflicts:
+    - Cannot mark absent if pending/approved daily log exists that date
+    - Cannot mark absent if day is inside an approved DTR period
+  Clearing absence = delete + Log::info who cleared it
+  Calendar: absent days are NOT “completed”; make-up badge can show on
+  non-working/holiday days without changing day kind; future absences skip
+  forward projection of end date.
+
+STEP 8 — DTR SUBMISSIONS (PERIOD HOURS)
+  Intern submits DTR PDF/period hours for a date range.
+  Host reviews first (approve/reject/revision).
+  School reviews as configured by review_stage workflow.
+  Approved DTR hours feed calendar “completed” days + progress totals.
+  Certificate progress uses RequiredOjtHoursAccessor + approved hours logic
+  (DTR / agreed hours — do not invent a second formula).
+
+STEP 9 — PROGRESS REACHES REQUIRED HOURS
+  Required hours resolution order (RequiredOjtHoursAccessor):
+    1) Hours-agreement agreed_hours when status=Agreed
+    2) Else applications.required_ojt_hours snapshot
+    3) Else org/course defaults / platform default as implemented
+  School Interns Progress + Company Intern Summary stay visible for
+  status accepted OR placement_ended.
+
+STEP 10 — SCHOOL ISSUES CERTIFICATE
+  School → Interns Progress / Placements certificate actions
+  Permission: org.approve_certificates (issue)
+  Eligibility:
+    - Application status accepted OR placement_ended
+    - Approved hours >= required hours
+    - Not already issued for that application
+  Issue creates a Certificate row + printable HTML
+    (Georgia / double #1e3a5f border — not a generated PDF).
+  Intern (and authorized school staff) can download/view/print.
+  UI: View / Print; student can open their issued certificate.
+
+STEP 11 — OPTIONAL PLACEMENT CLOSE
+  Host/school can close placement (cancelled | ended | completed)
+  Intern can decline (declined only).
+  After close, active_placement_key cleared → intern may apply again.
+  Withdrawn-elsewhere apps stay withdrawn.
+
+
+================================================================================
+5. FLOW DIAGRAM (TEXT)
+================================================================================
+
+  [School registers + verifies] ----+
+                                    |
+  [Company registers + verifies] ---+--> [Agreement / partnership]
+                                    |
+  [School provisions student] --> [Account setup] --> [Student login]
+                                                         |
+                                                         v
+                                              [Browse / Find Internships]
+                                                         |
+                                                         v
+                                              [Apply to posting]
+                                                         |
+                                                         v
+                                              [School endorses]
+                                                         |
+                         +-------------------------------+------------------+
+                         |                               |                  |
+                         v                               v                  v
+                   [Interview]                    [Assessment]        [Direct accept]
+                         |                               |                  |
+                         +---------------+---------------+------------------+
+                                         |
+                                         v
+                              [Host ACCEPTS placement]
+                                         |
+                                         v
+                     [Daily OJT logs] + [Absences/Make-up] + [DTR periods]
+                                         |
+                                         v
+                              [Host approves logs / DTR]
+                                         |
+                                         v
+                         [Approved hours >= required hours]
+                                         |
+                                         v
+                         [School ISSUES certificate HTML]
+                                         |
+                                         v
+                         [Intern downloads / prints certificate]
+
+
+================================================================================
+6. KEY SCREENS BY ROLE (QUICK MAP)
+================================================================================
+PUBLIC
+  /                         Landing
+  /login                    Login
+  /register*                Org registration
+  /account-setup            Student first-time password
+  /find-internships         Catalog
+  /internships/:id          Detail + apply
+  /org/:id                  Public org profile
+  /opportunities            Directory browse
+
+STUDENT
+  Intern dashboard / status tracker
+  /ojt-hours                Log hours, history, make-up flag
+  Profile / skills
+  Notifications
+  Certificate download when issued
+
+SCHOOL
+  /school                   Overview
+  /school/students          Provision roster
+  /school/endorsements      Endorse applications
+  /school/interns           Progress / certificates
+  /school/dtr               DTR review
+  /agreements               MOAs
+  /ojt-hours                Monitor
+  /settings                 Courses, hours, skills defaults
+  /billing                  Subscription
+
+COMPANY / MUNICIPAL HOST
+  /dashboard                Host home
+  /dashboard/jobs           Postings
+  /dashboard/applicants     Hire pipeline
+  /dashboard/dtr            DTR review
+  /ojt-hours                Approve logs + mark absences on calendar
+  /agreements               MOAs
+  /billing                  Subscription
+
+ADMIN
+  /admin/*                  Users, orgs, verification, skills review,
+                            subscriptions, system overview
+
+
+================================================================================
+7. SYSTEM DETAILS CLAUDE MUST RESPECT
+================================================================================
+AUTH
+  - Sanctum Bearer token (not cookie session as primary SPA auth)
+  - Org memberships + RBAC permissions (PermissionGate)
+  - Effective app role: student | school | company | municipal_hall | admin
+  - Disabled users / verification gates / subscription write gates exist
+
+DATA MODEL HIGHLIGHTS
+  - organizations (school | company | municipal_hall) + memberships + roles
+  - students linked to school + user
+  - internships / applications (tracker_stage + status)
+  - exclusive active placement via applications.active_placement_key
+  - ojt_logs (daily; is_makeup; Asia/Manila DATE log_date)
+  - ojt_attendance_events (A1 absences; DATE only)
+  - ojt_dtr_submissions (period PDF + hours + host/school review)
+  - agreements (MOAs; amendments)
+  - certificates (HTML file path + certificate_number)
+  - placement schedules / calendar / public holidays
+  - hours agreements per application
+
+IMPORTANT PRODUCT RULES
+  - Students do not self-register
+  - School endorsement before host accept
+  - One active placement at a time
+  - OJT logs only for accepted placement application
+  - Certificates for accepted OR placement_ended when hours met
+  - Certificate is printable HTML, not PDF generation
+  - Do not invent AI auto-hire / auto-certify behavior
+  - Do not weaken PayMongo / RBAC / verification
+  - Asia/Manila for calendar/attendance dates
+
+DEPLOY NOTES (Hostinger)
+  - Production: https://ojtpath.online
+  - Deploy only when user asks ("update the hostinger" / "deploy")
+  - Prefer selective PHP + full public/assets; never upload local .env
+  - Migrations may be applied via one-shot public PHP then self-delete
+
+
+================================================================================
+8. DEMO SCRIPT (SHORT TALKING POINTS)
+================================================================================
+1) “Schools own the student roster — no public student sign-up.”
+2) “Hosts post openings; students apply; school endorses first.”
+3) “Accepting locks one active placement and withdraws other open apps.”
+4) “Interns log hours; hosts approve; DTR covers period proof.”
+5) “Absences are host-marked; make-up is a normal log with a badge.”
+6) “When required hours are met, the school issues a printable certificate.”
+7) “Agreements, subscriptions, and verification keep orgs trustworthy.”
+
+
+================================================================================
+9. WHAT THIS FILE IS / IS NOT
+================================================================================
+IS: journey presentation + product rules for demos and Claude context
+IS NOT: exhaustive API catalog (see SYSTEM_BRIEF_FOR_AI.txt)
+IS NOT: permission to commit, push, migrate, or deploy without the user asking
+
+END OF FILE
+================================================================================

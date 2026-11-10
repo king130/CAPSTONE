@@ -12,6 +12,13 @@ export interface SchoolStudentRow {
   studentNumber?: string
   course?: string
   yearLevel?: string
+  skills?: Array<{
+    id: string
+    name: string
+    category?: string
+    status?: string
+    level?: string
+  }>
   status?: string
   inviteSent?: boolean
   setupLinkExpiresAt?: string
@@ -54,8 +61,20 @@ export async function addSchoolStudent(
   return response.data
 }
 
-export async function resendSchoolStudentSetupLink(id: string): Promise<{ sent: boolean; expiresAt?: string | null; errorMessage?: string }> {
-  const response = await apiFetch<{ invite?: { sent: boolean; expiresAt?: string | null; errorMessage?: string } }>(`/school-students/${id}/resend-setup-link`, {
+export async function resendSchoolStudentSetupLink(id: string): Promise<{
+  sent: boolean
+  expiresAt?: string | null
+  setupUrl?: string | null
+  errorMessage?: string
+}> {
+  const response = await apiFetch<{
+    invite?: {
+      sent: boolean
+      expiresAt?: string | null
+      setupUrl?: string | null
+      errorMessage?: string
+    }
+  }>(`/school-students/${id}/resend-setup-link`, {
     method: 'POST',
     body: JSON.stringify({}),
   })

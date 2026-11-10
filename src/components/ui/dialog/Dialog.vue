@@ -6,9 +6,12 @@ import Button from '@/components/ui/button/Button.vue'
 withDefaults(
   defineProps<{
     open: boolean
+    /** Hide the sticky top bar that only contains the close button. */
+    hideHeaderBar?: boolean
   }>(),
   {
     open: false,
+    hideHeaderBar: false,
   },
 )
 
@@ -49,12 +52,15 @@ function closeDialog() {
       >
         <div class="mx-auto my-4 flex min-h-full w-full max-w-2xl items-center justify-center sm:my-8">
           <div class="w-full max-w-2xl overflow-hidden rounded-2xl border border-border bg-background shadow-2xl">
-          <div class="sticky top-0 z-sticky flex items-center justify-end border-b border-border/60 bg-background px-4 py-4">
+          <div
+            v-if="!hideHeaderBar"
+            class="sticky top-0 z-sticky flex items-center justify-end border-b border-border/60 bg-background px-4 py-4"
+          >
             <Button variant="ghost" size="icon" class="text-muted-foreground" @click="closeDialog">
               <X class="h-4 w-4" />
             </Button>
           </div>
-          <div class="max-h-[calc(100vh-8rem)] overflow-y-auto px-6 pb-6 pt-2">
+          <div class="max-h-[85vh] overflow-y-auto px-4 pb-4 pt-2 sm:px-6 sm:pb-6">
             <slot :close="closeDialog" />
           </div>
         </div>

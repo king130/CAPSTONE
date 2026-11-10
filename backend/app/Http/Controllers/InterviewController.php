@@ -112,6 +112,11 @@ class InterviewController extends Controller
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
+        $replacingOpenInterview = ApplicationInterview::query()
+            ->where('application_id', $application->id)
+            ->whereIn('status', ['proposed', 'pending'])
+            ->exists();
+
         $this->tracker->ensureStageColumn($application);
         $stage = $this->tracker->currentStage($application);
         if (! in_array($stage, [
@@ -125,6 +130,13 @@ class InterviewController extends Controller
                     'application_id' => ['Interviews can only be scheduled after the application has been endorsed by the school.'],
                 ],
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        if ($replacingOpenInterview) {
+            ApplicationInterview::query()
+                ->where('application_id', $application->id)
+                ->whereIn('status', ['proposed', 'pending'])
+                ->update(['status' => 'cancelled']);
         }
 
         $interview = ApplicationInterview::query()->create([
@@ -161,7 +173,7 @@ class InterviewController extends Controller
             'application.company:id,user_id,company_name',
         ]);
 
-        $this->notifyInterviewProposed($interview, (int) $user->id);
+        $this->notifyInterviewProposed($interview, (int) $user->id, $replacingOpenInterview);
 
         return response()->json(['data' => $this->serialize($interview)], Response::HTTP_CREATED);
     }
@@ -291,7 +303,7 @@ class InterviewController extends Controller
         return $internship->company_id === null && $internship->school_id !== null;
     }
 
-    private function notifyInterviewProposed(ApplicationInterview $interview, int $actorUserId): void
+    private function notifyInterviewProposed(ApplicationInterview $interview, int $actorUserId, bool $rescheduled = false): void
     {
         $application = $interview->application;
         if (! $application) {
@@ -300,15 +312,22 @@ class InterviewController extends Controller
 
         $title = $application->internship_title ?: 'internship application';
         $when = $interview->scheduled_at?->timezone(config('app.timezone'))->format('M j, Y g:i A');
-        $body = $when
-            ? 'An interview was proposed for '.$title.' on '.$when.'.'
-            : 'An interview was proposed for '.$title.'.';
+        $noticeTitle = $rescheduled ? 'Interview rescheduled' : 'Interview scheduled';
+        if ($rescheduled) {
+            $body = $when
+                ? 'The interview for '.$title.' was rescheduled to '.$when.'.'
+                : 'The interview for '.$title.' was rescheduled.';
+        } else {
+            $body = $when
+                ? 'An interview was scheduled for '.$title.' on '.$when.'.'
+                : 'An interview was scheduled for '.$title.'.';
+        }
 
         $studentUserId = $application->student?->user_id;
         if ($studentUserId && (int) $studentUserId !== $actorUserId) {
             $this->createInAppNotification(
                 (int) $studentUserId,
-                'Interview proposed',
+                $noticeTitle,
                 $body,
                 [
                     'type' => 'interview',

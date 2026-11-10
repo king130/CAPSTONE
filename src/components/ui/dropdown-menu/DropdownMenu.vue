@@ -4,16 +4,32 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useAnchoredOverlay } from '@/composables/useAnchoredOverlay'
 import { cn } from '@/lib/utils'
 
+const props = withDefaults(
+  defineProps<{
+    align?: 'start' | 'end' | 'center'
+    contentClass?: string
+  }>(),
+  {
+    align: 'end',
+    contentClass: '',
+  },
+)
+
 const open = ref(false)
 function closeMenu() {
   open.value = false
 }
 
-const { triggerRef, panelRef, panelStyle, containsTarget, updatePosition } = useAnchoredOverlay(open, 'end', closeMenu)
+const { triggerRef, panelRef, panelStyle, containsTarget, updatePosition } = useAnchoredOverlay(
+  open,
+  props.align,
+  closeMenu,
+)
 
 const menuClass = computed(() =>
   cn(
     'mt-0 w-56 max-w-[calc(100vw-1rem)] rounded-2xl border border-border bg-popover p-2 text-popover-foreground shadow-lg',
+    props.contentClass,
   ),
 )
 

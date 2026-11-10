@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { ArrowLeft, BriefcaseBusiness, Building2, FileText } from 'lucide-vue-next'
+import { useRoute, useRouter } from 'vue-router'
+import { ArrowLeft } from 'lucide-vue-next'
 
 import DynamicContractRequestForm from '@/components/DynamicContractRequestForm.vue'
 import Button from '@/components/ui/button/Button.vue'
@@ -11,35 +11,47 @@ import CardHeader from '@/components/ui/card/CardHeader.vue'
 import Skeleton from '@/components/ui/skeleton/Skeleton.vue'
 import { useToast } from '@/composables/useToast'
 import MainLayout from '@/layouts/MainLayout.vue'
-import {
-  filterAgreementDirectoryPartners,
-  isAgreementPartnerSelectable,
-  listPublicProfiles,
-  type PublicProfile,
-} from '@/services/profilesPublic'
+import { filterAgreementDirectoryPartners, listPublicProfiles, type PublicProfile } from '@/services/profilesPublic'
 import { useAuthStore } from '@/stores/auth'
 
 type ContractRole = 'school' | 'company'
 
 const authStore = useAuthStore()
 const router = useRouter()
+const route = useRoute()
 const { error } = useToast()
 
 const currentRole = computed<ContractRole>(() => (authStore.user?.role === 'company' ? 'company' : 'school'))
-const partnerLabel = computed(() => (currentRole.value === 'school' ? 'Company' : 'School'))
 const partners = ref<PublicProfile[]>([])
 const loadingPartners = ref(true)
-const selectedPartner = ref<PublicProfile | null>(null)
+
+const queryPartnerUid = computed(() => String(route.query.partner || route.query.partnerId || '').trim())
+const queryOrganizationId = computed(() =>
+  String(route.query.organizationId || route.query.organization_id || '').trim(),
+)
+
+const preselectedPartner = computed(() => {
+  if (queryPartnerUid.value) {
+    const byUid = partners.value.find((partner) => partner.uid === queryPartnerUid.value)
+    if (byUid) return byUid
+  }
+  if (queryOrganizationId.value) {
+    return partners.value.find((partner) => partner.organizationId === queryOrganizationId.value) ?? null
+  }
+  return null
+})
+
+const lockPartner = computed(() => Boolean(preselectedPartner.value))
+const initialPartnerId = computed(() => preselectedPartner.value?.uid || '')
 
 async function loadPartners() {
   loadingPartners.value = true
   try {
     const listed = await listPublicProfiles(currentRole.value === 'school' ? 'company' : 'school')
-    // Agreement requests only list approved organizations; chat/directory may still see others.
     partners.value = filterAgreementDirectoryPartners(listed)
   } catch (caughtError) {
     error(caughtError, {
-      fallback: 'Could not load directory partners for contracts.',
+      fallback: 'Could not load directory partners for agreements.',
     })
   } finally {
     loadingPartners.value = false
@@ -50,24 +62,7 @@ function goBack() {
   void router.push({ name: 'agreements' })
 }
 
-function resetPartner() {
-  selectedPartner.value = null
-}
-
-function selectPartner(partner: PublicProfile) {
-  if (!isAgreementPartnerSelectable(partner)) return
-  selectedPartner.value = partner
-}
-
-function partnerStatusLabel(partner: PublicProfile): string | null {
-  if (partner.agreementStatusLabel) return partner.agreementStatusLabel
-  if (partner.agreementStatus === 'active') return 'Agreement already active'
-  if (partner.agreementStatus === 'pending') return 'Agreement request pending'
-  return null
-}
-
 function handleSubmitted(_payload?: { id?: string; moaReferenceNo?: string }) {
-  selectedPartner.value = null
   void router.push({ name: 'agreements' })
 }
 
@@ -84,112 +79,51 @@ onMounted(() => {
           <div class="space-y-2">
             <p class="text-sm font-semibold uppercase tracking-[0.28em] text-primary">Agreements</p>
             <div>
-              <h2 class="text-3xl font-semibold tracking-tight text-foreground">Create an agreement request</h2>
+              <h2 class="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">Create an agreement</h2>
               <p class="mt-2 max-w-2xl text-sm text-muted-foreground">
-                Use a dedicated page for building agreements so you can review details comfortably without losing work to an accidental click.
+                Follow the steps to choose a partner, pick a template, and send your request. Your progress is saved
+                automatically as a draft.
               </p>
             </div>
           </div>
-          <Button variant="outline" @click="goBack">
+          <Button variant="outline" class="w-full sm:w-auto" @click="goBack">
             <ArrowLeft class="h-4 w-4" />
             Back to Agreements
           </Button>
         </CardHeader>
       </Card>
 
-      <template v-if="!selectedPartner">
-        <Card class="border-border/80 shadow-sm">
-          <CardHeader>
-            <h3 class="text-2xl font-semibold text-foreground">Choose a {{ partnerLabel.toLowerCase() }}</h3>
-            <p class="text-sm text-muted-foreground">
-              Start by selecting an approved organization you want to send the agreement to. Pending or unverified accounts are hidden.
-            </p>
-          </CardHeader>
-          <CardContent>
-            <div v-if="loadingPartners" class="grid gap-4 md:grid-cols-2">
-              <Skeleton v-for="index in 4" :key="index" class="h-36 rounded-2xl" />
-            </div>
+      <div v-if="loadingPartners" class="grid gap-4">
+        <Skeleton class="h-24 rounded-2xl" />
+        <Skeleton class="h-64 rounded-2xl" />
+      </div>
 
-            <div v-else-if="partners.length" class="grid gap-4 md:grid-cols-2">
-              <button
-                v-for="partner in partners"
-                :key="partner.uid"
-                type="button"
-                class="rounded-2xl border border-border bg-card p-5 text-left shadow-sm transition"
-                :class="
-                  isAgreementPartnerSelectable(partner)
-                    ? 'hover:border-primary hover:bg-primary/5'
-                    : 'cursor-not-allowed opacity-70'
-                "
-                :disabled="!isAgreementPartnerSelectable(partner)"
-                :aria-disabled="!isAgreementPartnerSelectable(partner)"
-                @click="selectPartner(partner)"
-              >
-                <div class="flex items-start gap-4">
-                  <div
-                    class="rounded-2xl p-3"
-                    :class="
-                      isAgreementPartnerSelectable(partner)
-                        ? 'bg-primary/10 text-primary'
-                        : 'bg-muted text-muted-foreground'
-                    "
-                  >
-                    <Building2 v-if="currentRole === 'school'" class="h-5 w-5" />
-                    <BriefcaseBusiness v-else class="h-5 w-5" />
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <div class="flex flex-wrap items-center gap-2">
-                      <p class="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">{{ partnerLabel }}</p>
-                      <span
-                        v-if="partnerStatusLabel(partner)"
-                        class="rounded-full bg-muted px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
-                      >
-                        {{ partnerStatusLabel(partner) }}
-                      </span>
-                    </div>
-                    <p class="mt-2 text-lg font-semibold text-foreground">{{ partner.orgName || partner.displayName }}</p>
-                    <p class="mt-1 text-sm text-muted-foreground">{{ partner.email || 'Directory profile' }}</p>
-                  </div>
-                </div>
-              </button>
-            </div>
+      <Card
+        v-else-if="(queryPartnerUid || queryOrganizationId) && !preselectedPartner"
+        class="border-border/80 shadow-sm"
+      >
+        <CardContent class="space-y-3 px-6 py-10">
+          <h3 class="text-lg font-semibold text-foreground">Partner unavailable</h3>
+          <p class="text-sm text-muted-foreground">
+            That organization is not available for a new agreement request right now. It may already have an active or
+            pending agreement, or it may not be approved yet.
+          </p>
+          <div class="flex flex-wrap gap-2">
+            <Button @click="goBack">Back to Agreements</Button>
+            <Button variant="outline" @click="router.push({ name: 'agreements-new' })">Choose another partner</Button>
+          </div>
+        </CardContent>
+      </Card>
 
-            <Card v-else class="border-dashed shadow-none">
-              <CardContent class="py-10 text-center text-muted-foreground">
-                No {{ partnerLabel.toLowerCase() }} profiles are available to receive a contract right now.
-              </CardContent>
-            </Card>
-          </CardContent>
-        </Card>
-      </template>
-
-      <template v-else>
-        <Card class="border-border/80 shadow-sm">
-          <CardHeader class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div class="flex items-center gap-4">
-              <div class="rounded-2xl bg-primary/10 p-3 text-primary">
-                <FileText class="h-5 w-5" />
-              </div>
-              <div>
-                <p class="text-sm font-semibold uppercase tracking-[0.2em] text-muted-foreground">Selected {{ partnerLabel }}</p>
-                <h3 class="text-xl font-semibold text-foreground">{{ selectedPartner.orgName || selectedPartner.displayName }}</h3>
-                <p class="text-sm text-muted-foreground">{{ selectedPartner.email || 'Directory profile' }}</p>
-              </div>
-            </div>
-            <Button variant="outline" @click="resetPartner">Change {{ partnerLabel }}</Button>
-          </CardHeader>
-        </Card>
-
-        <DynamicContractRequestForm
-          :requester-role="currentRole"
-          :partners="partners"
-          :initial-partner-id="selectedPartner.uid"
-          :selected-partner="selectedPartner"
-          lock-partner
-          @change-partner="resetPartner"
-          @submitted="handleSubmitted"
-        />
-      </template>
+      <DynamicContractRequestForm
+        v-else
+        :requester-role="currentRole"
+        :partners="partners"
+        :initial-partner-id="initialPartnerId"
+        :selected-partner="preselectedPartner"
+        :lock-partner="lockPartner"
+        @submitted="handleSubmitted"
+      />
     </div>
   </MainLayout>
 </template>

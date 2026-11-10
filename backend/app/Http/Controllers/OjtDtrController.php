@@ -6,6 +6,7 @@ use App\Models\Application;
 use App\Models\OjtDtrSubmission;
 use App\Models\School;
 use App\Models\Student;
+use App\Services\DtrStatus;
 use App\Services\PermissionGate;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -121,6 +122,27 @@ class OjtDtrController extends Controller
         return response()->json(['data' => $this->serialize($ojtDtrSubmission)]);
     }
 
+    public function destroy(Request $request, OjtDtrSubmission $ojtDtrSubmission)
+    {
+        if (! $this->canDelete($request->user(), $ojtDtrSubmission)) {
+            return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
+        }
+
+        if (! $ojtDtrSubmission->isPending()) {
+            return response()->json([
+                'message' => 'Only a DTR that is still awaiting review can be deleted. Approved and rejected records stay on file.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        if ($ojtDtrSubmission->file_path) {
+            Storage::disk('local')->delete($ojtDtrSubmission->file_path);
+        }
+
+        $ojtDtrSubmission->delete();
+
+        return response()->json(null, Response::HTTP_NO_CONTENT);
+    }
+
     public function store(Request $request)
     {
         $user = $request->user();
@@ -134,10 +156,7 @@ class OjtDtrController extends Controller
             }
 
             $companyId = (int) $application->company_id;
-            $initialStatus = OjtDtrSubmission::STATUS_SUBMITTED;
-            $reviewStage = OjtDtrSubmission::REVIEW_HOST;
-            $companyReviewedBy = null;
-            $companyReviewedAt = null;
+            $entry = DtrStatus::forEntry('student', (int) $user->id);
         } else {
             $company = $user->organizationCompany() ?? $user->company;
             if ($role !== 'company' || ! $company || ! $this->canUpload($user)) {
@@ -149,12 +168,8 @@ class OjtDtrController extends Controller
                 return $application;
             }
 
-            // A host admin already vouches for the hours, so the school is the next reviewer.
             $companyId = (int) $company->id;
-            $initialStatus = OjtDtrSubmission::STATUS_SUBMITTED;
-            $reviewStage = OjtDtrSubmission::REVIEW_SCHOOL;
-            $companyReviewedBy = $user->id;
-            $companyReviewedAt = now();
+            $entry = DtrStatus::forEntry('company', (int) $user->id);
         }
 
         $file = $request->file('file');
@@ -168,10 +183,7 @@ class OjtDtrController extends Controller
                 $data,
                 $file,
                 $storedPath,
-                $initialStatus,
-                $reviewStage,
-                $companyReviewedBy,
-                $companyReviewedAt
+                $entry
             ) {
                 $open = OjtDtrSubmission::query()
                     ->where('application_id', $application->id)
@@ -184,7 +196,21 @@ class OjtDtrController extends Controller
                     ]);
                 }
 
-                return OjtDtrSubmission::query()->create([
+                $overlap = OjtDtrSubmission::query()
+                    ->where('application_id', $application->id)
+                    ->where('student_id', $application->student_id)
+                    ->where('status', '!=', OjtDtrSubmission::STATUS_REJECTED)
+                    ->whereDate('period_start', '<=', $data['period_end'])
+                    ->whereDate('period_end', '>=', $data['period_start'])
+                    ->lockForUpdate()
+                    ->exists();
+                if ($overlap) {
+                    throw ValidationException::withMessages([
+                        'period_start' => ['This DTR period overlaps an existing DTR for the same intern. Choose dates that do not overlap.'],
+                    ]);
+                }
+
+                $submission = OjtDtrSubmission::query()->create(array_merge($entry, [
                     'application_id' => $application->id,
                     'student_id' => $application->student_id,
                     'company_id' => $companyId,
@@ -192,16 +218,15 @@ class OjtDtrController extends Controller
                     'period_start' => $data['period_start'],
                     'period_end' => $data['period_end'],
                     'submitted_hours' => $data['submitted_hours'],
-                    'status' => $initialStatus,
-                    'review_stage' => $reviewStage,
                     'remarks' => $data['remarks'] ?? null,
                     'file_path' => $storedPath,
                     'file_name' => $this->safeFileName($file->getClientOriginalName()),
                     'file_mime' => $file->getClientMimeType(),
                     'file_size' => $file->getSize(),
-                    'company_reviewed_by_user_id' => $companyReviewedBy,
-                    'company_reviewed_at' => $companyReviewedAt,
-                ]);
+                ]));
+                $this->lockOjtStart($submission);
+
+                return $submission;
             });
         } catch (ValidationException $exception) {
             Storage::disk('local')->delete($storedPath);
@@ -233,10 +258,7 @@ class OjtDtrController extends Controller
                 return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
             }
             $companyId = (int) $ojtDtrSubmission->company_id;
-            $initialStatus = OjtDtrSubmission::STATUS_SUBMITTED;
-            $reviewStage = OjtDtrSubmission::REVIEW_HOST;
-            $companyReviewedBy = null;
-            $companyReviewedAt = null;
+            $entry = DtrStatus::forEntry('student', (int) $user->id);
         } else {
             $company = $user->organizationCompany() ?? $user->company;
             if ($role !== 'company' || ! $company || ! $this->canUpload($user)) {
@@ -246,10 +268,7 @@ class OjtDtrController extends Controller
                 return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
             }
             $companyId = (int) $company->id;
-            $initialStatus = OjtDtrSubmission::STATUS_SUBMITTED;
-            $reviewStage = OjtDtrSubmission::REVIEW_SCHOOL;
-            $companyReviewedBy = $user->id;
-            $companyReviewedAt = now();
+            $entry = DtrStatus::forEntry('company', (int) $user->id);
         }
 
         if ((int) $data['application_id'] !== (int) $ojtDtrSubmission->application_id) {
@@ -267,10 +286,7 @@ class OjtDtrController extends Controller
                 $data,
                 $file,
                 $storedPath,
-                $initialStatus,
-                $reviewStage,
-                $companyReviewedBy,
-                $companyReviewedAt
+                $entry
             ) {
                 $locked = OjtDtrSubmission::query()->whereKey($ojtDtrSubmission->id)->lockForUpdate()->first();
                 if (! $locked || ! in_array($locked->status, [
@@ -296,7 +312,7 @@ class OjtDtrController extends Controller
                     ]);
                 }
 
-                return OjtDtrSubmission::query()->create([
+                $submission = OjtDtrSubmission::query()->create(array_merge($entry, [
                     'application_id' => $locked->application_id,
                     'student_id' => $locked->student_id,
                     'company_id' => $companyId,
@@ -305,16 +321,15 @@ class OjtDtrController extends Controller
                     'period_start' => $data['period_start'],
                     'period_end' => $data['period_end'],
                     'submitted_hours' => $data['submitted_hours'],
-                    'status' => $initialStatus,
-                    'review_stage' => $reviewStage,
                     'remarks' => $data['remarks'] ?? null,
                     'file_path' => $storedPath,
                     'file_name' => $this->safeFileName($file->getClientOriginalName()),
                     'file_mime' => $file->getClientMimeType(),
                     'file_size' => $file->getSize(),
-                    'company_reviewed_by_user_id' => $companyReviewedBy,
-                    'company_reviewed_at' => $companyReviewedAt,
-                ]);
+                ]));
+                $this->lockOjtStart($submission);
+
+                return $submission;
             });
         } catch (ValidationException $exception) {
             Storage::disk('local')->delete($storedPath);
@@ -340,25 +355,16 @@ class OjtDtrController extends Controller
             return response()->json(['message' => 'Missing permission to approve DTR hours.'], Response::HTTP_FORBIDDEN);
         }
 
-        $updated = DB::transaction(function () use ($user, $ojtDtrSubmission) {
+        $allowHost = $role === 'admin';
+        $updated = DB::transaction(function () use ($user, $ojtDtrSubmission, $role, $allowHost) {
             $locked = OjtDtrSubmission::query()->whereKey($ojtDtrSubmission->id)->lockForUpdate()->first();
-            if (! $locked || ! $locked->isAwaitingSchool()) {
+            $awaiting = $locked && ($locked->isAwaitingSchool() || ($allowHost && $locked->isAwaitingHost()));
+            if (! $awaiting) {
                 return null;
             }
 
-            $locked->update([
-                'status' => OjtDtrSubmission::STATUS_APPROVED,
-                'review_stage' => null,
-                'reviewed_by_user_id' => $user->id,
-                'reviewed_at' => now(),
-                'rejection_reason' => null,
-            ]);
-
-            // Phase C: lock OJT start date once any DTR is approved.
-            \App\Models\PlacementSchedule::query()
-                ->where('application_id', $locked->application_id)
-                ->whereNull('ojt_start_locked_at')
-                ->update(['ojt_start_locked_at' => now()]);
+            $locked->update(DtrStatus::forApproval($role, (int) $user->id));
+            $this->lockOjtStart($locked);
 
             return $locked;
         });
@@ -380,31 +386,25 @@ class OjtDtrController extends Controller
             'reason' => ['required', 'string', 'max:1000'],
             'revision_required' => ['sometimes', 'boolean'],
         ]);
-        $nextStatus = ! empty($data['revision_required'])
-            ? OjtDtrSubmission::STATUS_REVISION_REQUIRED
-            : OjtDtrSubmission::STATUS_REJECTED;
+        $reason = trim($data['reason']);
 
         if ($role === 'company') {
-            return $this->companyReject($user, $ojtDtrSubmission, trim($data['reason']), $nextStatus);
+            return $this->companyReject($user, $ojtDtrSubmission, $reason);
         }
 
         if (! $this->canCoordinatorReview($user, $ojtDtrSubmission)) {
             return response()->json(['message' => 'Missing permission to reject DTR hours.'], Response::HTTP_FORBIDDEN);
         }
 
-        $updated = DB::transaction(function () use ($user, $ojtDtrSubmission, $data, $nextStatus) {
+        $allowHost = $role === 'admin';
+        $updated = DB::transaction(function () use ($user, $ojtDtrSubmission, $role, $reason, $allowHost) {
             $locked = OjtDtrSubmission::query()->whereKey($ojtDtrSubmission->id)->lockForUpdate()->first();
-            if (! $locked || ! $locked->isAwaitingSchool()) {
+            $awaiting = $locked && ($locked->isAwaitingSchool() || ($allowHost && $locked->isAwaitingHost()));
+            if (! $awaiting) {
                 return null;
             }
 
-            $locked->update([
-                'status' => $nextStatus,
-                'review_stage' => null,
-                'reviewed_by_user_id' => $user->id,
-                'reviewed_at' => now(),
-                'rejection_reason' => trim($data['reason']),
-            ]);
+            $locked->update(DtrStatus::forRejection($role, (int) $user->id, $reason));
 
             return $locked;
         });
@@ -447,13 +447,8 @@ class OjtDtrController extends Controller
                 return null;
             }
 
-            $locked->update([
-                'status' => OjtDtrSubmission::STATUS_SUBMITTED,
-                'review_stage' => OjtDtrSubmission::REVIEW_SCHOOL,
-                'company_reviewed_by_user_id' => $user->id,
-                'company_reviewed_at' => now(),
-                'company_rejection_reason' => null,
-            ]);
+            $locked->update(DtrStatus::forApproval('company', (int) $user->id));
+            $this->lockOjtStart($locked);
 
             return $locked;
         });
@@ -467,7 +462,7 @@ class OjtDtrController extends Controller
         return response()->json(['data' => $this->serialize($updated->fresh($this->relations()))]);
     }
 
-    private function companyReject($user, OjtDtrSubmission $ojtDtrSubmission, string $reason, string $nextStatus)
+    private function companyReject($user, OjtDtrSubmission $ojtDtrSubmission, string $reason)
     {
         $company = $user->organizationCompany() ?? $user->company;
         if (! $company || ! $this->canCompanyReview($user)) {
@@ -477,20 +472,13 @@ class OjtDtrController extends Controller
             return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
         }
 
-        $updated = DB::transaction(function () use ($user, $ojtDtrSubmission, $reason, $nextStatus) {
+        $updated = DB::transaction(function () use ($user, $ojtDtrSubmission, $reason) {
             $locked = OjtDtrSubmission::query()->whereKey($ojtDtrSubmission->id)->lockForUpdate()->first();
             if (! $locked || ! $locked->isAwaitingHost()) {
                 return null;
             }
 
-            $locked->update([
-                'status' => $nextStatus,
-                'review_stage' => null,
-                'company_reviewed_by_user_id' => $user->id,
-                'company_reviewed_at' => now(),
-                'company_rejection_reason' => $reason,
-                'rejection_reason' => $reason,
-            ]);
+            $locked->update(DtrStatus::forRejection('company', (int) $user->id, $reason));
 
             return $locked;
         });
@@ -603,6 +591,28 @@ class OjtDtrController extends Controller
         return $this->studentBelongsToSchool($submission->student, $user->organizationSchool() ?? $user->school);
     }
 
+    private function canDelete($user, OjtDtrSubmission $submission): bool
+    {
+        if (! $this->canView($user, $submission)) {
+            return false;
+        }
+
+        $role = $user->effectiveAppRole();
+        if ($role === 'admin' || $role === 'student') {
+            return true;
+        }
+
+        if ($role === 'company') {
+            return $this->canUpload($user);
+        }
+
+        if ($role === 'school') {
+            return $this->permissions->userCan($user, 'org.approve_ojt_logs');
+        }
+
+        return false;
+    }
+
     private function canView($user, OjtDtrSubmission $submission): bool
     {
         $role = $user->effectiveAppRole();
@@ -695,6 +705,18 @@ class OjtDtrController extends Controller
         $base = trim(str_replace(['\\', '/'], '', $name));
 
         return $base !== '' ? mb_substr($base, 0, 180) : 'dtr';
+    }
+
+    private function lockOjtStart(OjtDtrSubmission $row): void
+    {
+        if ($row->status !== OjtDtrSubmission::STATUS_APPROVED) {
+            return;
+        }
+
+        \App\Models\PlacementSchedule::query()
+            ->where('application_id', $row->application_id)
+            ->whereNull('ojt_start_locked_at')
+            ->update(['ojt_start_locked_at' => now()]);
     }
 
     private function displayStatus(OjtDtrSubmission $row): string

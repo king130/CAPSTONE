@@ -32,8 +32,8 @@ class AuthController extends Controller
         private readonly SubscriptionPlanService $subscriptionPlans,
         private readonly TenantRoleService $tenantRoleService,
         private readonly OrganizationAccountProvisioner $organizationAccountProvisioner,
-        private readonly EmailOtpService $emailOtps,
         private readonly SubscriptionAccessService $subscriptionAccess,
+        private readonly EmailOtpService $emailOtps,
     )
     {
     }
@@ -274,6 +274,7 @@ class AuthController extends Controller
 
     public function updatePassword(Request $request)
     {
+
         if ($passwordError = $this->passwordPolicyError($request->input('password'))) {
             return response()->json([
                 'message' => $passwordError,
@@ -314,6 +315,7 @@ class AuthController extends Controller
                 'email' => $user->email,
                 'displayName' => $user->name,
                 'expiresAt' => $setupToken->expires_at?->toIso8601String(),
+                'role' => $user->role,
             ],
         ]);
     }
@@ -388,6 +390,16 @@ class AuthController extends Controller
             $profile['schoolId'] = $s->school_id ? (string) $s->school_id : '';
             $profile['course'] = $s->course;
             $profile['yearLevel'] = $s->year_level;
+            if (! $s->relationLoaded('skills')) {
+                $s->load('skills');
+            }
+            $profile['skills'] = $s->skills->map(fn ($skill) => [
+                'id' => (string) $skill->id,
+                'name' => $skill->name,
+                'category' => $skill->category,
+                'status' => $skill->status,
+                'level' => $skill->pivot->level ?? 'beginner',
+            ])->values()->all();
         }
 
         $verificationStatus = null;
@@ -558,7 +570,7 @@ class AuthController extends Controller
     private function loadUserRelations(User $user): void
     {
         $user->load([
-            'student',
+            'student.skills',
             'company',
             'school',
             'platformRole.permissions',

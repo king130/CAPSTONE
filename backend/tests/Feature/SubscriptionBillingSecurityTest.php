@@ -248,9 +248,9 @@ class SubscriptionBillingSecurityTest extends TestCase
         $response->assertOk();
         $context['subscription']->refresh();
         $context['organization']->refresh();
-        $this->assertSame('standard', $context['subscription']->plan);
-        $this->assertSame('trialing', $context['subscription']->status);
-        $this->assertNotNull($context['subscription']->trial_ends_at);
+        // Cancel restores free plan (writable free limits), not a paid trial.
+        $this->assertSame('free', $context['subscription']->plan);
+        $this->assertSame('active', $context['subscription']->status);
         $this->assertSame('monthly', $context['subscription']->billing_cycle);
         $this->assertArrayNotHasKey('pending_plan_change', $context['organization']->settings ?? []);
     }
@@ -609,13 +609,12 @@ class SubscriptionBillingSecurityTest extends TestCase
         $this->postJson('/api/subscriptions/cancel-pending')->assertOk();
         $context['subscription']->refresh();
         $context['organization']->refresh();
-        // Cancel restores a trial (free is no longer the destination).
-        $this->assertSame('trialing', $context['subscription']->status);
-        $this->assertSame('standard', $context['subscription']->plan);
-        $this->assertNotNull($context['subscription']->trial_ends_at);
+        // Cancel restores free plan with free seat limits.
+        $this->assertSame('active', $context['subscription']->status);
+        $this->assertSame('free', $context['subscription']->plan);
         $this->assertArrayNotHasKey('pending_plan_change', $context['organization']->settings ?? []);
         $this->assertSame(
-            'standard',
+            'free',
             app(\App\Services\SubscriptionPlanService::class)
                 ->getPlanForOrganization($context['organization']->fresh(['subscription']))
                 ?->slug

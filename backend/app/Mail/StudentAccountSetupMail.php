@@ -37,6 +37,7 @@ class StudentAccountSetupMail extends Mailable
                   <h2 style="margin:0 0 16px;">Complete your student account setup</h2>
                   <p style="margin:0 0 12px;">Hello {$this->studentName},</p>
                   <p style="margin:0 0 12px;">{$this->schoolName} created your student account. Use the button below to create your password and confirm your account.</p>
+                  <p style="margin:0 0 12px;">On your phone, this link opens the OJT Intern Path app when it is installed. Otherwise it opens in the browser.</p>
                   <p style="margin:24px 0;">
                     <a href="{$this->setupUrl}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700;">Create Password</a>
                   </p>

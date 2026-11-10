@@ -11,7 +11,7 @@ import Input from '@/components/ui/input/Input.vue'
 import Select from '@/components/ui/select/Select.vue'
 import Switch from '@/components/ui/switch/Switch.vue'
 import MainLayout from '@/layouts/MainLayout.vue'
-import { defaultNavItems, type LayoutNavItem, type LayoutRole } from '@/layouts/navigation'
+import { type LayoutRole } from '@/layouts/navigation'
 import {
   createTenantMember,
   createManagedAccount,
@@ -19,6 +19,7 @@ import {
   deleteTenantRole,
   getTenantRbac,
   listManageableTenants,
+  resendTenantMemberSetupLink,
   syncTenantRolePermissions,
   updateTenantMemberRole,
   type TenantMember,
@@ -29,6 +30,35 @@ import {
 import { permissionAliasGroup, permissionDisplayLabel } from '@/services/permissions'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
+import { toTitleCaseName } from '@/utils/formatDisplay'
+import { toast } from 'vue-sonner'
+
+const SCHOOL_ONLY_PERMISSION_KEYS = new Set(['org.view_students', 'org.manage_students'])
+
+const PERMISSION_HELP: Record<string, string> = {
+  'org.view_reports': 'See dashboards and summary reports for this organization.',
+  'org.reports_view': 'See dashboards and summary reports for this organization.',
+  'org.reports_export': 'Download report files as CSV or similar exports.',
+  'org.view_internships': 'See posted jobs and internship listings.',
+  'org.view_agreements': 'See partnership agreements with schools or hosts.',
+  'org.view_applications': 'See internship applications and applicant progress.',
+  'org.view_students': 'See the school student roster and progress.',
+  'org.view_ojt_progress': 'See OJT hours and placement progress.',
+  'org.manage_members': 'Invite and manage people in this organization.',
+  'org.manage_roles': 'Create roles and change who has which role.',
+  'org.manage_subscription': 'Manage the organization billing plan.',
+  'org.manage_profile': 'Edit the public organization profile.',
+  'org.manage_internships': 'Create, edit, and close job postings.',
+  'org.manage_agreements': 'Start and manage partnership agreements.',
+  'org.manage_applications': 'Move applicants through review and decisions.',
+  'org.manage_students': 'Create and manage student accounts at the school.',
+  'org.manage_assessments': 'Record interview and OJT assessment scores.',
+  'org.approve_applications': 'Endorse or decide on applications.',
+  'org.approve_agreements': 'Accept or reject agreement requests.',
+  'org.approve_ojt_logs': 'Approve or reject OJT hour logs and DTRs.',
+  'org.approve_certificates': 'Issue completion certificates.',
+  upload_files: 'Upload files and documents for this organization.',
+}
 
 type PermissionCategoryId = 'view' | 'manage' | 'reports' | 'approve' | 'other'
 
@@ -98,8 +128,6 @@ const currentRole = computed<LayoutRole>(() => {
   return 'company'
 })
 
-const navItems = computed<LayoutNavItem[]>(() => defaultNavItems[currentRole.value])
-
 const pageTitle = computed(() => (props.mode === 'roles' ? 'Role Management' : 'Permissions'))
 const pageSubtitle = computed(() => {
   if (currentRole.value === 'school') {
@@ -161,9 +189,14 @@ const filteredRoles = computed(() => {
 
 const filteredPermissions = computed(() => {
   const query = search.value.trim().toLowerCase()
-  if (!query) return permissions.value
+  const hideSchoolOnly = selectedTenant.value?.type === 'company'
+  let list = permissions.value
+  if (hideSchoolOnly) {
+    list = list.filter((permission) => !SCHOOL_ONLY_PERMISSION_KEYS.has(permission.key))
+  }
+  if (!query) return list
 
-  return permissions.value.filter((permission) => {
+  return list.filter((permission) => {
     const haystack = [permission.key, permissionLabel(permission), permission.description || ''].join(' ').toLowerCase()
     return haystack.includes(query)
   })
@@ -192,8 +225,86 @@ const permissionCategories = computed(() => {
     .filter((group) => group.permissions.length > 0)
 })
 
+function isStudentMembership(member: TenantMember): boolean {
+  const slug = String(member.role?.slug || '').toLowerCase()
+  const legacy = String(member.user?.legacyRole || '').toLowerCase()
+  return slug === 'intern' || legacy === 'student'
+}
+
+function isProtectedDefaultRole(role: TenantRole): boolean {
+  const slug = String(role.slug || '').toLowerCase()
+  const name = String(role.name || '').toLowerCase()
+  const protectedSlugs = [
+    'school_admin',
+    'company_admin',
+    'department_head',
+    'teacher',
+    'registrar',
+    'intern',
+    'manager',
+    'hr',
+    'finance',
+  ]
+  if (protectedSlugs.includes(slug)) return true
+  return [
+    'school admin',
+    'company admin',
+    'department head',
+    'teacher',
+    'registrar',
+    'intern',
+    'manager',
+    'hr',
+    'finance',
+  ].includes(name)
+}
+
+function memberRoleValue(member: TenantMember): string {
+  return String(memberRoleDrafts.value[member.id] ?? member.role?.id ?? '')
+}
+
+function memberRoleIsAssignable(member: TenantMember): boolean {
+  const value = memberRoleValue(member)
+  if (!value) return false
+  return staffAssignableRoles.value.some((role) => String(role.id) === value)
+}
+
+function permissionHelpText(permission: TenantPermission): string {
+  return (
+    PERMISSION_HELP[permission.key]
+    || permission.description
+    || permissionDisplayLabel(permission.key)
+  )
+}
+
+function isSchoolAdminRole(role: TenantRole): boolean {
+  const slug = String(role.slug || '').toLowerCase()
+  const name = String(role.name || '').toLowerCase()
+  return slug === 'school_admin' || name === 'school admin'
+}
+
+function isLockedSchoolAdminPermission(role: TenantRole, permissionKey: string): boolean {
+  if (!isSchoolAdminRole(role)) return false
+  return permissionKey === 'org.manage_roles' || permissionKey === 'org.manage_permissions'
+}
+
+const staffMembers = computed(() => members.value.filter((member) => !isStudentMembership(member)))
+
+const staffMemberCountByRoleId = computed(() => {
+  const counts: Record<string, number> = {}
+  for (const member of staffMembers.value) {
+    const roleId = memberRoleDrafts.value[member.id] ?? member.role.id
+    counts[roleId] = (counts[roleId] || 0) + 1
+  }
+  return counts
+})
+
+const staffAssignableRoles = computed(() =>
+  roles.value.filter((role) => String(role.slug || '').toLowerCase() !== 'intern'),
+)
+
 const hasPendingMemberRoleChanges = computed(() =>
-  members.value.some((member) => (memberRoleDrafts.value[member.id] ?? member.role.id) !== member.role.id),
+  staffMembers.value.some((member) => (memberRoleDrafts.value[member.id] ?? member.role.id) !== member.role.id),
 )
 const rolesWithPendingPermissionChanges = computed(() =>
   roles.value.filter((role) => hasPendingPermissionChanges(role)),
@@ -258,6 +369,9 @@ function hasPendingPermissionChanges(role: TenantRole) {
 }
 
 function togglePermissionDraft(role: TenantRole, permissionKey: string, enabled: boolean) {
+  if (isLockedSchoolAdminPermission(role, permissionKey) && !enabled) {
+    return
+  }
   const current = roleDraftPermissions(role)
   const group = aliasesForPermission(permissionKey)
   rolePermissionDrafts.value = {
@@ -418,13 +532,37 @@ async function createMember() {
       title: '',
     }
 
-    success('User created.', {
-      description: `Temporary password: ${response.temporaryPassword}`,
-    })
+    const email = response.email || response.member.user.email
+    if (response.inviteSent !== false) {
+      success(`Account created. A password setup link was sent to ${email}.`)
+    } else {
+      toast.warning('Account created, but email failed', {
+        description: response.message || `Could not send the setup link to ${email}.`,
+        action: {
+          label: 'Resend',
+          onClick: () => {
+            void resendCreatedMemberInvite(selectedTenantId.value!, response.member.id, email)
+          },
+        },
+      })
+    }
   } catch (caughtError) {
     error(caughtError, { fallback: 'Unable to create account user.' })
   } finally {
     creatingMember.value = false
+  }
+}
+
+async function resendCreatedMemberInvite(tenantId: string, membershipId: string, email: string) {
+  try {
+    const result = await resendTenantMemberSetupLink(tenantId, membershipId)
+    if (result.inviteSent) {
+      success(`A fresh setup link was sent to ${result.email || email}.`)
+    } else {
+      error(result.invite?.errorMessage || result.message || 'Could not send the setup link.')
+    }
+  } catch (caughtError) {
+    error(caughtError, { fallback: 'Could not resend the setup link.' })
   }
 }
 
@@ -465,7 +603,7 @@ async function saveAllPermissionChanges() {
     }
 
     success('Permissions updated.', {
-      description: `${pendingRoles.length} role${pendingRoles.length === 1 ? '' : 's'} saved successfully.`,
+      description: `${pendingRoles.length} role${pendingRoles.length === 1 ? '' : 's'} saved successfully. Affected users must log out and back in for changes to apply.`,
     })
   } catch (caughtError) {
     error(caughtError, { fallback: 'Unable to save permission changes.' })
@@ -487,7 +625,7 @@ async function saveMemberAssignments() {
 
   savingMemberAssignments.value = true
   try {
-    for (const member of members.value) {
+    for (const member of staffMembers.value) {
       const nextRoleId = memberRoleDrafts.value[member.id] ?? member.role.id
       if (nextRoleId === member.role.id) continue
 
@@ -511,7 +649,7 @@ async function saveMemberAssignments() {
 
 function discardMemberAssignments() {
   const nextDrafts: Record<string, string> = {}
-  for (const member of members.value) {
+  for (const member of staffMembers.value) {
     nextDrafts[member.id] = member.role.id
   }
   memberRoleDrafts.value = nextDrafts
@@ -559,7 +697,7 @@ watch(selectedTenantId, async (next, previous) => {
 </script>
 
 <template>
-  <MainLayout :role="currentRole" :title="pageTitle" :active-item="activeItem" :nav-items="navItems">
+  <MainLayout :role="currentRole" :title="pageTitle" :active-item="activeItem">
     <div class="space-y-5">
       <section class="rounded-2xl border border-border bg-card shadow-sm">
         <div class="flex flex-col gap-4 border-b border-border px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
@@ -595,7 +733,7 @@ watch(selectedTenantId, async (next, previous) => {
             </div>
             <div v-else-if="selectedTenant" class="rounded-xl border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
               <span class="font-medium text-foreground">{{ selectedTenant.name }}</span>
-              <span class="text-muted-foreground"> · {{ selectedTenant.memberCount }} users · {{ roles.length }} roles</span>
+              <span class="text-muted-foreground"> · {{ staffMembers.length }} users · {{ roles.length }} roles</span>
             </div>
             <div class="relative">
               <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -731,14 +869,15 @@ watch(selectedTenantId, async (next, previous) => {
                         <div class="min-w-0">
                           <p class="truncate font-medium text-foreground">{{ role.name }}</p>
                           <p class="mt-0.5 text-xs text-muted-foreground">
-                            {{ role.memberCount }} users · {{ role.permissions.length }} permissions
+                            {{ staffMemberCountByRoleId[role.id] ?? 0 }} users · {{ role.permissions.length }} permissions
                           </p>
                         </div>
                         <button
+                          v-if="!isProtectedDefaultRole(role)"
                           type="button"
                           class="rounded-lg p-1.5 text-muted-foreground transition hover:bg-red-950/40 hover:text-red-300 disabled:opacity-40"
-                          :disabled="deletingRoleId === role.id || role.memberCount > 0"
-                          :title="role.memberCount > 0 ? 'Reassign users before deleting' : 'Delete role'"
+                          :disabled="deletingRoleId === role.id || (staffMemberCountByRoleId[role.id] ?? 0) > 0"
+                          :title="(staffMemberCountByRoleId[role.id] ?? 0) > 0 ? 'Reassign users before deleting' : 'Delete role'"
                           @click="removeRole(role)"
                         >
                           <Trash2 class="h-4 w-4" />
@@ -805,7 +944,7 @@ watch(selectedTenantId, async (next, previous) => {
                       </div>
                     </div>
 
-                    <div v-if="members.length" class="overflow-x-auto">
+                    <div v-if="staffMembers.length" class="overflow-x-auto">
                       <table class="min-w-full text-sm">
                         <thead class="bg-muted text-left text-xs uppercase tracking-wide text-muted-foreground">
                           <tr>
@@ -815,23 +954,30 @@ watch(selectedTenantId, async (next, previous) => {
                           </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-100">
-                          <tr v-for="member in members" :key="member.id">
+                          <tr v-for="member in staffMembers" :key="member.id">
                             <td class="px-4 py-3">
-                              <p class="font-medium text-foreground">{{ member.user.name }}</p>
+                              <p class="font-medium text-foreground">{{ toTitleCaseName(member.user.name) || member.user.name }}</p>
                               <p class="text-xs text-muted-foreground">{{ member.user.email }}</p>
                             </td>
                             <td class="px-4 py-3">
                               <Select
-                                :model-value="memberRoleDrafts[member.id] ?? member.role.id"
+                                v-if="memberRoleIsAssignable(member)"
+                                :model-value="memberRoleValue(member)"
                                 class="min-w-[180px] bg-card"
                                 @update:model-value="memberRoleDrafts = { ...memberRoleDrafts, [member.id]: $event }"
                               >
-                                <option v-for="role in roles" :key="role.id" :value="role.id">
+                                <option v-for="role in staffAssignableRoles" :key="role.id" :value="String(role.id)">
                                   {{ role.name }}
                                 </option>
                               </Select>
+                              <div
+                                v-else
+                                class="inline-flex min-w-[180px] items-center rounded-md border border-input bg-muted px-3 py-2 text-sm font-medium text-foreground"
+                              >
+                                {{ member.role?.name || 'Company Admin' }}
+                              </div>
                               <p
-                                v-if="(memberRoleDrafts[member.id] ?? member.role.id) !== member.role.id"
+                                v-if="memberRoleIsAssignable(member) && memberRoleValue(member) !== String(member.role?.id || '')"
                                 class="mt-1 text-xs font-medium text-amber-700"
                               >
                                 Unsaved
@@ -919,7 +1065,7 @@ watch(selectedTenantId, async (next, previous) => {
                               v-for="permission in category.permissions"
                               :key="permission.key"
                               class="sticky top-[45px] z-20 min-w-[120px] max-w-[140px] border-b border-border bg-card px-2 py-2 text-left align-bottom"
-                              :title="permission.description || permission.key"
+                              :title="permissionHelpText(permission)"
                             >
                               <p class="text-xs font-medium capitalize leading-4 text-foreground">
                                 {{ permissionLabel(permission) }}
@@ -960,11 +1106,16 @@ watch(selectedTenantId, async (next, previous) => {
                               class="border-b border-border px-2 py-3 text-center align-middle"
                               :title="permission.description || permission.key"
                             >
-                              <Switch
-                                :model-value="roleHasPermission(role, permission.key)"
-                                :disabled="savingRoleId === role.id"
-                                @update:model-value="togglePermissionDraft(role, permission.key, $event)"
-                              />
+                              <span
+                                class="inline-flex"
+                                :title="isLockedSchoolAdminPermission(role, permission.key) ? 'School Admin must keep role and permission management.' : (permission.description || permission.key)"
+                              >
+                                <Switch
+                                  :model-value="roleHasPermission(role, permission.key)"
+                                  :disabled="savingRoleId === role.id || isLockedSchoolAdminPermission(role, permission.key)"
+                                  @update:model-value="togglePermissionDraft(role, permission.key, $event)"
+                                />
+                              </span>
                             </td>
                           </template>
                           <td v-else class="border-b border-border px-2 py-3 text-center text-xs text-muted-foreground">

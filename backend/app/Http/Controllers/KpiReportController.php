@@ -96,15 +96,19 @@ class KpiReportController extends Controller
             ->select('student_id', DB::raw('SUM(hours) as total_hours'))
             ->groupBy('student_id')
             ->get();
-        $avgApprovedOjtHours = $approvedPerStudent->isEmpty()
-            ? 0.0
+        $ojtStudentCount = $approvedPerStudent->count();
+        $avgApprovedOjtHours = $ojtStudentCount === 0
+            ? null
             : round((float) $approvedPerStudent->avg('total_hours'), 2);
 
-        $avgAssessmentScore = round((float) ((clone $assessmentQuery)->whereNotNull('overall_score')->avg('overall_score') ?? 0), 2);
+        $assessmentCount = (int) ((clone $assessmentQuery)->whereNotNull('overall_score')->count());
+        $avgAssessmentScore = $assessmentCount === 0
+            ? null
+            : round((float) ((clone $assessmentQuery)->whereNotNull('overall_score')->avg('overall_score') ?? 0), 2);
 
         return response()->json([
             'data' => [
-                'placementRate' => $placementRate,
+                'placementRate' => ($studentCount === 0 && $totalApplications === 0) ? null : $placementRate,
                 'applicationCountsByStatus' => $applicationsByStatus,
                 'totalApplications' => $totalApplications,
                 'acceptedApplications' => $acceptedApplications,
@@ -112,6 +116,8 @@ class KpiReportController extends Controller
                 'totalAgreements' => array_sum(array_map('intval', $agreementsByStatus)),
                 'avgApprovedOjtHours' => $avgApprovedOjtHours,
                 'avgAssessmentScore' => $avgAssessmentScore,
+                'ojtStudentCount' => $ojtStudentCount,
+                'assessmentCount' => $assessmentCount,
                 'studentCount' => $studentCount,
                 'scopedRole' => $appRole,
             ],
@@ -124,14 +130,16 @@ class KpiReportController extends Controller
     private function emptyKpi(): array
     {
         return [
-            'placementRate' => 0,
+            'placementRate' => null,
             'applicationCountsByStatus' => [],
             'totalApplications' => 0,
             'acceptedApplications' => 0,
             'agreementCountsByStatus' => [],
             'totalAgreements' => 0,
-            'avgApprovedOjtHours' => 0,
-            'avgAssessmentScore' => 0,
+            'avgApprovedOjtHours' => null,
+            'avgAssessmentScore' => null,
+            'ojtStudentCount' => 0,
+            'assessmentCount' => 0,
             'studentCount' => 0,
             'scopedRole' => null,
         ];

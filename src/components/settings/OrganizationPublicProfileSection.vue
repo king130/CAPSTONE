@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { toTypedSchema } from '@vee-validate/zod'
 import { ArrowDown, ArrowUp, ImagePlus, Loader2, Trash2 } from 'lucide-vue-next'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useForm } from 'vee-validate'
 import { z } from 'zod'
@@ -18,7 +18,6 @@ import Input from '@/components/ui/input/Input.vue'
 import Skeleton from '@/components/ui/skeleton/Skeleton.vue'
 import Textarea from '@/components/ui/textarea/Textarea.vue'
 import { useToast } from '@/composables/useToast'
-import { buildProfileAvatarUrl } from '@/services/profileMedia'
 import {
   deleteOrganizationMedia,
   listOrganizationMedia,
@@ -38,6 +37,11 @@ import { useAuthStore } from '@/stores/auth'
 const authStore = useAuthStore()
 const { success, error } = useToast()
 
+const emit = defineEmits<{
+  'open-account-photo': []
+  'dirty-change': [dirty: boolean]
+}>()
+
 const loading = ref(true)
 const loadError = ref('')
 const savingProfile = ref(false)
@@ -50,16 +54,12 @@ const photoInputRef = ref<HTMLInputElement | null>(null)
 const profile = ref<OrganizationPublicProfile | null>(null)
 const media = ref<OrganizationMediaItem[]>([])
 const perkDraft = ref('')
+const baselineSnapshot = ref('')
 
+const isSchoolOrg = computed(() => authStore.user?.activeOrganization?.type === 'school')
+/** Schools do show perks on the public profile page when set — keep the editor visible. */
+const showPerksEditor = computed(() => true)
 const organizationId = computed(() => authStore.user?.activeOrganization?.id ?? profile.value?.id ?? '')
-const profilePhotoUrl = computed(() => {
-  const currentUser = authStore.user
-  const record = currentUser?.profile as Record<string, unknown> | undefined
-  if (currentUser?.uid && record?.avatarPath) {
-    return buildProfileAvatarUrl(currentUser.uid, currentUser.updatedAt)
-  }
-  return ''
-})
 const photoCount = computed(() => profile.value?.photoCount ?? media.value.length)
 const photoLimit = computed(() => profile.value?.photoLimit ?? 3)
 const atPhotoLimit = computed(() => photoCount.value >= photoLimit.value)
@@ -117,6 +117,16 @@ const perks = computed(() => {
   }
 })
 
+function snapshotFromForm() {
+  return JSON.stringify({
+    tagline: String(values.tagline ?? ''),
+    description: String(values.description ?? ''),
+    website: String(values.website ?? ''),
+    industry: String(values.industry ?? ''),
+    perksText: String(values.perksText ?? '[]'),
+  })
+}
+
 function applyProfile(next: OrganizationPublicProfile) {
   profile.value = next
   setValues({
@@ -126,7 +136,21 @@ function applyProfile(next: OrganizationPublicProfile) {
     industry: next.industry,
     perksText: JSON.stringify(next.perks),
   })
+  baselineSnapshot.value = JSON.stringify({
+    tagline: next.tagline,
+    description: next.description,
+    website: next.website,
+    industry: next.industry,
+    perksText: JSON.stringify(next.perks),
+  })
 }
+
+const isDirty = computed(() => {
+  if (loading.value || !baselineSnapshot.value) return false
+  return snapshotFromForm() !== baselineSnapshot.value
+})
+
+watch(isDirty, (dirty) => emit('dirty-change', dirty), { immediate: true })
 
 async function loadAll() {
   loading.value = true
@@ -184,9 +208,26 @@ const savePublicProfile = handleSubmit(async (formValues) => {
     success('Public profile saved.')
   } catch (err) {
     error(err, { fallback: 'Unable to save public profile.' })
+    throw err
   } finally {
     savingProfile.value = false
   }
+})
+
+async function saveIfDirty() {
+  if (!isDirty.value) return
+  await savePublicProfile()
+}
+
+function discardChanges() {
+  if (!profile.value) return
+  applyProfile(profile.value)
+}
+
+defineExpose({
+  isDirty,
+  saveIfDirty,
+  discardChanges,
 })
 
 function openPhotoPicker() {
@@ -313,7 +354,11 @@ onMounted(() => {
     <div class="space-y-1">
       <h4 class="text-base font-semibold text-foreground">Public profile</h4>
       <p class="text-sm text-muted-foreground">
-        This content appears on internship listing cards and your organization page.
+        {{
+          isSchoolOrg
+            ? 'This content appears on your school public page and partner directory listings.'
+            : 'This content appears on internship listing cards and your organization page.'
+        }}
       </p>
     </div>
 
@@ -329,7 +374,7 @@ onMounted(() => {
     </div>
 
     <template v-else>
-      <form class="space-y-4" @submit="savePublicProfile">
+      <form class="space-y-4" @submit.prevent>
         <FormField v-slot="{ componentField, errorMessage: fieldError }" name="tagline">
           <FormItem>
             <FormLabel for="orgPublicTagline">Tagline</FormLabel>
@@ -348,7 +393,11 @@ onMounted(() => {
                 id="orgPublicDescription"
                 :model-value="String(values.description ?? '')"
                 :rows="5"
-                placeholder="Tell students what makes your organization a great place to intern"
+                :placeholder="
+                  isSchoolOrg
+                    ? 'Describe your school and OJT programs for partner companies and students'
+                    : 'Tell students what makes your organization a great place to intern'
+                "
                 @update:modelValue="setFieldValue('description', $event)"
               />
             </FormControl>
@@ -377,7 +426,7 @@ onMounted(() => {
 
           <FormField v-slot="{ componentField, errorMessage: fieldError }" name="industry">
             <FormItem>
-              <FormLabel for="orgPublicIndustry">Industry</FormLabel>
+              <FormLabel for="orgPublicIndustry">{{ isSchoolOrg ? 'Focus area' : 'Industry' }}</FormLabel>
               <FormControl>
                 <Input id="orgPublicIndustry" v-bind="componentField" />
               </FormControl>
@@ -386,7 +435,7 @@ onMounted(() => {
           </FormField>
         </div>
 
-        <div class="space-y-3">
+        <div v-if="showPerksEditor" class="space-y-3">
           <FormLabel>Perks</FormLabel>
           <div class="flex flex-wrap gap-2">
             <Badge v-for="(perk, index) in perks" :key="`${perk}-${index}`" variant="secondary" class="gap-2">
@@ -403,28 +452,23 @@ onMounted(() => {
           </div>
           <p class="text-xs text-muted-foreground">Up to 10 perks, 40 characters each.</p>
         </div>
-
-        <Button type="submit" :disabled="savingProfile">
-          {{ savingProfile ? 'Saving...' : 'Save public profile' }}
-        </Button>
       </form>
 
       <div class="space-y-4 border-t border-border pt-5">
-        <div class="space-y-2">
-          <h5 class="text-sm font-semibold text-foreground">Profile photo</h5>
-          <p class="text-sm text-muted-foreground">
-            Job posts and your public profile use this picture as the cover. Change it from your account profile photo.
-          </p>
-          <div class="flex h-28 w-28 items-center justify-center overflow-hidden rounded-xl border border-border bg-muted">
-            <img
-              v-if="profilePhotoUrl"
-              :src="profilePhotoUrl"
-              alt="Company profile photo"
-              class="h-full w-full object-contain p-2"
-            />
-            <span v-else class="px-2 text-center text-xs text-muted-foreground">No profile photo</span>
-          </div>
-        </div>
+        <p class="text-sm text-muted-foreground">
+          {{
+            isSchoolOrg
+              ? 'Your public school page cover uses your account profile photo.'
+              : 'Job posts and your public profile cover use your account profile photo.'
+          }}
+          <button
+            type="button"
+            class="font-medium text-primary underline-offset-4 hover:underline"
+            @click="emit('open-account-photo')"
+          >
+            Change in My Account
+          </button>
+        </p>
 
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div class="space-y-1">

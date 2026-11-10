@@ -2,13 +2,14 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { FileUp, LoaderCircle, RefreshCw, Trash2, Upload } from 'lucide-vue-next'
 
+import FilePreviewActions from '@/components/FilePreviewActions.vue'
 import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
 import { useToast } from '@/composables/useToast'
+import { fetchApiFileBlob } from '@/services/fileBlob'
 import {
   checklistStatusLabel,
   deleteOrganizationVerificationDocument,
-  downloadOrganizationVerificationDocument,
   listOrganizationVerificationDocuments,
   normalizeVerificationChecklist,
   resubmitOrganizationVerificationDocument,
@@ -178,13 +179,8 @@ async function removeDoc(item: VerificationChecklistItem) {
   }
 }
 
-async function downloadDoc(item: VerificationChecklistItem) {
-  if (!item.document) return
-  try {
-    await downloadOrganizationVerificationDocument(item.document.id, item.document.fileName)
-  } catch (caught) {
-    error(caught, { fallback: 'Unable to download the document.' })
-  }
+function verificationDocLoader(documentId: string) {
+  return () => fetchApiFileBlob(`/organization-verification/documents/${documentId}/file`)
 }
 
 async function submitForReview() {
@@ -296,15 +292,13 @@ defineExpose({ reload: load, meta })
           </div>
 
           <div class="flex flex-wrap gap-2">
-            <Button
+            <FilePreviewActions
               v-if="item.document"
-              size="sm"
-              variant="outline"
-              type="button"
-              @click="downloadDoc(item)"
-            >
-              Preview / download
-            </Button>
+              :file-name="item.document.fileName || 'verification-document'"
+              :mime-type="item.document.fileMime"
+              :file-size="item.document.fileSize"
+              :loader="verificationDocLoader(item.document.id)"
+            />
             <label
               v-if="canMutate && item.document?.status !== 'approved'"
               class="inline-flex cursor-pointer"

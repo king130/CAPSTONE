@@ -16,6 +16,7 @@ class OjtLog extends Model
         'time_in',
         'time_out',
         'hours',
+        'is_makeup',
         'tasks',
         'status',
         'reviewed_by_user_id',
@@ -23,11 +24,14 @@ class OjtLog extends Model
         'rejection_reason',
     ];
 
+    public const MAX_DAILY_HOURS = 12.0;
+
     protected function casts(): array
     {
         return [
             'log_date' => 'date',
             'hours' => 'decimal:2',
+            'is_makeup' => 'boolean',
             'reviewed_at' => 'datetime',
         ];
     }

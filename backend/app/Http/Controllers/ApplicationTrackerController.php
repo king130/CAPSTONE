@@ -10,6 +10,7 @@ use App\Services\PermissionGate;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class ApplicationTrackerController extends Controller
 {
@@ -125,13 +126,20 @@ class ApplicationTrackerController extends Controller
             }
         }
 
-        $updated = $this->tracker->transition(
-            $application,
-            $to,
-            $user,
-            $data['reason'] ?? null,
-            $rollback,
-        );
+        try {
+            $updated = $this->tracker->transition(
+                $application,
+                $to,
+                $user,
+                $data['reason'] ?? null,
+                $rollback,
+            );
+        } catch (ConflictHttpException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+                'code' => 'active_placement_conflict',
+            ], Response::HTTP_CONFLICT);
+        }
 
         return response()->json([
             'data' => $this->tracker->serializeState($updated, $user),

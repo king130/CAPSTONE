@@ -157,30 +157,20 @@ const internshipReadiness = computed(() => [
 
 const topSkills = computed(() => {
   const profile = authStore.user?.profile as Record<string, unknown> | undefined
-  const course = String(profile?.course || '')
-  const courseMap: Record<string, Array<{ name: string; percentage: number }>> = {
-    bsit: [
-      { name: 'Technical Support', percentage: 88 },
-      { name: 'Web Development', percentage: 84 },
-      { name: 'Database Basics', percentage: 79 },
-      { name: 'Networking', percentage: 76 },
-      { name: 'Documentation', percentage: 72 },
-    ],
-    bscs: [
-      { name: 'Programming', percentage: 90 },
-      { name: 'Problem Solving', percentage: 87 },
-      { name: 'Algorithms', percentage: 82 },
-      { name: 'Database Design', percentage: 76 },
-      { name: 'Software Testing', percentage: 71 },
-    ],
+  const skills = Array.isArray(profile?.skills) ? (profile?.skills as Array<{ name?: string; level?: string }>) : []
+  if (skills.length) {
+    const levelScore: Record<string, number> = {
+      beginner: 55,
+      intermediate: 75,
+      advanced: 92,
+    }
+    return skills.slice(0, 8).map((skill) => ({
+      name: String(skill.name || 'Skill'),
+      percentage: levelScore[String(skill.level || 'beginner').toLowerCase()] ?? 60,
+    }))
   }
-  const key = course.toLowerCase().replace(/[^a-z]/g, '')
-  return courseMap[key] ?? [
-    { name: 'Communication', percentage: 82 },
-    { name: 'Teamwork', percentage: 80 },
-    { name: 'Documentation', percentage: 76 },
-    { name: 'Problem Solving', percentage: 74 },
-    { name: 'Adaptability', percentage: 72 },
+  return [
+    { name: 'Add skills in My Profile', percentage: 20 },
   ]
 })
 

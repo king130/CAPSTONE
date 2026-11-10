@@ -2,15 +2,24 @@
 import { toTypedSchema } from '@vee-validate/zod'
 import { useForm } from 'vee-validate'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Eye, EyeOff, Upload } from 'lucide-vue-next'
+import { onBeforeRouteLeave, RouterLink, useRoute, useRouter } from 'vue-router'
+import { ArrowLeft, Check, Moon, Sun, Upload } from 'lucide-vue-next'
 import TomSelect from 'tom-select'
 import 'tom-select/dist/css/tom-select.css'
 import Swal from '@/services/swal'
 import { z } from 'zod'
 
 import OrganizationPublicProfileSection from '@/components/settings/OrganizationPublicProfileSection.vue'
+import SkillChips from '@/components/skills/SkillChips.vue'
+import SkillsWizard from '@/components/skills/SkillsWizard.vue'
+import {
+  fetchStudentSkills,
+  saveStudentSkills,
+  type SelectedSkill,
+} from '@/services/skills'
 import AlertDialog from '@/components/ui/alert-dialog/AlertDialog.vue'
 import Avatar from '@/components/ui/avatar/Avatar.vue'
+import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
 import Card from '@/components/ui/card/Card.vue'
 import CardContent from '@/components/ui/card/CardContent.vue'
@@ -21,6 +30,7 @@ import FormItem from '@/components/ui/form/FormItem.vue'
 import FormLabel from '@/components/ui/form/FormLabel.vue'
 import FormMessage from '@/components/ui/form/FormMessage.vue'
 import Input from '@/components/ui/input/Input.vue'
+import PasswordInput from '@/components/ui/password-input/PasswordInput.vue'
 import Select from '@/components/ui/select/Select.vue'
 import Skeleton from '@/components/ui/skeleton/Skeleton.vue'
 import Switch from '@/components/ui/switch/Switch.vue'
@@ -28,7 +38,6 @@ import { caviteBarangaysByLocation, caviteLocationGroups, courseGroups } from '@
 import { useToast } from '@/composables/useToast'
 import { buildProfileAvatarUrl, uploadProfileAvatar } from '@/services/profileMedia'
 import {
-  deactivateCurrentAccount,
   fetchOrgOjtSettings,
   fetchSettings,
   saveAdminSystemSettings,
@@ -36,13 +45,15 @@ import {
   saveOrgOjtSettings,
   savePasswordSettings,
   saveProfileSettings,
-  supportsAccountDeactivation,
   type AdminSystemSettings,
   type NotificationPreferences,
   type PasswordForm,
   type ProfileSettings,
   type SettingsPayload,
 } from '@/services/settings'
+import { listAgreements } from '@/services/contracts'
+import { subscribeCompanyInternships } from '@/services/internships'
+import { normalizeJobStatus } from '@/utils/jobStatus'
 import { hasPermission } from '@/services/permissions'
 import {
   ALL_YEAR_LEVEL_OPTIONS,
@@ -55,10 +66,27 @@ import {
   type CourseRequirementMeta,
   type FlaggedStudent,
 } from '@/services/schoolPrograms'
+import {
+  SKILL_CATALOG_CATEGORIES,
+  recommendedSkillCategoriesForCourse,
+} from '@/utils/courseSkillCategoryDefaults'
 import type { UserRole } from '@/services/auth'
 import { useAuthStore } from '@/stores/auth'
+import { normalizeStudentNumber, studentNumberErrorMessage } from '@/utils/studentNumber'
+import { meetsPasswordPolicy } from '@/utils/passwordPolicy'
+import { useTheme } from '@/composables/useTheme'
 
-type SettingsTab = 'profile' | 'configure' | 'security' | 'notifications' | 'system'
+const SCHOOL_TYPE_OPTIONS = ['University', 'College', 'Technical/Vocational school', 'Other'] as const
+
+const FLAGGED_REASON_LABELS: Record<string, string> = {
+  missing_course: 'Course not set on student record',
+  course_not_configured: 'Course not set up yet',
+  no_eligible_year_levels: 'Course has no eligible year levels',
+  missing_or_invalid_year_level: 'Year level missing or invalid',
+  year_not_eligible_for_course: 'Year level not eligible for this course',
+}
+
+type SettingsTab = 'account' | 'organization' | 'courses' | 'public' | 'notifications' | 'system'
 
 interface SettingsField {
   key: string
@@ -73,12 +101,6 @@ interface NotificationPreferenceOption {
   description: string
 }
 
-interface PasswordVisibilityState {
-  currentPassword: boolean
-  newPassword: boolean
-  confirmPassword: boolean
-}
-
 interface SettingsPanelProps {
   embedded?: boolean
 }
@@ -88,35 +110,60 @@ const props = withDefaults(defineProps<SettingsPanelProps>(), {
 })
 
 const authStore = useAuthStore()
+const route = useRoute()
+const router = useRouter()
+const { colorMode } = useTheme()
 const { success, error } = useToast()
 
 const loading = ref(true)
-const activeTab = ref<SettingsTab>('profile')
+const activeTab = ref<SettingsTab>('account')
+
+function applyTabFromRoute() {
+  const raw = String(route.query.tab || '').trim().toLowerCase()
+  if (!raw) return
+  const allowed: SettingsTab[] = ['account', 'organization', 'courses', 'public', 'notifications', 'system']
+  if ((allowed as string[]).includes(raw)) {
+    activeTab.value = raw as SettingsTab
+  }
+}
+const savedFlash = ref('')
+const hasPublishedJob = ref(false)
+let unsubscribeCompanyJobs: (() => void) | null = null
+let savedFlashTimer: ReturnType<typeof setTimeout> | null = null
 const savingProfile = ref(false)
 const savingPassword = ref(false)
 const savingNotifications = ref(false)
 const savingSystem = ref(false)
 const savingOrgOjt = ref(false)
-const deactivating = ref(false)
-const deactivateDialogOpen = ref(false)
 const maintenanceDialogOpen = ref(false)
 const pendingMaintenanceValue = ref(false)
 const avatarPreviewUrl = ref('')
 const avatarFile = ref<File | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
+const accountPhotoSectionRef = ref<HTMLElement | null>(null)
+const publicProfileSectionRef = ref<{
+  isDirty: { value: boolean } | boolean
+  saveIfDirty: () => Promise<void>
+  discardChanges: () => void
+} | null>(null)
+const publicProfileDirty = ref(false)
+const accountBaseline = ref('')
+const organizationBaseline = ref('')
+const coursesBaseline = ref('')
+const notificationBaseline = ref('')
 const notificationPreferences = ref<NotificationPreferences>({})
 const orgRequiredHours = ref('500')
+const hasActiveAgreement = ref(false)
+const courseHourErrors = ref<Record<string, string>>({})
 const systemSettings = ref<AdminSystemSettings>({
   schoolYear: '',
   semester: '',
   allowRegistrations: true,
   maintenanceMode: false,
 })
-const passwordVisibility = ref<PasswordVisibilityState>({
-  currentPassword: false,
-  newPassword: false,
-  confirmPassword: false,
-})
+const profileSkills = ref<SelectedSkill[]>([])
+const skillsWizardOpen = ref(false)
+const savingSkills = ref(false)
 const organizationCourses = ref<string[]>([])
 const pendingOrganizationCourses = ref<string[]>([])
 const organizationCourseSelectRef = ref<HTMLSelectElement | null>(null)
@@ -125,7 +172,9 @@ let organizationCourseTomSelect: TomSelect | null = null
 const currentRole = computed<UserRole>(() => authStore.user?.role ?? null)
 const organizationType = computed(() => authStore.user?.activeOrganization?.type ?? '')
 const canManageOrgOjtHours = computed(
-  () => organizationType.value === 'school' || (organizationType.value === '' && currentRole.value === 'school'),
+  () =>
+    currentRole.value === 'school' &&
+    (organizationType.value === 'school' || organizationType.value === ''),
 )
 const canEditSchoolOrg = computed(
   () =>
@@ -140,6 +189,11 @@ const savingCourseRequirement = ref(false)
 const courseRequirementError = ref('')
 const courseHourDrafts = ref<Record<string, string>>({})
 const courseYearDrafts = ref<Record<string, string[]>>({})
+const courseSkillCategoryDrafts = ref<Record<string, string[]>>({})
+const skillCategoryOptions = computed(() => {
+  const fromApi = courseRequirementMeta.value?.skillCatalogCategories
+  return fromApi?.length ? fromApi : [...SKILL_CATALOG_CATEGORIES]
+})
 const currentProfile = computed(() => (authStore.user?.profile as Record<string, unknown> | undefined) ?? {})
 const currentEmail = computed(() => authStore.user?.email ?? '')
 const currentAvatar = computed(() => {
@@ -162,28 +216,65 @@ const userInitials = computed(() => {
 const locationBarangayOptions = computed(() => caviteBarangaysByLocation[String(profileValues.addressCity ?? '')] ?? [])
 
 const availableTabs = computed<Array<{ key: SettingsTab; label: string }>>(() => {
-  const tabs: Array<{ key: SettingsTab; label: string }> = [
-    { key: 'profile', label: 'Profile Settings' },
-  ]
+  const tabs: Array<{ key: SettingsTab; label: string }> = [{ key: 'account', label: 'My Account' }]
   if (currentRole.value === 'school' || currentRole.value === 'company') {
-    tabs.push({ key: 'configure', label: 'Configure' })
+    tabs.push({ key: 'organization', label: 'Organization' })
+    tabs.push({
+      key: 'courses',
+      label: currentRole.value === 'school' ? 'Courses & Hours' : 'Accepted Courses',
+    })
+    tabs.push({ key: 'public', label: 'Public Page' })
   }
-  tabs.push(
-    { key: 'security', label: 'Account & Security' },
-    { key: 'notifications', label: 'Notifications Preferences' },
-  )
-
+  tabs.push({ key: 'notifications', label: 'Notifications' })
   if (currentRole.value === 'admin') {
     tabs.push({ key: 'system', label: 'System Settings' })
   }
-
   return tabs
+})
+
+const activeOrganizationId = computed(() => authStore.user?.activeOrganization?.id ?? '')
+
+const emailHelperText = computed(() => {
+  if (currentRole.value === 'student') return 'Managed by your school.'
+  if (
+    canEditSchoolOrg.value ||
+    hasPermission('org.manage_profile') ||
+    hasPermission('manage_profile') ||
+    hasPermission('org.manage_members') ||
+    hasPermission('manage_users')
+  ) {
+    return 'To change your email, contact support.'
+  }
+  return 'Contact admin to change email.'
+})
+
+const organizationLocationHelper = computed(() => {
+  if (currentRole.value === 'school') return 'Used for student accounts and the directory.'
+  if (organizationType.value === 'municipal_hall') {
+    return 'Schools use your location to find and filter municipal halls.'
+  }
+  return 'Schools use your location to find and filter companies.'
+})
+
+const canUpdatePassword = computed(() => {
+  const current = String(passwordValues.currentPassword ?? '').trim()
+  const next = String(passwordValues.newPassword ?? '')
+  const confirm = String(passwordValues.confirmPassword ?? '')
+  return current.length > 0 && meetsPasswordPolicy(next) && next === confirm
+})
+
+const passwordConfirmFeedback = computed(() => {
+  const confirm = String(passwordValues.confirmPassword ?? '')
+  if (!confirm) return null
+  const next = String(passwordValues.newPassword ?? '')
+  return next === confirm ? 'match' : 'mismatch'
 })
 
 const profileSchema = toTypedSchema(
   z.object({
     fullName: z.string().min(1, 'Full name is required.'),
     phone: z.string().min(1, 'Phone number is required.'),
+    studentNumber: z.string().optional(),
     course: z.string().optional(),
     yearLevel: z.string().optional(),
     schoolName: z.string().optional(),
@@ -208,10 +299,17 @@ const passwordSchema = toTypedSchema(
   z
     .object({
       currentPassword: z.string().min(1, 'Current password is required.'),
-      newPassword: z.string().min(8, 'New password must be at least 8 characters.'),
+      newPassword: z.string().min(1, 'New password is required.'),
       confirmPassword: z.string().min(1, 'Please confirm the new password.'),
     })
     .superRefine((value, ctx) => {
+      if (!meetsPasswordPolicy(value.newPassword)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['newPassword'],
+          message: 'Password must be at least 8 characters and include a letter and a number.',
+        })
+      }
       if (value.newPassword !== value.confirmPassword) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -233,6 +331,7 @@ const {
   initialValues: {
     fullName: '',
     phone: '',
+    studentNumber: '',
     course: '',
     yearLevel: '',
     schoolName: '',
@@ -258,6 +357,7 @@ const {
   errors: passwordErrors,
   resetForm: resetPasswordForm,
   setFieldValue: setPasswordFieldValue,
+  values: passwordValues,
 } = useForm<PasswordForm>({
   validationSchema: passwordSchema,
   initialValues: {
@@ -265,6 +365,28 @@ const {
     newPassword: '',
     confirmPassword: '',
   },
+})
+
+const schoolTypeSelectOptions = computed(() => {
+  const current = String(profileValues.schoolType ?? '').trim()
+  if (current && !(SCHOOL_TYPE_OPTIONS as readonly string[]).includes(current)) {
+    return [current, ...SCHOOL_TYPE_OPTIONS]
+  }
+  return [...SCHOOL_TYPE_OPTIONS]
+})
+
+const passwordRequirementChecks = computed(() => {
+  const password = String(passwordValues.newPassword ?? '')
+  return [
+    { id: 'length', label: 'At least 8 characters', ok: password.length >= 8 },
+    { id: 'letter', label: 'Includes a letter', ok: /[A-Za-z]/.test(password) },
+    { id: 'number', label: 'Includes a number', ok: /[0-9]/.test(password) },
+  ]
+})
+
+const studentNumberLocked = computed(() => {
+  if (currentRole.value !== 'student') return true
+  return Boolean(String(currentProfile.value.studentNumber ?? currentProfile.value.studentId ?? '').trim())
 })
 
 const roleSpecificFields = computed<SettingsField[]>(() => {
@@ -276,15 +398,30 @@ const roleSpecificFields = computed<SettingsField[]>(() => {
     ]
   }
 
+  if (currentRole.value === 'admin') {
+    return [
+      { key: 'department', label: 'Department' },
+      { key: 'position', label: 'Position' },
+    ]
+  }
+
+  return []
+})
+
+const organizationRoleFields = computed<SettingsField[]>(() => {
   if (currentRole.value === 'school') {
     if (!canEditSchoolOrg.value) {
       return [{ key: 'schoolName', label: 'School Name', readonly: true }]
     }
     return [
       { key: 'schoolName', label: 'School Name' },
-      { key: 'schoolAddress', label: 'School Address' },
       { key: 'contactPerson', label: 'Contact Person' },
-      { key: 'schoolType', label: 'School Type' },
+      {
+        key: 'schoolType',
+        label: 'School Type',
+        options: schoolTypeSelectOptions.value,
+      },
+      { key: 'website', label: 'Website' },
     ]
   }
 
@@ -306,14 +443,14 @@ const roleSpecificFields = computed<SettingsField[]>(() => {
     ]
   }
 
-  if (currentRole.value === 'admin') {
-    return [
-      { key: 'department', label: 'Department' },
-      { key: 'position', label: 'Position' },
-    ]
-  }
-
   return []
+})
+
+const profilePayloadRoleFields = computed<SettingsField[]>(() => {
+  if (currentRole.value === 'school' || currentRole.value === 'company') {
+    return organizationRoleFields.value
+  }
+  return roleSpecificFields.value
 })
 
 const notificationOptions = computed<NotificationPreferenceOption[]>(() => {
@@ -328,9 +465,9 @@ const notificationOptions = computed<NotificationPreferenceOption[]>(() => {
 
   if (currentRole.value === 'school') {
     return [
-      { key: 'registration', label: 'New intern registered under school', description: 'Know when a student joins under your institution.' },
-      { key: 'endorsement', label: 'Endorsement request', description: 'Receive alerts for incoming endorsement approvals.' },
-      { key: 'hours', label: 'OJT milestone reached by intern', description: 'Track students hitting important OJT milestones.' },
+      { key: 'registration', label: 'Organization verification update', description: 'Get notified when your school verification status changes.' },
+      { key: 'endorsement', label: 'Endorsement request', description: "Get notified when a student's application needs your endorsement." },
+      { key: 'hours', label: 'Hours agreement updates', description: 'Get notified when a placement hours agreement needs attention.' },
     ]
   }
 
@@ -356,6 +493,7 @@ function buildFallbackSettings(): SettingsPayload {
     profile: {
       fullName: authStore.user?.displayName ?? '',
       phone: String(profile.contactNumber ?? profile.companyContactNumber ?? profile.schoolContactNumber ?? ''),
+      studentNumber: String(profile.studentNumber ?? profile.studentId ?? ''),
       course: String(profile.course ?? ''),
       yearLevel: String(profile.yearLevel ?? ''),
       schoolName: String(profile.schoolName ?? ''),
@@ -388,6 +526,7 @@ function applySettings(payload: SettingsPayload) {
   setProfileValues({
     fullName: payload.profile.fullName ?? '',
     phone: payload.profile.phone ?? '',
+    studentNumber: payload.profile.studentNumber ?? '',
     course: payload.profile.course ?? '',
     yearLevel: payload.profile.yearLevel ?? '',
     schoolName: payload.profile.schoolName ?? '',
@@ -419,6 +558,8 @@ function applySettings(payload: SettingsPayload) {
   notificationPreferences.value = Object.fromEntries(
     notificationOptions.value.map((option) => [option.key, payload.notificationPreferences[option.key] ?? true]),
   )
+  notificationBaseline.value = JSON.stringify(notificationPreferences.value)
+  captureProfileBaseline()
 
   if (payload.systemSettings) {
     systemSettings.value = {
@@ -428,6 +569,322 @@ function applySettings(payload: SettingsPayload) {
       maintenanceMode: payload.systemSettings.maintenanceMode ?? false,
     }
   }
+}
+
+function accountSnapshot() {
+  const base: Record<string, unknown> = {
+    fullName: profileValues.fullName ?? '',
+    phone: profileValues.phone ?? '',
+    avatarPending: Boolean(avatarFile.value),
+  }
+  if (currentRole.value === 'student') {
+    base.studentNumber = profileValues.studentNumber ?? ''
+    base.course = profileValues.course ?? ''
+    base.yearLevel = profileValues.yearLevel ?? ''
+    base.schoolName = profileValues.schoolName ?? ''
+  }
+  if (currentRole.value === 'admin') {
+    base.department = profileValues.department ?? ''
+    base.position = profileValues.position ?? ''
+  }
+  return JSON.stringify(base)
+}
+
+function organizationSnapshot() {
+  if (currentRole.value !== 'school' && currentRole.value !== 'company') return ''
+  return JSON.stringify({
+    contactPerson: profileValues.contactPerson ?? '',
+    schoolType: profileValues.schoolType ?? '',
+    schoolName: profileValues.schoolName ?? '',
+    companyName: profileValues.companyName ?? '',
+    industry: profileValues.industry ?? '',
+    website: profileValues.website ?? '',
+    schoolAddress: profileValues.schoolAddress ?? '',
+    address: profileValues.address ?? '',
+    addressCity: profileValues.addressCity ?? '',
+    addressBarangay: profileValues.addressBarangay ?? '',
+    addressZipCode: profileValues.addressZipCode ?? '',
+    officialSchoolEmail: profileValues.officialSchoolEmail ?? '',
+  })
+}
+
+function coursesSnapshot() {
+  return JSON.stringify([...organizationCourses.value].sort())
+}
+
+function captureProfileBaseline() {
+  accountBaseline.value = accountSnapshot()
+  organizationBaseline.value = organizationSnapshot()
+  coursesBaseline.value = coursesSnapshot()
+}
+
+const accountDirty = computed(() => {
+  if (loading.value || !accountBaseline.value) return false
+  return accountSnapshot() !== accountBaseline.value
+})
+
+const organizationDirty = computed(() => {
+  if (loading.value || !organizationBaseline.value) return false
+  if (currentRole.value !== 'school' && currentRole.value !== 'company') return false
+  return organizationSnapshot() !== organizationBaseline.value
+})
+
+const coursesDirty = computed(() => {
+  if (loading.value || !coursesBaseline.value) return false
+  if (currentRole.value !== 'school' && currentRole.value !== 'company') return false
+  return coursesSnapshot() !== coursesBaseline.value
+})
+
+const currentTabDirty = computed(() => {
+  switch (activeTab.value) {
+    case 'account':
+      return accountDirty.value
+    case 'organization':
+      return organizationDirty.value
+    case 'courses':
+      return coursesDirty.value
+    case 'public':
+      return publicProfileDirty.value
+    case 'notifications':
+      return notificationsDirty.value
+    default:
+      return false
+  }
+})
+
+const stickySaveVisible = computed(() => currentTabDirty.value)
+
+function flashSaved(message = 'Saved') {
+  savedFlash.value = message
+  if (savedFlashTimer) clearTimeout(savedFlashTimer)
+  savedFlashTimer = setTimeout(() => {
+    savedFlash.value = ''
+    savedFlashTimer = null
+  }, 2000)
+}
+
+const notificationsDirty = computed(() => {
+  if (!notificationBaseline.value) return false
+  return JSON.stringify(notificationPreferences.value) !== notificationBaseline.value
+})
+
+function flaggedReasonLabel(code: string) {
+  return FLAGGED_REASON_LABELS[code] || code.split('_').join(' ')
+}
+
+function isCourseConfigured(courseName: string) {
+  const requirement = requirementForCourse(courseName)
+  if (!requirement) return false
+  if (typeof requirement.configComplete === 'boolean') return requirement.configComplete
+  return Number(requirement.requiredHours) >= 1 && requirement.eligibleYearLevels.length > 0
+}
+
+function workspaceHomePath() {
+  if (currentRole.value === 'school') return '/school'
+  if (currentRole.value === 'company') return '/dashboard'
+  if (currentRole.value === 'admin') return '/admin/overview'
+  if (currentRole.value === 'student') return '/intern'
+  return '/'
+}
+
+const subscriptionOk = computed(() => {
+  const subscriptionStatus = String(authStore.user?.subscriptionAccess?.status ?? '')
+  return ['trial', 'active', 'free', 'pending_payment'].includes(subscriptionStatus)
+})
+
+const setupChecklist = computed(() => {
+  const subscriptionDone = subscriptionOk.value
+
+  if (currentRole.value === 'school') {
+    const profileComplete = Boolean(
+      String(profileValues.schoolName ?? '').trim() &&
+        String(profileValues.schoolAddress ?? profileValues.address ?? '').trim() &&
+        String(profileValues.phone ?? '').trim() &&
+        String(profileValues.addressCity ?? '').trim(),
+    )
+    const hasCourse = organizationCourses.value.length > 0
+    const everyCourseConfigured =
+      hasCourse && organizationCourses.value.every((course) => isCourseConfigured(course))
+    const emailDomainSet = Boolean(String(profileValues.officialSchoolEmail ?? '').trim())
+
+    return [
+      {
+        id: 'profile',
+        label: 'Profile complete',
+        done: profileComplete,
+        action: () => {
+          activeTab.value = 'organization'
+        },
+      },
+      {
+        id: 'courses',
+        label: 'At least one course added',
+        done: hasCourse,
+        action: () => {
+          activeTab.value = 'courses'
+        },
+      },
+      {
+        id: 'configured',
+        label: 'Every course configured',
+        done: everyCourseConfigured,
+        action: () => {
+          activeTab.value = 'courses'
+        },
+      },
+      {
+        id: 'email',
+        label: 'Email domain set',
+        done: emailDomainSet,
+        action: () => {
+          activeTab.value = 'organization'
+        },
+      },
+      {
+        id: 'agreement',
+        label: 'Active agreement exists',
+        done: hasActiveAgreement.value,
+        action: () => {
+          void router.push({ name: 'agreements' })
+        },
+      },
+      {
+        id: 'subscription',
+        label: 'Subscription active',
+        done: subscriptionDone,
+        action: () => {
+          void router.push({ name: 'organization-subscription' })
+        },
+      },
+    ]
+  }
+
+  if (currentRole.value === 'company') {
+    const street = String(profileValues.address ?? '').trim()
+    const profileComplete = Boolean(
+      String(profileValues.companyName ?? '').trim() &&
+        street &&
+        String(profileValues.phone ?? '').trim() &&
+        String(profileValues.addressCity ?? '').trim(),
+    )
+    const citySet = Boolean(String(profileValues.addressCity ?? '').trim())
+    const hasCourse = organizationCourses.value.length > 0
+
+    return [
+      {
+        id: 'profile',
+        label: 'Profile complete',
+        done: profileComplete,
+        action: () => {
+          activeTab.value = 'organization'
+        },
+      },
+      {
+        id: 'city',
+        label: 'City set',
+        done: citySet,
+        action: () => {
+          activeTab.value = 'organization'
+        },
+      },
+      {
+        id: 'courses',
+        label: 'At least one accepted course',
+        done: hasCourse,
+        action: () => {
+          activeTab.value = 'courses'
+        },
+      },
+      {
+        id: 'agreement',
+        label: 'Active agreement',
+        done: hasActiveAgreement.value,
+        action: () => {
+          void router.push({ name: 'agreements' })
+        },
+      },
+      {
+        id: 'published-job',
+        label: 'At least one published job',
+        done: hasPublishedJob.value,
+        action: () => {
+          void router.push(workspaceHomePath())
+        },
+      },
+      {
+        id: 'subscription',
+        label: 'Subscription active',
+        done: subscriptionDone,
+        action: () => {
+          void router.push({ name: 'organization-subscription' })
+        },
+      },
+    ]
+  }
+
+  return []
+})
+
+const showSetupChecklist = computed(
+  () => !loading.value && (currentRole.value === 'school' || currentRole.value === 'company') && setupChecklist.value.length > 0,
+)
+
+async function loadSetupAgreementFlag() {
+  if (currentRole.value !== 'school' && currentRole.value !== 'company') {
+    hasActiveAgreement.value = false
+    return
+  }
+  try {
+    const agreements = await listAgreements()
+    hasActiveAgreement.value = agreements.some(
+      (item) => item.status === 'active' || item.status === 'pending_amendment',
+    )
+  } catch {
+    hasActiveAgreement.value = false
+  }
+}
+
+function openAccountPhotoSection() {
+  activeTab.value = 'account'
+  void nextTick(() => {
+    accountPhotoSectionRef.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    openFilePicker()
+  })
+}
+
+function onPublicProfileDirty(dirty: boolean) {
+  publicProfileDirty.value = dirty
+}
+
+async function discardStickyChanges() {
+  if (activeTab.value === 'notifications') {
+    try {
+      notificationPreferences.value = JSON.parse(notificationBaseline.value || '{}')
+    } catch {
+      await loadSettingsData()
+    }
+    return
+  }
+  if (activeTab.value === 'public') {
+    publicProfileSectionRef.value?.discardChanges()
+    return
+  }
+  await loadSettingsData()
+  avatarFile.value = null
+  avatarPreviewUrl.value = ''
+}
+
+async function saveStickyChanges() {
+  if (activeTab.value === 'notifications') {
+    await saveNotifications()
+    return
+  }
+  if (activeTab.value === 'public') {
+    await publicProfileSectionRef.value?.saveIfDirty()
+    flashSaved()
+    return
+  }
+  await saveProfile()
 }
 
 async function loadCourseRequirements() {
@@ -456,33 +913,47 @@ function requirementForCourse(courseName: string) {
   return courseRequirements.value.find((item) => item.courseName.trim().toLowerCase() === key) ?? null
 }
 
+function defaultSkillCategoriesForCourse(courseName: string): string[] {
+  const requirement = requirementForCourse(courseName)
+  if (requirement?.recommendedSkillCategories?.length) {
+    return [...requirement.recommendedSkillCategories]
+  }
+  return recommendedSkillCategoriesForCourse(courseName)
+}
+
 function applyCourseDrafts() {
   const hours: Record<string, string> = {}
   const years: Record<string, string[]> = {}
+  const skillCategories: Record<string, string[]> = {}
   for (const course of organizationCourses.value) {
     const requirement = requirementForCourse(course)
     hours[course] = requirement ? String(requirement.requiredHours) : ''
     years[course] = requirement ? [...requirement.eligibleYearLevels] : [...DEFAULT_ELIGIBLE_YEAR_LEVELS]
+    skillCategories[course] = defaultSkillCategoriesForCourse(course)
   }
   courseHourDrafts.value = hours
   courseYearDrafts.value = years
+  courseSkillCategoryDrafts.value = skillCategories
 }
 
 watch(organizationCourses, (courses) => {
   if (currentRole.value !== 'school') return
   const hours = { ...courseHourDrafts.value }
   const years = { ...courseYearDrafts.value }
+  const skillCategories = { ...courseSkillCategoryDrafts.value }
   let changed = false
   for (const course of courses) {
     if (hours[course] !== undefined) continue
     const requirement = requirementForCourse(course)
     hours[course] = requirement ? String(requirement.requiredHours) : ''
     years[course] = requirement ? [...requirement.eligibleYearLevels] : [...DEFAULT_ELIGIBLE_YEAR_LEVELS]
+    skillCategories[course] = defaultSkillCategoriesForCourse(course)
     changed = true
   }
   if (!changed) return
   courseHourDrafts.value = hours
   courseYearDrafts.value = years
+  courseSkillCategoryDrafts.value = skillCategories
 })
 
 function courseHoursAreValid(value: string) {
@@ -500,25 +971,43 @@ function toggleCourseYearDraft(courseName: string, level: string) {
   }
 }
 
+function toggleCourseSkillCategoryDraft(courseName: string, category: string) {
+  const current = courseSkillCategoryDrafts.value[courseName] ?? []
+  courseSkillCategoryDrafts.value = {
+    ...courseSkillCategoryDrafts.value,
+    [courseName]: current.includes(category)
+      ? current.filter((item) => item !== category)
+      : [...current, category],
+  }
+}
+
 async function saveCourseRequirementHours(courseName: string) {
   const draft = courseHourDrafts.value[courseName] ?? ''
   const years = courseYearDrafts.value[courseName] ?? []
   if (!courseHoursAreValid(draft)) {
+    courseHourErrors.value = {
+      ...courseHourErrors.value,
+      [courseName]: 'Enter a whole number of at least 1 hour.',
+    }
     courseRequirementError.value = 'Required hours must be a whole number of at least 1.'
     return
   }
   if (years.length === 0) {
+    courseHourErrors.value = { ...courseHourErrors.value, [courseName]: '' }
     courseRequirementError.value = 'Select at least one eligible year level.'
     return
   }
 
+  const skillCategories = courseSkillCategoryDrafts.value[courseName] ?? []
+
   savingCourseRequirement.value = true
   courseRequirementError.value = ''
+  courseHourErrors.value = { ...courseHourErrors.value, [courseName]: '' }
   try {
     const existing = requirementForCourse(courseName)
     const updated = existing
-      ? await updateCourseRequirement(existing.id, courseName, Number(draft), years)
-      : await createCourseRequirement(courseName, Number(draft), years)
+      ? await updateCourseRequirement(existing.id, courseName, Number(draft), years, skillCategories)
+      : await createCourseRequirement(courseName, Number(draft), years, skillCategories)
     courseRequirements.value = [
       ...courseRequirements.value.filter((item) => item.id !== updated.id && item.courseName.trim().toLowerCase() !== courseName.trim().toLowerCase()),
       updated,
@@ -533,6 +1022,34 @@ async function saveCourseRequirementHours(courseName: string) {
   }
 }
 
+async function loadStudentSkills() {
+  if (currentRole.value !== 'student') return
+  try {
+    const res = await fetchStudentSkills()
+    profileSkills.value = res.data || []
+  } catch {
+    const embedded = authStore.user?.profile as Record<string, unknown> | undefined
+    const raw = Array.isArray(embedded?.skills) ? (embedded?.skills as SelectedSkill[]) : []
+    profileSkills.value = raw
+  }
+}
+
+async function onSkillsSaved(next: SelectedSkill[]) {
+  savingSkills.value = true
+  try {
+    const res = await saveStudentSkills(
+      next.map((skill) => ({ id: skill.id, level: skill.level || 'beginner' })),
+    )
+    profileSkills.value = res.data || next
+    await authStore.refreshUser()
+    success('Skills saved', { description: 'Your skills are now on your profile.' })
+  } catch (err) {
+    error(err, { fallback: 'Could not save skills. Please try again.' })
+  } finally {
+    savingSkills.value = false
+  }
+}
+
 async function loadSettingsData() {
   loading.value = true
   try {
@@ -542,11 +1059,13 @@ async function loadSettingsData() {
       const ojtSettings = await fetchOrgOjtSettings().catch(() => ({ requiredHours: 500 }))
       orgRequiredHours.value = String(ojtSettings.requiredHours || 500)
     }
-    await loadCourseRequirements()
+    await Promise.all([loadCourseRequirements(), loadStudentSkills(), loadSetupAgreementFlag()])
   } catch {
     applySettings(buildFallbackSettings())
+    await loadSetupAgreementFlag()
   } finally {
     loading.value = false
+    captureProfileBaseline()
   }
 }
 
@@ -573,12 +1092,15 @@ function mapProfilePayload(): ProfileSettings {
     phone: profileValues.phone ?? '',
   }
 
-  // Students only persist contact; school-managed fields stay view-only and are not submitted.
+  // Students persist contact and may fill a missing student number once.
   if (currentRole.value === 'student') {
+    if (!studentNumberLocked.value) {
+      payload.studentNumber = normalizeStudentNumber(profileValues.studentNumber)
+    }
     return payload
   }
 
-  for (const field of roleSpecificFields.value) {
+  for (const field of profilePayloadRoleFields.value) {
     payload[field.key] = profileValues[field.key] ?? ''
   }
 
@@ -602,7 +1124,23 @@ function mapProfilePayload(): ProfileSettings {
   return payload
 }
 
-function removeOrganizationCourse(courseToRemove: string) {
+async function removeOrganizationCourse(courseToRemove: string) {
+  const assignedCount = flaggedCourseStudents.value.filter(
+    (row) => String(row.course || '').trim().toLowerCase() === courseToRemove.trim().toLowerCase(),
+  ).length
+  const confirmation = await Swal.fire({
+    icon: 'warning',
+    title: 'Remove this course?',
+    text:
+      assignedCount > 0
+        ? `${assignedCount} flagged student${assignedCount === 1 ? '' : 's'} currently list this course. Removing it does not change student records, but course setup for it will disappear from Configure.`
+        : 'This course will be removed from your school list. You can add it again later.',
+    showCancelButton: true,
+    confirmButtonText: 'Remove course',
+    cancelButtonText: 'Keep course',
+    confirmButtonColor: '#dc2626',
+  })
+  if (!confirmation.isConfirmed) return
   organizationCourses.value = organizationCourses.value.filter((course) => course !== courseToRemove)
 }
 
@@ -669,7 +1207,7 @@ async function initializeOrganizationCourseTomSelect() {
     return
   }
 
-  if (activeTab.value !== 'profile' || loading.value) {
+  if (activeTab.value !== 'courses' || loading.value) {
     destroyOrganizationCourseTomSelect()
     return
   }
@@ -752,6 +1290,15 @@ watch(
 )
 
 const saveProfile = handleProfileSubmit(async () => {
+  if (currentRole.value === 'student' && !studentNumberLocked.value) {
+    const numberError = studentNumberErrorMessage(profileValues.studentNumber, true)
+    if (numberError) {
+      setProfileFieldValue('studentNumber', profileValues.studentNumber ?? '')
+      error(numberError)
+      return
+    }
+  }
+
   const confirmation = await Swal.fire({
     icon: 'question',
     title: 'Save these changes?',
@@ -780,6 +1327,8 @@ const saveProfile = handleProfileSubmit(async () => {
       authStore.setUserProfile(refreshedUser)
     }
     success('Profile updated successfully')
+    captureProfileBaseline()
+    flashSaved()
   } catch (caughtError) {
     error(caughtError, {
       fallback: 'Unable to update profile.',
@@ -795,6 +1344,7 @@ const updatePassword = handlePasswordSubmit(async (values) => {
     await savePasswordSettings(values)
     resetPasswordForm()
     success('Password updated successfully')
+    flashSaved()
   } catch (caughtError) {
     error(caughtError, {
       fallback: 'Unable to update password.',
@@ -805,10 +1355,13 @@ const updatePassword = handlePasswordSubmit(async (values) => {
 })
 
 async function saveNotifications() {
+  if (!notificationsDirty.value) return
   savingNotifications.value = true
   try {
     await saveNotificationPreferences(notificationPreferences.value)
+    notificationBaseline.value = JSON.stringify(notificationPreferences.value)
     success('Notification preferences saved.')
+    flashSaved()
   } catch (caughtError) {
     error(caughtError, {
       fallback: 'Unable to save notification preferences.',
@@ -841,30 +1394,13 @@ async function saveOrgOjtHours() {
     }
     const saved = await saveOrgOjtSettings({ requiredHours: hours })
     orgRequiredHours.value = String(saved.requiredHours)
-    success('OJT required hours saved.')
+    success('Default required hours saved.')
   } catch (caughtError) {
     error(caughtError, {
-      fallback: 'Unable to save OJT required hours.',
+      fallback: 'Unable to save default required hours.',
     })
   } finally {
     savingOrgOjt.value = false
-  }
-}
-
-async function confirmDeactivate() {
-  deactivating.value = true
-  try {
-    await deactivateCurrentAccount()
-    await authStore.logout()
-    success('Account deactivated.')
-    window.location.assign('/login')
-  } catch (caughtError) {
-    error(caughtError, {
-      fallback: 'Unable to deactivate account.',
-    })
-  } finally {
-    deactivating.value = false
-    deactivateDialogOpen.value = false
   }
 }
 
@@ -883,28 +1419,118 @@ function confirmMaintenanceMode() {
   maintenanceDialogOpen.value = false
 }
 
-function togglePasswordVisibility(field: keyof PasswordVisibilityState) {
-  passwordVisibility.value[field] = !passwordVisibility.value[field]
+function hasUnsavedProfileChanges() {
+  return (
+    accountDirty.value ||
+    organizationDirty.value ||
+    coursesDirty.value ||
+    publicProfileDirty.value ||
+    notificationsDirty.value
+  )
 }
 
+function onBeforeUnload(event: BeforeUnloadEvent) {
+  if (!hasUnsavedProfileChanges()) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+onBeforeRouteLeave(async () => {
+  if (!hasUnsavedProfileChanges()) return true
+  const confirmation = await Swal.fire({
+    icon: 'warning',
+    title: 'Leave without saving?',
+    text: 'You have unsaved profile changes. Leave this page and discard them?',
+    showCancelButton: true,
+    confirmButtonText: 'Leave',
+    cancelButtonText: 'Stay',
+    confirmButtonColor: '#dc2626',
+  })
+  return confirmation.isConfirmed
+})
+
+function subscribePublishedJobsFlag() {
+  unsubscribeCompanyJobs?.()
+  unsubscribeCompanyJobs = null
+  hasPublishedJob.value = false
+  if (currentRole.value !== 'company') return
+  const uid = authStore.user?.uid
+  // Subscription uses company uid; skip if session has no uid yet.
+  if (!uid) return
+  unsubscribeCompanyJobs = subscribeCompanyInternships(uid, (items) => {
+    hasPublishedJob.value = items.some((job) => normalizeJobStatus(job.status) === 'active')
+  })
+}
+
+watch(
+  () => route.query.tab,
+  () => applyTabFromRoute(),
+)
+
 onMounted(() => {
+  applyTabFromRoute()
+  window.addEventListener('beforeunload', onBeforeUnload)
   void loadSettingsData()
+  subscribePublishedJobsFlag()
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', onBeforeUnload)
   destroyOrganizationCourseTomSelect()
+  unsubscribeCompanyJobs?.()
+  if (savedFlashTimer) clearTimeout(savedFlashTimer)
 })
 </script>
 
 <template>
-  <section class="space-y-6">
-    <div v-if="!props.embedded" class="space-y-2">
-      <p class="text-sm font-semibold uppercase tracking-[0.3em] text-primary">Settings</p>
-      <h2 class="text-3xl font-semibold tracking-tight text-foreground">Manage your account and workspace preferences</h2>
-      <p class="max-w-2xl text-sm leading-6 text-muted-foreground">
-        Update your profile, account security, notification preferences, and role-specific configuration.
-      </p>
+  <section class="space-y-6 pb-24">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div v-if="!props.embedded" class="space-y-2">
+        <h2 class="text-3xl font-semibold tracking-tight text-foreground">Settings</h2>
+        <p class="max-w-2xl text-sm leading-6 text-muted-foreground">
+          Manage your account, organization, and notifications.
+        </p>
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        class="gap-2"
+        @click="router.push(workspaceHomePath())"
+      >
+        <ArrowLeft class="h-4 w-4" />
+        Back to workspace
+      </Button>
     </div>
+
+    <Card
+      v-if="showSetupChecklist"
+      class="border-border/80 shadow-sm"
+    >
+      <CardHeader class="space-y-1">
+        <h3 class="text-lg font-semibold text-foreground">Setup checklist</h3>
+        <p class="text-sm text-muted-foreground">
+          {{
+            currentRole === 'company'
+              ? 'Finish these items so schools can find you and students can apply.'
+              : 'Finish these items so students can apply and staff can manage OJT.'
+          }}
+        </p>
+      </CardHeader>
+      <CardContent class="grid gap-2 sm:grid-cols-2">
+        <button
+          v-for="item in setupChecklist"
+          :key="item.id"
+          type="button"
+          class="flex items-center justify-between gap-3 rounded-xl border border-border px-3 py-2.5 text-left transition hover:bg-accent/50"
+          @click="item.action()"
+        >
+          <span class="text-sm text-foreground">{{ item.label }}</span>
+          <Badge :variant="item.done ? 'success' : 'warning'">
+            {{ item.done ? 'Done' : 'Needed' }}
+          </Badge>
+        </button>
+      </CardContent>
+    </Card>
 
     <div class="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
       <Card class="border-border/80 shadow-sm">
@@ -937,13 +1563,16 @@ onBeforeUnmount(() => {
             </div>
           </template>
 
-          <div v-else-if="activeTab === 'profile'" class="space-y-6">
+          <div v-else-if="activeTab === 'account'" class="space-y-6">
             <div>
-              <h3 class="text-2xl font-semibold text-foreground">Profile Settings</h3>
+              <h3 class="text-2xl font-semibold text-foreground">My Account</h3>
               <p class="mt-2 text-sm text-muted-foreground">Keep your profile accurate so the right people can contact you and review your information.</p>
             </div>
 
-            <div class="flex flex-col gap-4 rounded-2xl border border-border bg-muted p-5 sm:flex-row sm:items-center">
+            <div
+              ref="accountPhotoSectionRef"
+              class="flex flex-col gap-4 rounded-2xl border border-border bg-muted p-5 sm:flex-row sm:items-center"
+            >
               <Avatar :src="currentAvatar" :fallback="userInitials" :alt="profileValues.fullName" class="h-20 w-20" />
               <div class="space-y-2">
                 <p class="text-sm font-medium text-foreground">Profile photo</p>
@@ -964,7 +1593,7 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
-            <form class="space-y-5" @submit="saveProfile">
+            <form class="w-full max-w-3xl space-y-5" @submit.prevent>
               <FormField v-slot="{ componentField, errorMessage: fieldError }" name="fullName">
                 <FormItem>
                   <FormLabel for="settingsFullName">Full Name</FormLabel>
@@ -990,9 +1619,7 @@ onBeforeUnmount(() => {
                 <FormControl>
                   <Input id="settingsEmail" :model-value="currentEmail" type="email" readonly disabled />
                 </FormControl>
-                <p class="text-sm text-muted-foreground">
-                  {{ currentRole === 'student' ? 'Managed by your school.' : 'Contact admin to change email.' }}
-                </p>
+                <p class="text-sm text-muted-foreground">{{ emailHelperText }}</p>
               </FormItem>
 
               <FormField v-slot="{ componentField, errorMessage: fieldError }" name="phone">
@@ -1007,6 +1634,37 @@ onBeforeUnmount(() => {
                     />
                   </FormControl>
                   <FormMessage :message="fieldError || profileErrors.phone" />
+                </FormItem>
+              </FormField>
+
+              <FormField
+                v-if="currentRole === 'student'"
+                v-slot="{ componentField, errorMessage: fieldError }"
+                name="studentNumber"
+              >
+                <FormItem>
+                  <FormLabel for="settingsStudentNumber">
+                    Student Number
+                    <span v-if="!studentNumberLocked" class="text-red-600" aria-hidden="true">*</span>
+                  </FormLabel>
+                  <FormControl>
+                    <Input
+                      id="settingsStudentNumber"
+                      v-bind="componentField"
+                      :model-value="profileValues.studentNumber"
+                      :readonly="studentNumberLocked"
+                      :disabled="studentNumberLocked"
+                      placeholder="2024-0001"
+                      @update:modelValue="setProfileFieldValue('studentNumber', $event)"
+                    />
+                  </FormControl>
+                  <FormMessage :message="fieldError || profileErrors.studentNumber" />
+                  <p v-if="studentNumberLocked" class="text-sm text-muted-foreground">
+                    Managed by your school. Ask them if it needs a correction.
+                  </p>
+                  <p v-else class="text-sm text-amber-700 dark:text-amber-300">
+                    Your school has not set a student number yet. Please enter it now so your records stay complete.
+                  </p>
                 </FormItem>
               </FormField>
 
@@ -1044,182 +1702,380 @@ onBeforeUnmount(() => {
                   <p v-if="field.readonly" class="text-sm text-muted-foreground">Managed by your school.</p>
                 </FormItem>
               </FormField>
+            </form>
+
+            <div
+              v-if="currentRole === 'student'"
+              class="space-y-4 rounded-2xl border border-border bg-muted p-5"
+            >
+              <div class="space-y-1">
+                <h4 class="text-base font-semibold text-foreground">My Skills</h4>
+                <p class="text-sm text-muted-foreground">
+                  Choose up to 15 skills from the shared list so companies can understand what you already know.
+                </p>
+              </div>
+              <SkillChips
+                :skills="profileSkills"
+                mode="intern"
+                empty-text="No skills yet. Add a few to help hosts find you."
+              />
+              <Button
+                type="button"
+                variant="outline"
+                :disabled="savingSkills"
+                @click="skillsWizardOpen = true"
+              >
+                {{ savingSkills ? 'Saving…' : profileSkills.length ? 'Edit skills' : 'Add skills' }}
+              </Button>
+            </div>
+
+            <Card class="w-full max-w-3xl border-border/80 shadow-none">
+              <CardHeader>
+                <h4 class="text-lg font-semibold text-foreground">Appearance</h4>
+                <p class="text-sm text-muted-foreground">Choose light or dark mode for the workspace.</p>
+              </CardHeader>
+              <CardContent>
+                <div class="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    :variant="colorMode === 'light' ? 'default' : 'outline'"
+                    class="gap-2"
+                    @click="colorMode = 'light'"
+                  >
+                    <Sun class="h-4 w-4" />
+                    Light
+                  </Button>
+                  <Button
+                    type="button"
+                    :variant="colorMode === 'dark' ? 'default' : 'outline'"
+                    class="gap-2"
+                    @click="colorMode = 'dark'"
+                  >
+                    <Moon class="h-4 w-4" />
+                    Dark
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card class="w-full max-w-3xl border-border/80 shadow-none">
+              <CardHeader>
+                <h4 class="text-lg font-semibold text-foreground">Change Password</h4>
+                <p class="text-sm text-muted-foreground">Change your password.</p>
+              </CardHeader>
+              <CardContent>
+                <form class="space-y-5" @submit="updatePassword">
+                  <FormField v-slot="{ componentField, errorMessage: fieldError }" name="currentPassword">
+                    <FormItem>
+                      <FormLabel for="currentPassword">Current Password</FormLabel>
+                      <FormControl>
+                        <PasswordInput
+                          id="currentPassword"
+                          autocomplete="current-password"
+                          v-bind="componentField"
+                          @update:modelValue="setPasswordFieldValue('currentPassword', $event)"
+                        />
+                      </FormControl>
+                      <FormMessage :message="fieldError || passwordErrors.currentPassword" />
+                    </FormItem>
+                  </FormField>
+
+                  <FormField v-slot="{ componentField, errorMessage: fieldError }" name="newPassword">
+                    <FormItem>
+                      <FormLabel for="newPassword">New Password</FormLabel>
+                      <FormControl>
+                        <PasswordInput
+                          id="newPassword"
+                          autocomplete="new-password"
+                          v-bind="componentField"
+                          @update:modelValue="setPasswordFieldValue('newPassword', $event)"
+                        />
+                      </FormControl>
+                      <ul class="mt-2 space-y-1 text-sm">
+                        <li
+                          v-for="check in passwordRequirementChecks"
+                          :key="check.id"
+                          class="flex items-center gap-2"
+                          :class="check.ok ? 'text-emerald-700 dark:text-emerald-300' : 'text-muted-foreground'"
+                        >
+                          <Check class="h-3.5 w-3.5" :class="check.ok ? 'opacity-100' : 'opacity-30'" />
+                          {{ check.label }}
+                        </li>
+                      </ul>
+                      <FormMessage :message="fieldError || passwordErrors.newPassword" />
+                    </FormItem>
+                  </FormField>
+
+                  <FormField v-slot="{ componentField, errorMessage: fieldError }" name="confirmPassword">
+                    <FormItem>
+                      <FormLabel for="confirmPassword">Confirm New Password</FormLabel>
+                      <FormControl>
+                        <PasswordInput
+                          id="confirmPassword"
+                          autocomplete="new-password"
+                          v-bind="componentField"
+                          @update:modelValue="setPasswordFieldValue('confirmPassword', $event)"
+                        />
+                      </FormControl>
+                      <p
+                        v-if="passwordConfirmFeedback === 'match'"
+                        class="text-sm text-emerald-700 dark:text-emerald-300"
+                      >
+                        Passwords match
+                      </p>
+                      <p
+                        v-else-if="passwordConfirmFeedback === 'mismatch'"
+                        class="text-sm text-destructive"
+                      >
+                        Passwords don't match
+                      </p>
+                      <FormMessage :message="fieldError || passwordErrors.confirmPassword" />
+                    </FormItem>
+                  </FormField>
+
+                  <Button type="submit" :disabled="savingPassword || !canUpdatePassword">
+                    {{ savingPassword ? 'Updating...' : 'Update Password' }}
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div v-else-if="activeTab === 'organization'" class="space-y-6">
+            <div>
+              <h3 class="text-2xl font-semibold text-foreground">Organization</h3>
+              <p class="mt-2 text-sm text-muted-foreground">
+                Update your organization details and registered Cavite address.
+              </p>
+            </div>
+
+            <p class="text-sm text-muted-foreground">
+              Profile photo for listings uses your account avatar.
+              <button
+                type="button"
+                class="font-medium text-primary underline-offset-4 hover:underline"
+                @click="openAccountPhotoSection"
+              >
+                Change in My Account
+              </button>
+            </p>
+
+            <form class="space-y-5" @submit.prevent>
+              <FormField
+                v-for="field in organizationRoleFields"
+                :key="field.key"
+                v-slot="{ componentField, errorMessage: fieldError }"
+                :name="field.key"
+              >
+                <FormItem>
+                  <FormLabel :for="`org-${field.key}`">{{ field.label }}</FormLabel>
+                  <FormControl>
+                    <Select
+                      v-if="field.options"
+                      :id="`org-${field.key}`"
+                      v-bind="componentField"
+                      :model-value="profileValues[field.key]"
+                      :disabled="field.readonly"
+                      @update:modelValue="setProfileFieldValue(field.key, $event)"
+                    >
+                      <option value="">Select {{ field.label.toLowerCase() }}</option>
+                      <option v-for="option in field.options" :key="option" :value="option">{{ option }}</option>
+                    </Select>
+                    <Input
+                      v-else
+                      :id="`org-${field.key}`"
+                      v-bind="componentField"
+                      :model-value="profileValues[field.key]"
+                      :readonly="field.readonly"
+                      :disabled="field.readonly"
+                      @update:modelValue="setProfileFieldValue(field.key, $event)"
+                    />
+                  </FormControl>
+                  <FormMessage :message="fieldError || profileErrors[field.key]" />
+                  <p v-if="field.readonly" class="text-sm text-muted-foreground">Managed by your school.</p>
+                </FormItem>
+              </FormField>
 
               <div
-                v-if="currentRole === 'school' && !canEditSchoolOrg"
-                class="space-y-3 rounded-2xl border border-border bg-muted p-5"
+                v-if="currentRole === 'company' || canEditSchoolOrg"
+                class="space-y-4 rounded-2xl border border-border bg-muted p-5"
               >
-                <h4 class="text-base font-semibold text-foreground">School Courses</h4>
-                <p class="text-sm text-muted-foreground">Visible for your teaching role. Only school admins can edit courses.</p>
-                <div v-if="organizationCourses.length" class="flex flex-wrap gap-2">
-                  <span
-                    v-for="course in organizationCourses"
-                    :key="course"
-                    class="inline-flex items-center rounded-full border border-border bg-card px-3 py-1.5 text-sm text-card-foreground"
-                  >
-                    {{ course }}
-                  </span>
-                </div>
-                <p v-else class="text-sm text-muted-foreground">No school courses listed yet.</p>
-              </div>
-
-              <template v-if="currentRole === 'company' || canEditSchoolOrg">
-                <div class="space-y-4 rounded-2xl border border-border bg-muted p-5">
-                  <div class="space-y-1">
-                    <h4 class="text-base font-semibold text-foreground">
-                      {{ currentRole === 'school' ? 'School Courses' : 'Accepted Courses' }}
-                    </h4>
-                    <p class="text-sm text-muted-foreground">
-                      {{ currentRole === 'school'
-                        ? 'Add the courses or programs your school offers for student account creation and matching.'
+                <div class="space-y-1">
+                  <h4 class="text-base font-semibold text-foreground">
+                    {{
+                      currentRole === 'school'
+                        ? 'School Address'
                         : organizationType === 'municipal_hall'
-                          ? 'Add the courses or programs your municipal hall accepts for internships.'
-                          : 'Add the courses or programs your company accepts for internships.' }}
-                    </p>
-                  </div>
-                  <div class="space-y-2">
-                    <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
-                      <select ref="organizationCourseSelectRef" multiple class="organization-course-select">
-                        <optgroup v-for="group in courseGroups" :key="group.label" :label="group.label">
-                          <option
-                            v-for="option in group.options.filter((item) => !organizationCourses.includes(item))"
-                            :key="option"
-                            :value="option"
-                          >{{ option }}</option>
-                        </optgroup>
-                      </select>
-                      <Button type="button" variant="outline" @mousedown.prevent="addOrganizationCourseFromPicker">
-                        Add Course
-                      </Button>
-                    </div>
-                    <p class="text-sm text-muted-foreground">
-                      Search a course, select it, then click Add Course. The list below shows only courses already added.
-                    </p>
-                  </div>
-                  <div v-if="organizationCourses.length" class="flex flex-wrap gap-2">
-                    <span
-                      v-for="course in organizationCourses"
-                      :key="course"
-                      class="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-sm text-card-foreground"
-                    >
-                      {{ course }}
-                      <button type="button" class="text-muted-foreground hover:text-foreground" @click="removeOrganizationCourse(course)">
-                        x
-                      </button>
-                    </span>
-                  </div>
-                  <p v-else class="text-sm text-muted-foreground">
-                    {{ currentRole === 'school' ? 'No school courses added yet.' : 'No accepted courses added yet.' }}
+                          ? 'Municipal Hall Address'
+                          : 'Company Address'
+                    }}
+                  </h4>
+                </div>
+                <FormItem v-if="currentRole === 'school'">
+                  <FormLabel for="schoolEmailDomain">School Email Domain</FormLabel>
+                  <FormControl>
+                    <Input
+                      id="schoolEmailDomain"
+                      :model-value="profileValues.officialSchoolEmail"
+                      placeholder="@school.edu.ph"
+                      @update:modelValue="setProfileFieldValue('officialSchoolEmail', $event)"
+                    />
+                  </FormControl>
+                  <p class="text-sm text-muted-foreground">
+                    Used when auto-generating student account emails. You can enter `@ncst.edu.ph` or a full school email.
                   </p>
-                </div>
-
-                <div class="space-y-4 rounded-2xl border border-border bg-muted p-5">
-                  <div class="space-y-1">
-                    <h4 class="text-base font-semibold text-foreground">
-                      {{
-                        currentRole === 'school'
-                          ? 'School Address'
-                          : organizationType === 'municipal_hall'
-                            ? 'Municipal Hall Address'
-                            : 'Company Address'
-                      }}
-                    </h4>
-                    <p class="text-sm text-muted-foreground">
-                      {{ currentRole === 'school'
-                        ? 'Use the Cavite location fields so student accounts and directory data stay consistent.'
-                        : organizationType === 'municipal_hall'
-                          ? 'Use the Cavite location fields so schools can filter your municipal hall correctly.'
-                          : 'Use the Cavite location fields so schools can filter your company correctly.' }}
-                    </p>
-                  </div>
-                  <FormItem v-if="currentRole === 'school'">
-                    <FormLabel for="schoolEmailDomain">School Email Domain</FormLabel>
+                </FormItem>
+                <FormItem>
+                  <FormLabel for="orgStreetAddress">Street Address / Building / Landmark</FormLabel>
+                  <FormControl>
+                    <Input
+                      id="orgStreetAddress"
+                      :model-value="currentRole === 'school' ? profileValues.schoolAddress : profileValues.address"
+                      @update:modelValue="setProfileFieldValue(currentRole === 'school' ? 'schoolAddress' : 'address', $event)"
+                    />
+                  </FormControl>
+                </FormItem>
+                <FormItem>
+                  <FormLabel>Province</FormLabel>
+                  <FormControl>
+                    <Input model-value="Cavite" readonly />
+                  </FormControl>
+                </FormItem>
+                <div class="grid gap-4 md:grid-cols-2">
+                  <FormItem>
+                    <FormLabel for="orgAddressCity">
+                      City / Municipality
+                      <span class="text-red-600" aria-hidden="true">*</span>
+                    </FormLabel>
                     <FormControl>
-                      <Input
-                        id="schoolEmailDomain"
-                        :model-value="profileValues.officialSchoolEmail"
-                        placeholder="@school.edu.ph"
-                        @update:modelValue="setProfileFieldValue('officialSchoolEmail', $event)"
-                      />
+                      <Select
+                        id="orgAddressCity"
+                        :model-value="profileValues.addressCity"
+                        @update:modelValue="setProfileFieldValue('addressCity', $event)"
+                      >
+                        <option value="">Select a city or municipality</option>
+                        <optgroup v-for="group in caviteLocationGroups" :key="group.label" :label="group.label">
+                          <option v-for="option in group.options" :key="option" :value="option">{{ option }}</option>
+                        </optgroup>
+                      </Select>
                     </FormControl>
-                    <p class="text-sm text-muted-foreground">
-                      Used when auto-generating student account emails. You can enter `@ncst.edu.ph` or a full school email.
-                    </p>
+                    <p class="text-sm text-muted-foreground">{{ organizationLocationHelper }}</p>
                   </FormItem>
                   <FormItem>
-                    <FormLabel for="companyAddress">Street Address / Building / Landmark</FormLabel>
+                    <FormLabel for="orgAddressBarangay">
+                      Barangay
+                      <span class="text-red-600" aria-hidden="true">*</span>
+                    </FormLabel>
                     <FormControl>
-                      <Input
-                        id="companyAddress"
-                        :model-value="currentRole === 'school' ? profileValues.schoolAddress : profileValues.address"
-                        @update:modelValue="setProfileFieldValue(currentRole === 'school' ? 'schoolAddress' : 'address', $event)"
-                      />
+                      <Select
+                        id="orgAddressBarangay"
+                        :model-value="profileValues.addressBarangay"
+                        :disabled="!profileValues.addressCity"
+                        @update:modelValue="setProfileFieldValue('addressBarangay', $event)"
+                      >
+                        <option value="">{{ locationBarangayOptions.length ? 'Select a barangay' : 'Select a city or municipality first' }}</option>
+                        <option v-for="option in locationBarangayOptions" :key="option" :value="option">{{ option }}</option>
+                      </Select>
                     </FormControl>
-                  </FormItem>
-                  <FormItem>
-                    <FormLabel>Province</FormLabel>
-                    <FormControl>
-                      <Input model-value="Cavite" readonly />
-                    </FormControl>
-                  </FormItem>
-                  <div class="grid gap-4 md:grid-cols-2">
-                    <FormItem>
-                      <FormLabel for="companyAddressCity">City / Municipality</FormLabel>
-                      <FormControl>
-                        <Select
-                          id="companyAddressCity"
-                          :model-value="profileValues.addressCity"
-                          @update:modelValue="setProfileFieldValue('addressCity', $event)"
-                        >
-                          <option value="">Select a city or municipality</option>
-                          <optgroup v-for="group in caviteLocationGroups" :key="group.label" :label="group.label">
-                            <option v-for="option in group.options" :key="option" :value="option">{{ option }}</option>
-                          </optgroup>
-                        </Select>
-                      </FormControl>
-                    </FormItem>
-                    <FormItem>
-                      <FormLabel for="companyAddressBarangay">Barangay</FormLabel>
-                      <FormControl>
-                        <Select
-                          id="companyAddressBarangay"
-                          :model-value="profileValues.addressBarangay"
-                          :disabled="!profileValues.addressCity"
-                          @update:modelValue="setProfileFieldValue('addressBarangay', $event)"
-                        >
-                          <option value="">{{ locationBarangayOptions.length ? 'Select a barangay' : 'Select a city or municipality first' }}</option>
-                          <option v-for="option in locationBarangayOptions" :key="option" :value="option">{{ option }}</option>
-                        </Select>
-                      </FormControl>
-                    </FormItem>
-                  </div>
-                  <FormItem>
-                    <FormLabel for="companyAddressZipCode">Zip Code</FormLabel>
-                    <FormControl>
-                      <Input
-                        id="companyAddressZipCode"
-                        :model-value="profileValues.addressZipCode"
-                        @update:modelValue="setProfileFieldValue('addressZipCode', $event)"
-                      />
-                    </FormControl>
+                    <p class="text-sm text-muted-foreground">{{ organizationLocationHelper }}</p>
                   </FormItem>
                 </div>
-
-
-                <OrganizationPublicProfileSection />
-              </template>
-
-              <Button type="submit" class="w-full md:w-auto" :disabled="savingProfile">
-                {{ savingProfile ? 'Saving...' : 'Save Changes' }}
-              </Button>
+                <FormItem>
+                  <FormLabel for="orgAddressZipCode">Zip Code</FormLabel>
+                  <FormControl>
+                    <Input
+                      id="orgAddressZipCode"
+                      :model-value="profileValues.addressZipCode"
+                      @update:modelValue="setProfileFieldValue('addressZipCode', $event)"
+                    />
+                  </FormControl>
+                </FormItem>
+              </div>
             </form>
           </div>
 
-          <div v-else-if="activeTab === 'configure'" class="space-y-6">
+          <div v-else-if="activeTab === 'courses'" class="space-y-6">
             <div>
-              <h3 class="text-2xl font-semibold text-foreground">Configure</h3>
-              <p class="mt-2 text-sm text-muted-foreground">Course requirements and OJT hours for this organization.</p>
+              <h3 class="text-2xl font-semibold text-foreground">
+                {{ currentRole === 'school' ? 'Courses & Hours' : 'Accepted Courses' }}
+              </h3>
+              <p class="mt-2 text-sm text-muted-foreground">
+                {{ currentRole === 'school'
+                  ? 'Manage school courses and OJT hour requirements.'
+                  : 'Manage the courses your organization accepts for internships.' }}
+              </p>
             </div>
+
+            <div
+              v-if="currentRole === 'school' && !canEditSchoolOrg"
+              class="space-y-3 rounded-2xl border border-border bg-muted p-5"
+            >
+              <h4 class="text-base font-semibold text-foreground">School Courses</h4>
+              <p class="text-sm text-muted-foreground">Visible for your teaching role. Only school admins can edit courses.</p>
+              <div v-if="organizationCourses.length" class="flex flex-wrap gap-2">
+                <span
+                  v-for="course in organizationCourses"
+                  :key="course"
+                  class="inline-flex items-center rounded-full border border-border bg-card px-3 py-1.5 text-sm text-card-foreground"
+                >
+                  {{ course }}
+                </span>
+              </div>
+              <p v-else class="text-sm text-muted-foreground">No school courses listed yet.</p>
+            </div>
+
+            <div
+              v-else-if="currentRole === 'school' || currentRole === 'company'"
+              class="space-y-4 rounded-2xl border border-border bg-muted p-5"
+            >
+              <div class="space-y-1">
+                <h4 class="text-base font-semibold text-foreground">
+                  {{ currentRole === 'school' ? 'School Courses' : 'Accepted Courses' }}
+                </h4>
+                <p class="text-sm text-muted-foreground">
+                  {{ currentRole === 'school'
+                    ? 'Add the courses or programs your school offers for student account creation and matching.'
+                    : organizationType === 'municipal_hall'
+                      ? 'Add the courses or programs your municipal hall accepts for internships.'
+                      : 'Add the courses or programs your company accepts for internships.' }}
+                </p>
+              </div>
+              <div class="space-y-2">
+                <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                  <select ref="organizationCourseSelectRef" multiple class="organization-course-select">
+                    <optgroup v-for="group in courseGroups" :key="group.label" :label="group.label">
+                      <option
+                        v-for="option in group.options.filter((item) => !organizationCourses.includes(item))"
+                        :key="option"
+                        :value="option"
+                      >{{ option }}</option>
+                    </optgroup>
+                  </select>
+                  <Button type="button" variant="outline" @mousedown.prevent="addOrganizationCourseFromPicker">
+                    Add Course
+                  </Button>
+                </div>
+                <p class="text-sm text-muted-foreground">
+                  Search a course, select it, then click Add Course. The list below shows only courses already added.
+                </p>
+              </div>
+              <div v-if="organizationCourses.length" class="flex flex-wrap gap-2">
+                <span
+                  v-for="course in organizationCourses"
+                  :key="course"
+                  class="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-sm text-card-foreground"
+                >
+                  {{ course }}
+                  <button type="button" class="text-muted-foreground hover:text-foreground" @click="removeOrganizationCourse(course)">
+                    ×
+                  </button>
+                </span>
+              </div>
+              <p v-else class="text-sm text-muted-foreground">
+                {{ currentRole === 'school' ? 'No school courses added yet.' : 'No accepted courses added yet.' }}
+              </p>
+            </div>
+
                 <div
                   v-if="currentRole === 'school'"
                   class="space-y-4 rounded-2xl border border-border bg-muted p-5"
@@ -1247,7 +2103,8 @@ onBeforeUnmount(() => {
                         {{ courseRequirementMeta?.flaggedStudentCount }} student{{
                           (courseRequirementMeta?.flaggedStudentCount || 0) === 1 ? '' : 's'
                         }}
-                        have a year level that does not match their course â€” review the list below. Records were not changed.
+                        {{ (courseRequirementMeta?.flaggedStudentCount || 0) === 1 ? 'has' : 'have' }}
+                        a year level that does not match their course - review the list below. Records were not changed.
                       </li>
                     </ul>
                   </div>
@@ -1261,8 +2118,10 @@ onBeforeUnmount(() => {
                       <li v-for="row in flaggedCourseStudents" :key="row.id">
                         {{ row.name || 'Student' }}
                         <span v-if="row.email">({{ row.email }})</span>
-                        â€” {{ row.course || 'No course' }} / {{ row.yearLevel || 'No year' }}
-                        <span class="text-xs">({{ row.reasons.join(', ') }})</span>
+                        - {{ row.course || 'No course' }} / {{ row.yearLevel || 'No year' }}
+                        <span class="text-xs">
+                          ({{ row.reasons.map((reason) => flaggedReasonLabel(reason)).join('; ') }})
+                        </span>
                       </li>
                     </ul>
                   </div>
@@ -1280,8 +2139,8 @@ onBeforeUnmount(() => {
                   >
                     <p>
                       Add a course in
-                      <button type="button" class="font-medium text-primary underline" @click="activeTab = 'profile'">
-                        Settings
+                      <button type="button" class="font-medium text-primary underline" @click="activeTab = 'courses'">
+                        Courses &amp; Hours
                       </button>
                       first,
                     </p>
@@ -1294,15 +2153,11 @@ onBeforeUnmount(() => {
                       class="rounded-xl border border-border bg-background p-4"
                     >
                       <div class="flex flex-wrap items-start justify-between gap-2">
-                        <div>
+                        <div class="space-y-2">
                           <p class="font-medium text-foreground">{{ course }}</p>
-                          <p class="text-xs text-muted-foreground">
-                            {{
-                              requirementForCourse(course)
-                                ? 'Saved for this course'
-                                : 'Not saved yet'
-                            }}
-                          </p>
+                          <Badge :variant="isCourseConfigured(course) ? 'success' : 'warning'">
+                            {{ isCourseConfigured(course) ? 'Configured' : 'Needs setup' }}
+                          </Badge>
                         </div>
                         <Button
                           type="button"
@@ -1314,18 +2169,26 @@ onBeforeUnmount(() => {
                           Save course
                         </Button>
                       </div>
-                      <div class="mt-3 grid gap-3 sm:grid-cols-[140px_minmax(0,1fr)] sm:items-start">
+                      <div class="mt-3 grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)] sm:items-start">
                         <FormItem>
                           <FormLabel :for="`course-hours-${course}`">Required hours</FormLabel>
                           <FormControl>
-                            <Input
-                              :id="`course-hours-${course}`"
-                              v-model="courseHourDrafts[course]"
-                              type="number"
-                              min="1"
-                              max="10000"
-                            />
+                            <div class="flex items-center gap-2">
+                              <Input
+                                :id="`course-hours-${course}`"
+                                v-model="courseHourDrafts[course]"
+                                type="number"
+                                min="1"
+                                max="10000"
+                                placeholder="e.g. 120"
+                                @update:model-value="courseHourErrors = { ...courseHourErrors, [course]: '' }"
+                              />
+                              <span class="shrink-0 text-sm text-muted-foreground">hours</span>
+                            </div>
                           </FormControl>
+                          <p v-if="courseHourErrors[course]" class="text-sm text-destructive">
+                            {{ courseHourErrors[course] }}
+                          </p>
                         </FormItem>
                         <div>
                           <p class="mb-2 text-sm font-medium text-foreground">Eligible year levels</p>
@@ -1334,17 +2197,47 @@ onBeforeUnmount(() => {
                               v-for="level in ALL_YEAR_LEVEL_OPTIONS"
                               :key="`${course}-${level}`"
                               type="button"
-                              class="rounded-full border px-3 py-1 text-xs font-medium transition"
+                              class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition"
                               :class="
                                 (courseYearDrafts[course] || []).includes(level)
-                                  ? 'border-primary bg-primary/10 text-foreground'
+                                  ? 'border-primary bg-primary text-primary-foreground'
                                   : 'border-border bg-muted text-muted-foreground'
                               "
                               @click="toggleCourseYearDraft(course, level)"
                             >
+                              <Check
+                                v-if="(courseYearDrafts[course] || []).includes(level)"
+                                class="h-3 w-3"
+                              />
                               {{ level }}
                             </button>
                           </div>
+                        </div>
+                      </div>
+                      <div class="mt-4">
+                        <p class="mb-2 text-sm font-medium text-foreground">Recommended skill areas</p>
+                        <p class="mb-2 text-xs text-muted-foreground">
+                          Shown first when students in this course pick skills. They can still browse all areas.
+                        </p>
+                        <div class="flex flex-wrap gap-2">
+                          <button
+                            v-for="category in skillCategoryOptions"
+                            :key="`${course}-skill-${category}`"
+                            type="button"
+                            class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition"
+                            :class="
+                              (courseSkillCategoryDrafts[course] || []).includes(category)
+                                ? 'border-primary bg-primary text-primary-foreground'
+                                : 'border-border bg-muted text-muted-foreground'
+                            "
+                            @click="toggleCourseSkillCategoryDraft(course, category)"
+                          >
+                            <Check
+                              v-if="(courseSkillCategoryDrafts[course] || []).includes(category)"
+                              class="h-3 w-3"
+                            />
+                            {{ category }}
+                          </button>
                         </div>
                       </div>
                     </article>
@@ -1354,150 +2247,60 @@ onBeforeUnmount(() => {
 
                 <div v-if="canManageOrgOjtHours" class="space-y-4 rounded-2xl border border-border bg-muted p-5">
                   <div class="space-y-1">
-                    <h4 class="text-base font-semibold text-foreground">OJT Required Hours</h4>
+                    <h4 class="text-base font-semibold text-foreground">Default required hours</h4>
                     <p class="text-sm text-muted-foreground">
-                      Set the approved hour target used for student progress, completion checks, and certificates for your organization.
+                      Used when a course has no hours set. A confirmed hours agreement overrides this.
                     </p>
                   </div>
                   <FormItem>
-                    <FormLabel for="orgRequiredHours">Required Hours</FormLabel>
+                    <FormLabel for="orgRequiredHours">Default required hours</FormLabel>
                     <FormControl>
-                      <Input
-                        id="orgRequiredHours"
-                        v-model="orgRequiredHours"
-                        type="number"
-                        min="1"
-                        max="10000"
-                      />
+                      <div class="flex max-w-xs items-center gap-2">
+                        <Input
+                          id="orgRequiredHours"
+                          v-model="orgRequiredHours"
+                          type="number"
+                          min="1"
+                          max="10000"
+                          placeholder="e.g. 500"
+                        />
+                        <span class="shrink-0 text-sm text-muted-foreground">hours</span>
+                      </div>
                     </FormControl>
                   </FormItem>
                   <Button type="button" :disabled="savingOrgOjt" @click="saveOrgOjtHours">
-                    {{ savingOrgOjt ? 'Saving...' : 'Save OJT Hours' }}
+                    {{ savingOrgOjt ? 'Saving...' : 'Save default hours' }}
                   </Button>
                 </div>
           </div>
 
-          <div v-else-if="activeTab === 'security'" class="space-y-6">
-            <div>
-              <h3 class="text-2xl font-semibold text-foreground">Account & Security</h3>
-              <p class="mt-2 text-sm text-muted-foreground">Update your password and manage high-impact account actions.</p>
+          <div v-else-if="activeTab === 'public'" class="space-y-6">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 class="text-2xl font-semibold text-foreground">Public Page</h3>
+                <p class="mt-2 text-sm text-muted-foreground">
+                  Content students and partners see on your public organization page.
+                </p>
+              </div>
+              <RouterLink
+                v-if="activeOrganizationId"
+                :to="{ name: 'organization-public', params: { id: activeOrganizationId } }"
+                class="text-sm font-medium text-primary underline-offset-4 hover:underline"
+              >
+                See how students see it
+              </RouterLink>
             </div>
 
-            <Card class="border-border/80 shadow-none">
-              <CardHeader>
-                <h4 class="text-lg font-semibold text-foreground">Change Password</h4>
-                <p class="text-sm text-muted-foreground">Use a strong password with at least 8 characters.</p>
-              </CardHeader>
-              <CardContent>
-                <form class="space-y-5" @submit="updatePassword">
-                  <FormField v-slot="{ componentField, errorMessage: fieldError }" name="currentPassword">
-                    <FormItem>
-                      <FormLabel for="currentPassword">Current Password</FormLabel>
-                      <FormControl>
-                        <div class="relative">
-                          <Input
-                            id="currentPassword"
-                            v-bind="componentField"
-                            :type="passwordVisibility.currentPassword ? 'text' : 'password'"
-                            @update:modelValue="setPasswordFieldValue('currentPassword', $event)"
-                          />
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            class="absolute right-1 top-1 h-8 w-8"
-                            @click.prevent="togglePasswordVisibility('currentPassword')"
-                          >
-                            <Eye v-if="passwordVisibility.currentPassword" class="h-4 w-4" />
-                            <EyeOff v-else class="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </FormControl>
-                      <FormMessage :message="fieldError || passwordErrors.currentPassword" />
-                    </FormItem>
-                  </FormField>
-
-                  <FormField v-slot="{ componentField, errorMessage: fieldError }" name="newPassword">
-                    <FormItem>
-                      <FormLabel for="newPassword">New Password</FormLabel>
-                      <FormControl>
-                        <div class="relative">
-                          <Input
-                            id="newPassword"
-                            v-bind="componentField"
-                            :type="passwordVisibility.newPassword ? 'text' : 'password'"
-                            @update:modelValue="setPasswordFieldValue('newPassword', $event)"
-                          />
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            class="absolute right-1 top-1 h-8 w-8"
-                            @click.prevent="togglePasswordVisibility('newPassword')"
-                          >
-                            <Eye v-if="passwordVisibility.newPassword" class="h-4 w-4" />
-                            <EyeOff v-else class="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </FormControl>
-                      <FormMessage :message="fieldError || passwordErrors.newPassword" />
-                    </FormItem>
-                  </FormField>
-
-                  <FormField v-slot="{ componentField, errorMessage: fieldError }" name="confirmPassword">
-                    <FormItem>
-                      <FormLabel for="confirmPassword">Confirm New Password</FormLabel>
-                      <FormControl>
-                        <div class="relative">
-                          <Input
-                            id="confirmPassword"
-                            v-bind="componentField"
-                            :type="passwordVisibility.confirmPassword ? 'text' : 'password'"
-                            @update:modelValue="setPasswordFieldValue('confirmPassword', $event)"
-                          />
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            class="absolute right-1 top-1 h-8 w-8"
-                            @click.prevent="togglePasswordVisibility('confirmPassword')"
-                          >
-                            <Eye v-if="passwordVisibility.confirmPassword" class="h-4 w-4" />
-                            <EyeOff v-else class="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </FormControl>
-                      <FormMessage :message="fieldError || passwordErrors.confirmPassword" />
-                    </FormItem>
-                  </FormField>
-
-                  <Button type="submit" :disabled="savingPassword">
-                    {{ savingPassword ? 'Updating...' : 'Update Password' }}
-                  </Button>
-                </form>
-              </CardContent>
-            </Card>
-
-            <Card class="border-destructive/40 shadow-none">
-              <CardHeader>
-                <h4 class="text-lg font-semibold text-destructive">Danger Zone</h4>
-                <p class="text-sm text-muted-foreground">Deactivate your account if you no longer need access to the platform.</p>
-              </CardHeader>
-              <CardContent>
-                <Button
-                  variant="destructive"
-                  :disabled="deactivating || !supportsAccountDeactivation"
-                  @click="deactivateDialogOpen = true"
-                >
-                  {{ deactivating ? 'Deactivating...' : 'Deactivate Account' }}
-                </Button>
-                <p class="mt-3 text-sm text-muted-foreground">
-                  Account deactivation is not enabled on the current backend, so this action is unavailable for now.
-                </p>
-              </CardContent>
-            </Card>
+            <OrganizationPublicProfileSection
+              ref="publicProfileSectionRef"
+              @open-account-photo="openAccountPhotoSection"
+              @dirty-change="onPublicProfileDirty"
+            />
           </div>
 
           <div v-else-if="activeTab === 'notifications'" class="space-y-6">
             <div>
-              <h3 class="text-2xl font-semibold text-foreground">Notifications Preferences</h3>
+              <h3 class="text-2xl font-semibold text-foreground">Notifications</h3>
               <p class="mt-2 text-sm text-muted-foreground">Choose which updates you want to receive for your role.</p>
             </div>
 
@@ -1513,12 +2316,14 @@ onBeforeUnmount(() => {
               </Card>
             </div>
 
-            <Button :disabled="savingNotifications" @click="saveNotifications">
+            <p class="text-sm text-muted-foreground">Preferences are saved to your account.</p>
+
+            <Button :disabled="savingNotifications || !notificationsDirty" @click="saveNotifications">
               {{ savingNotifications ? 'Saving...' : 'Save Preferences' }}
             </Button>
           </div>
 
-          <div v-else class="space-y-6">
+          <div v-else-if="activeTab === 'system'" class="space-y-6">
             <div>
               <h3 class="text-2xl font-semibold text-foreground">System Settings</h3>
               <p class="mt-2 text-sm text-muted-foreground">Control platform-wide defaults and registration behavior.</p>
@@ -1576,14 +2381,13 @@ onBeforeUnmount(() => {
       </Card>
     </div>
 
-    <AlertDialog
-      :open="deactivateDialogOpen"
-      title="Deactivate account?"
-      description="This will deactivate your account and sign you out immediately."
-      action-label="Deactivate"
-      action-variant="destructive"
-      @update:open="deactivateDialogOpen = $event"
-      @action="confirmDeactivate"
+    <SkillsWizard
+      v-if="currentRole === 'student'"
+      v-model="profileSkills"
+      v-model:open="skillsWizardOpen"
+      mode="intern"
+      :limit="15"
+      @done="onSkillsSaved"
     />
 
     <AlertDialog
@@ -1595,6 +2399,26 @@ onBeforeUnmount(() => {
       @update:open="maintenanceDialogOpen = $event"
       @action="confirmMaintenanceMode"
     />
+
+    <div
+      v-if="stickySaveVisible"
+      class="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 px-4 py-3 shadow-lg backdrop-blur"
+    >
+      <div class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3">
+        <div class="flex flex-wrap items-center gap-3">
+          <p class="text-sm font-medium text-foreground">You have unsaved changes</p>
+          <span v-if="savedFlash" class="text-sm font-medium text-emerald-700 dark:text-emerald-300">{{ savedFlash }}</span>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" :disabled="savingProfile" @click="discardStickyChanges">
+            Discard
+          </Button>
+          <Button type="button" :disabled="savingProfile" @click="saveStickyChanges">
+            {{ savingProfile ? 'Saving...' : 'Save' }}
+          </Button>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 

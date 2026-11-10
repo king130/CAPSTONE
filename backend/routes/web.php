@@ -12,6 +12,7 @@ Route::get('/', function () {
     return view('welcome');
 });
 
+// Do not SPA-fallback crawler/static files that must remain real assets.
 Route::get('/{path}', function () {
     $spaEntry = public_path('index.html');
 
@@ -20,4 +21,4 @@ Route::get('/{path}', function () {
     }
 
     return view('welcome');
-})->where('path', '^(?!api(?:/|$)).*');
+})->where('path', '^(?!api(?:/|$)|robots\.txt$|sitemap\.xml$|manifest\.webmanifest$|\.well-known(?:/|$)).*');

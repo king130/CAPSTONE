@@ -2,24 +2,39 @@
 
 namespace App\Services;
 
+use App\Models\Company;
 use App\Models\Organization;
+use App\Models\School;
 use App\Models\Subscription;
 use App\Models\SubscriptionAuditLog;
 use App\Models\User;
 use Carbon\Carbon;
-use Illuminate\Support\Facades\DB;
 
 /**
- * Derive organization subscription access from dates (Asia/Manila).
- * Statuses: trial | active | grace | expired (exactly one).
+ * Single source of truth for organization subscription access.
+ *
+ * Statuses (exactly one):
+ * - unverified: awaiting / rejected verification (never "expired")
+ * - trial: timed trial window after verification (writable, trial_plan limits)
+ * - free: free plan with no active trial window
+ * - active: paid plan in period
+ * - pending_payment: checkout started, not completed
+ * - past_due: paid or trial period ended, still inside grace
+ * - expired: trial/paid period ended and grace finished
  */
 class SubscriptionAccessService
 {
+    public const STATUS_UNVERIFIED = 'unverified';
+
     public const STATUS_TRIAL = 'trial';
+
+    public const STATUS_FREE = 'free';
 
     public const STATUS_ACTIVE = 'active';
 
-    public const STATUS_GRACE = 'grace';
+    public const STATUS_PENDING_PAYMENT = 'pending_payment';
+
+    public const STATUS_PAST_DUE = 'past_due';
 
     public const STATUS_EXPIRED = 'expired';
 
@@ -35,7 +50,7 @@ class SubscriptionAccessService
 
     public function trialDays(): int
     {
-        return max(1, (int) config('subscription.trial_days', 14));
+        return max(1, (int) config('subscription.trial_days', 30));
     }
 
     public function graceDays(): int
@@ -59,65 +74,130 @@ class SubscriptionAccessService
      *   paidEndsAt: string|null,
      *   daysRemaining: int|null,
      *   message: string,
-     *   code: string
+     *   code: string,
+     *   verificationStatus: string|null,
+     *   trialDays: int,
+     *   graceDays: int
      * }
      */
     public function resolve(?Organization $organization): array
     {
         if (! $organization) {
-            return $this->payload(self::STATUS_EXPIRED, false, false, null, null, null, null, null, 'No organization context.', 'subscription_missing');
+            return $this->payload(
+                self::STATUS_EXPIRED,
+                false,
+                false,
+                null,
+                null,
+                null,
+                null,
+                null,
+                'No organization context.',
+                'subscription_missing',
+                null
+            );
         }
 
         $organization->loadMissing('subscription');
+        $verificationStatus = $this->verificationStatusFor($organization);
+
+        // Unverified orgs are never "expired" — free limits while uploading docs; trial clock still runs.
+        if (! $this->isVerificationApproved($verificationStatus)) {
+            $subscription = $organization->subscription;
+            $trialEndsAt = $subscription?->trial_ends_at;
+            $days = null;
+            if ($trialEndsAt) {
+                $days = max(0, (int) $this->now()->diffInDays(
+                    Carbon::parse($trialEndsAt, $this->timezone()),
+                    false
+                ));
+            }
+
+            return $this->payload(
+                self::STATUS_UNVERIFIED,
+                true,
+                true,
+                'free',
+                $trialEndsAt?->timezone($this->timezone())->toIso8601String(),
+                $subscription?->grace_ends_at?->timezone($this->timezone())->toIso8601String(),
+                null,
+                $days,
+                'Organization verification is still pending. Free-plan limits apply until approved.',
+                'subscription_unverified',
+                $verificationStatus
+            );
+        }
+
         $subscription = $organization->subscription;
         if (! $subscription) {
-            return $this->payload(self::STATUS_EXPIRED, false, false, null, null, null, null, null, 'No subscription on this organization.', 'subscription_missing');
+            return $this->payload(
+                self::STATUS_FREE,
+                true,
+                true,
+                'free',
+                null,
+                null,
+                null,
+                null,
+                'No subscription row — treating as free plan.',
+                'subscription_free',
+                $verificationStatus
+            );
         }
 
         $now = $this->now();
         $plan = strtolower(trim((string) $subscription->plan)) ?: null;
         $rawStatus = strtolower(trim((string) $subscription->status));
+        $settings = is_array($organization->settings) ? $organization->settings : [];
+        $pendingChange = is_array($settings['pending_plan_change'] ?? null) ? $settings['pending_plan_change'] : null;
+        $trialPlan = $this->trialPlanSlug();
+        $trialEnds = $subscription->trial_ends_at
+            ? Carbon::parse($subscription->trial_ends_at, $this->timezone())
+            : null;
 
-        // Legacy free + active (row kept for history / seat tests). Still writable; not offered to new orgs.
-        if ($rawStatus === 'active' && $plan === 'free') {
+        // Checkout in flight — never treat as expired.
+        if ($pendingChange || $rawStatus === 'pending') {
+            return $this->payload(
+                self::STATUS_PENDING_PAYMENT,
+                true,
+                true,
+                $plan && $plan !== 'free' ? $plan : 'free',
+                $trialEnds?->toIso8601String(),
+                $subscription->grace_ends_at?->timezone($this->timezone())->toIso8601String(),
+                $subscription->ends_at ? Carbon::parse($subscription->ends_at, $this->timezone())->toIso8601String() : null,
+                null,
+                'Payment is pending. Complete checkout to activate your plan.',
+                'subscription_pending_payment',
+                $verificationStatus
+            );
+        }
+
+        $paidEnds = $subscription->ends_at
+            ? Carbon::parse($subscription->ends_at, $this->timezone())->endOfDay()
+            : null;
+        $hadPaidPlan = $this->hadPaidPlan($subscription, $plan, $rawStatus, $paidEnds);
+
+        // Active paid plan still in period (or open-ended paid with no trial window).
+        if ($hadPaidPlan && $rawStatus === 'active' && ($paidEnds === null || $paidEnds->greaterThanOrEqualTo($now))) {
+            $days = $paidEnds ? (int) $now->diffInDays($paidEnds, false) : null;
+
             return $this->payload(
                 self::STATUS_ACTIVE,
                 true,
                 true,
-                'free',
-                $subscription->trial_ends_at?->timezone($this->timezone())->toIso8601String(),
+                $plan,
+                $trialEnds?->toIso8601String(),
                 $subscription->grace_ends_at?->timezone($this->timezone())->toIso8601String(),
-                null,
-                null,
-                'Legacy free plan is active. New organizations use a trial, then a paid plan.',
-                'subscription_active'
+                $paidEnds?->toIso8601String(),
+                $days,
+                'Paid plan is active.',
+                'subscription_active',
+                $verificationStatus
             );
         }
 
-        // Paid active with period end in the future (or open-ended).
-        if ($rawStatus === 'active' && $plan && $plan !== 'free') {
-            $paidEnds = $subscription->ends_at
-                ? Carbon::parse($subscription->ends_at, $this->timezone())->endOfDay()
-                : null;
-
-            if ($paidEnds === null || $paidEnds->greaterThanOrEqualTo($now)) {
-                $days = $paidEnds ? (int) $now->diffInDays($paidEnds, false) : null;
-
-                return $this->payload(
-                    self::STATUS_ACTIVE,
-                    true,
-                    true,
-                    $plan,
-                    $subscription->trial_ends_at?->timezone($this->timezone())->toIso8601String(),
-                    $subscription->grace_ends_at?->timezone($this->timezone())->toIso8601String(),
-                    $paidEnds?->toIso8601String(),
-                    $days,
-                    'Paid plan is active.',
-                    'subscription_active'
-                );
-            }
-
-            // Paid period ended — check grace (grace_ends_at or ends_at + grace_days).
+        // Previously paid — period ended.
+        if ($hadPaidPlan && $paidEnds !== null && $paidEnds->lessThan($now)) {
             $graceEnds = $subscription->grace_ends_at
                 ? Carbon::parse($subscription->grace_ends_at, $this->timezone())
                 : $paidEnds->copy()->addDays($this->graceDays());
@@ -126,16 +206,17 @@ class SubscriptionAccessService
                 $days = (int) $now->diffInDays($graceEnds, false);
 
                 return $this->payload(
-                    self::STATUS_GRACE,
+                    self::STATUS_PAST_DUE,
                     true,
                     true,
                     $plan,
                     null,
                     $graceEnds->toIso8601String(),
                     $paidEnds->toIso8601String(),
-                    $days,
-                    'Paid period ended. You are in a grace period — upgrade soon.',
-                    'subscription_grace'
+                    max(0, $days),
+                    'Payment failed or the paid period ended. Update billing to avoid losing write access.',
+                    'subscription_past_due',
+                    $verificationStatus
                 );
             }
 
@@ -149,51 +230,51 @@ class SubscriptionAccessService
                 $paidEnds->toIso8601String(),
                 0,
                 'Subscription expired. Upgrade to restore write access.',
-                'subscription_expired'
+                'subscription_expired',
+                $verificationStatus
             );
         }
 
-        // Trialing (or legacy free treated as trial via dates).
-        if (in_array($rawStatus, ['trialing', 'trial'], true) || ($subscription->trial_ends_at && $rawStatus !== 'active')) {
-            $trialEnds = $subscription->trial_ends_at
-                ? Carbon::parse($subscription->trial_ends_at, $this->timezone())
-                : null;
+        // Timed trial window (registration startTrial) — before free fallback.
+        if ($trialEnds !== null && $trialEnds->greaterThanOrEqualTo($now)) {
+            $days = (int) $now->diffInDays($trialEnds, false);
 
-            if ($trialEnds && $trialEnds->greaterThanOrEqualTo($now)) {
-                $days = (int) $now->diffInDays($trialEnds, false);
+            return $this->payload(
+                self::STATUS_TRIAL,
+                true,
+                true,
+                $trialPlan,
+                $trialEnds->toIso8601String(),
+                $subscription->grace_ends_at?->timezone($this->timezone())->toIso8601String(),
+                null,
+                max(0, $days),
+                'Trial is active.',
+                'subscription_trial',
+                $verificationStatus
+            );
+        }
 
-                return $this->payload(
-                    self::STATUS_TRIAL,
-                    true,
-                    true,
-                    $plan ?: $this->trialPlanSlug(),
-                    $trialEnds->toIso8601String(),
-                    $subscription->grace_ends_at?->timezone($this->timezone())->toIso8601String(),
-                    null,
-                    max(0, $days),
-                    'Trial is active.',
-                    'subscription_trial'
-                );
-            }
-
+        // Trial ended (never paid) — grace then expired.
+        if ($trialEnds !== null && $trialEnds->lessThan($now)) {
             $graceEnds = $subscription->grace_ends_at
                 ? Carbon::parse($subscription->grace_ends_at, $this->timezone())
-                : ($trialEnds ? $trialEnds->copy()->addDays($this->graceDays()) : $now->copy()->subDay());
+                : $trialEnds->copy()->addDays($this->graceDays());
 
             if ($graceEnds->greaterThanOrEqualTo($now)) {
                 $days = (int) $now->diffInDays($graceEnds, false);
 
                 return $this->payload(
-                    self::STATUS_GRACE,
+                    self::STATUS_PAST_DUE,
                     true,
                     true,
-                    $plan ?: $this->trialPlanSlug(),
-                    $trialEnds?->toIso8601String(),
+                    $trialPlan,
+                    $trialEnds->toIso8601String(),
                     $graceEnds->toIso8601String(),
                     null,
                     max(0, $days),
-                    'Trial ended. You are in a grace period — choose a paid plan.',
-                    'subscription_grace'
+                    'Your trial ended. Choose a paid plan to keep write access after the grace period.',
+                    'subscription_past_due',
+                    $verificationStatus
                 );
             }
 
@@ -201,28 +282,30 @@ class SubscriptionAccessService
                 self::STATUS_EXPIRED,
                 false,
                 false,
-                $plan ?: $this->trialPlanSlug(),
-                $trialEnds?->toIso8601String(),
+                $trialPlan,
+                $trialEnds->toIso8601String(),
                 $graceEnds->toIso8601String(),
                 null,
                 0,
-                'Trial and grace period ended. Upgrade to restore write access.',
-                'subscription_expired'
+                'Subscription expired. Upgrade to restore write access.',
+                'subscription_expired',
+                $verificationStatus
             );
         }
 
-        // Pending unpaid checkout / inactive without trial dates → expired (read-only).
+        // Free plan with no trial window.
         return $this->payload(
-            self::STATUS_EXPIRED,
-            false,
-            false,
-            $plan,
-            $subscription->trial_ends_at?->timezone($this->timezone())->toIso8601String(),
+            self::STATUS_FREE,
+            true,
+            true,
+            'free',
+            null,
             $subscription->grace_ends_at?->timezone($this->timezone())->toIso8601String(),
-            $subscription->ends_at ? Carbon::parse($subscription->ends_at, $this->timezone())->toIso8601String() : null,
-            0,
-            'Subscription is not active. Upgrade to restore write access.',
-            'subscription_expired'
+            null,
+            null,
+            'Free plan is active.',
+            'subscription_free',
+            $verificationStatus
         );
     }
 
@@ -245,19 +328,42 @@ class SubscriptionAccessService
         return Organization::query()->where('owner_user_id', $user->id)->first();
     }
 
+    public function verificationStatusFor(Organization $organization): ?string
+    {
+        if ($organization->type === 'school') {
+            $status = School::query()->where('organization_id', $organization->id)->value('verification_status');
+
+            return $status !== null ? strtolower(trim((string) $status)) : 'pending';
+        }
+
+        if (in_array($organization->type, ['company', 'municipal_hall'], true)) {
+            $status = Company::query()->where('organization_id', $organization->id)->value('verification_status');
+
+            return $status !== null ? strtolower(trim((string) $status)) : 'pending';
+        }
+
+        return null;
+    }
+
+    public function isVerificationApproved(?string $status): bool
+    {
+        return strtolower(trim((string) $status)) === 'approved';
+    }
+
     /**
-     * Start a trial for a brand-new organization subscription.
+     * Start a timed trial for a brand-new organization (clock starts at registration).
      */
     public function startTrial(Subscription $subscription, ?Organization $organization = null, ?User $actor = null): Subscription
     {
         $now = $this->now();
-        $trialEnds = $now->copy()->addDays($this->trialDays());
-        $graceEnds = $trialEnds->copy()->addDays($this->graceDays());
         $fromPlan = $subscription->plan;
         $fromStatus = $subscription->status;
+        $trialPlan = $this->trialPlanSlug();
+        $trialEnds = $now->copy()->addDays($this->trialDays());
+        $graceEnds = $trialEnds->copy()->addDays($this->graceDays());
 
         $subscription->forceFill([
-            'plan' => $this->trialPlanSlug(),
+            'plan' => $trialPlan,
             'status' => 'trialing',
             'trial_started_at' => $now,
             'trial_ends_at' => $trialEnds,
@@ -272,11 +378,14 @@ class SubscriptionAccessService
             $actor,
             'trial_started',
             $fromPlan,
-            $this->trialPlanSlug(),
+            $trialPlan,
             $fromStatus,
             'trialing',
-            'Organization created — trial started.',
-            ['trial_days' => $this->trialDays(), 'grace_days' => $this->graceDays()]
+            'Organization created — timed trial started.',
+            [
+                'trial_days' => $this->trialDays(),
+                'trial_ends_at' => $trialEnds->toIso8601String(),
+            ]
         );
 
         return $subscription;
@@ -329,22 +438,20 @@ class SubscriptionAccessService
         ?User $actor,
         string $reason,
     ): Subscription {
+        // Extending "trial" keeps the org on free writable access; optionally bump a soft note window.
         $now = $this->now();
-        $base = $subscription->trial_ends_at
-            ? Carbon::parse($subscription->trial_ends_at, $this->timezone())
-            : $now;
-        if ($base->lessThan($now)) {
-            $base = $now->copy();
-        }
-        $trialEnds = $base->copy()->addDays(max(1, $extraDays));
-        $graceEnds = $trialEnds->copy()->addDays($this->graceDays());
         $fromStatus = $subscription->status;
+        $noteEnds = $now->copy()->addDays(max(1, $extraDays));
+
+        $trialPlan = $this->trialPlanSlug();
+        $graceEnds = $noteEnds->copy()->addDays($this->graceDays());
 
         $subscription->forceFill([
             'status' => 'trialing',
-            'plan' => $subscription->plan ?: $this->trialPlanSlug(),
-            'trial_ends_at' => $trialEnds,
+            'plan' => $trialPlan,
+            'trial_ends_at' => $noteEnds,
             'grace_ends_at' => $graceEnds,
+            'ends_at' => null,
             'access_note' => $reason,
         ])->save();
 
@@ -354,11 +461,11 @@ class SubscriptionAccessService
             $actor,
             'trial_extended',
             $subscription->plan,
-            $subscription->plan,
+            $trialPlan,
             $fromStatus,
             'trialing',
             $reason,
-            ['extra_days' => $extraDays, 'trial_ends_at' => $trialEnds->toIso8601String()]
+            ['extra_days' => $extraDays]
         );
 
         return $subscription;
@@ -368,15 +475,21 @@ class SubscriptionAccessService
     {
         $now = $this->now();
         $fromStatus = $subscription->status;
+        $plan = strtolower(trim((string) $subscription->plan));
+        if ($plan === '' || $plan === 'free') {
+            $plan = 'standard';
+        }
+
         $subscription->forceFill([
-            'status' => 'trialing',
-            'trial_ends_at' => $now->copy()->subDays(2),
-            'grace_ends_at' => $now->copy()->subDay(),
+            'plan' => $plan,
+            'status' => 'active',
             'ends_at' => $now->copy()->subDays(2)->toDateString(),
+            'grace_ends_at' => $now->copy()->subDay(),
+            'trial_ends_at' => null,
             'access_note' => $reason,
         ])->save();
 
-        $this->audit($organization, $subscription, $actor, 'forced_expired', $subscription->plan, $subscription->plan, $fromStatus, 'expired', $reason, []);
+        $this->audit($organization, $subscription, $actor, 'forced_expired', $subscription->plan, $plan, $fromStatus, 'expired', $reason, []);
 
         return $subscription;
     }
@@ -385,14 +498,21 @@ class SubscriptionAccessService
     {
         $now = $this->now();
         $fromStatus = $subscription->status;
+        $plan = strtolower(trim((string) $subscription->plan));
+        if ($plan === '' || $plan === 'free') {
+            $plan = 'standard';
+        }
+
         $subscription->forceFill([
-            'status' => 'trialing',
-            'trial_ends_at' => $now->copy()->subDay(),
+            'plan' => $plan,
+            'status' => 'active',
+            'ends_at' => $now->copy()->subDay()->toDateString(),
             'grace_ends_at' => $now->copy()->addDays(max(1, $this->graceDays())),
+            'trial_ends_at' => null,
             'access_note' => $reason,
         ])->save();
 
-        $this->audit($organization, $subscription, $actor, 'forced_grace', $subscription->plan, $subscription->plan, $fromStatus, 'grace', $reason, []);
+        $this->audit($organization, $subscription, $actor, 'forced_past_due', $subscription->plan, $plan, $fromStatus, 'past_due', $reason, []);
 
         return $subscription;
     }
@@ -427,6 +547,42 @@ class SubscriptionAccessService
         ]);
     }
 
+    private function hadPaidPlan(Subscription $subscription, ?string $plan, string $rawStatus, ?Carbon $paidEnds): bool
+    {
+        if (! $plan || $plan === 'free') {
+            return false;
+        }
+
+        // Timed trial is not a paid entitlement.
+        if (in_array($rawStatus, ['trialing', 'trial'], true)) {
+            return false;
+        }
+
+        // Non-free + active counts as paid even when ends_at is open-ended/null,
+        // but only when there is no open trial window (trial uses trial_plan slug).
+        if ($rawStatus === 'active') {
+            if ($subscription->trial_ends_at && $paidEnds === null) {
+                $trialEnds = Carbon::parse($subscription->trial_ends_at, $this->timezone());
+                if ($trialEnds->greaterThanOrEqualTo($this->now())) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        // A concrete paid period end (or prior activation audit) means they had a paid plan.
+        if ($paidEnds !== null) {
+            return true;
+        }
+
+        return SubscriptionAuditLog::query()
+            ->where('subscription_id', $subscription->id)
+            ->where('event', 'plan_activated')
+            ->where('to_plan', '!=', 'free')
+            ->exists();
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -441,6 +597,7 @@ class SubscriptionAccessService
         ?int $daysRemaining,
         string $message,
         string $code,
+        ?string $verificationStatus,
     ): array {
         return [
             'status' => $status,
@@ -453,6 +610,7 @@ class SubscriptionAccessService
             'daysRemaining' => $daysRemaining,
             'message' => $message,
             'code' => $code,
+            'verificationStatus' => $verificationStatus,
             'trialDays' => $this->trialDays(),
             'graceDays' => $this->graceDays(),
         ];

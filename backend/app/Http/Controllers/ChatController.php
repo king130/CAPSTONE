@@ -13,6 +13,8 @@ use App\Services\ChatRelationshipGate;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class ChatController extends Controller
 {
@@ -199,21 +201,44 @@ class ChatController extends Controller
         }
 
         $data = $request->validate([
-            'body' => ['required', 'string', 'max:'.self::MAX_BODY_LENGTH],
+            'body' => ['nullable', 'string', 'max:'.self::MAX_BODY_LENGTH],
+            'attachment' => ['nullable', 'file', 'max:10240', 'mimes:pdf,jpg,jpeg,png'],
         ]);
 
-        $body = trim($data['body']);
-        if ($body === '') {
+        $body = trim((string) ($data['body'] ?? ''));
+        $file = $request->file('attachment');
+        if ($body === '' && ! $file) {
             return response()->json([
-                'message' => 'The message body cannot be empty.',
-                'errors' => ['body' => ['The message body cannot be empty.']],
+                'message' => 'Write a message or attach a PDF/JPG/PNG file (max 10 MB).',
+                'errors' => ['body' => ['Write a message or attach a file.']],
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $attachmentPath = null;
+        $attachmentName = null;
+        $attachmentMime = null;
+        $attachmentSize = null;
+        if ($file) {
+            $safeName = Str::slug(pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME)) ?: 'attachment';
+            $ext = strtolower($file->getClientOriginalExtension() ?: 'bin');
+            $attachmentPath = $file->storeAs(
+                'private/chat/'. $conversation->id,
+                $safeName.'-'.Str::random(8).'.'.$ext,
+                'local'
+            );
+            $attachmentName = $file->getClientOriginalName();
+            $attachmentMime = $file->getClientMimeType() ?: $file->getMimeType();
+            $attachmentSize = (int) $file->getSize();
         }
 
         $message = Message::query()->create([
             'conversation_id' => $conversation->id,
             'sender_id' => $user->id,
-            'body' => $body,
+            'body' => $body !== '' ? $body : ($attachmentName ? ('Sent '.$attachmentName) : ''),
+            'attachment_path' => $attachmentPath,
+            'attachment_name' => $attachmentName,
+            'attachment_mime' => $attachmentMime,
+            'attachment_size' => $attachmentSize,
         ]);
 
         $conversation->touch();
@@ -221,6 +246,29 @@ class ChatController extends Controller
         return response()->json([
             'data' => $this->serializeMessage($message),
         ], Response::HTTP_CREATED);
+    }
+
+    public function downloadAttachment(Request $request, Message $message)
+    {
+        /** @var User $user */
+        $user = $request->user();
+        if ($denied = $this->denyNonChatActor($user)) {
+            return $denied;
+        }
+
+        $conversation = Conversation::query()->find($message->conversation_id);
+        if (! $conversation || ! $this->isParticipant($conversation, $user)) {
+            return response()->json(['message' => 'Forbidden.'], Response::HTTP_FORBIDDEN);
+        }
+
+        if (! $message->hasAttachment() || ! Storage::disk('local')->exists((string) $message->attachment_path)) {
+            return response()->json(['message' => 'Attachment not found.'], Response::HTTP_NOT_FOUND);
+        }
+
+        return Storage::disk('local')->download(
+            (string) $message->attachment_path,
+            (string) ($message->attachment_name ?: 'attachment')
+        );
     }
 
     public function markRead(Request $request, Conversation $conversation)
@@ -299,6 +347,7 @@ class ChatController extends Controller
         $latest = $conversation->messages->first();
 
         $lastReadAt = $viewerParticipant?->last_read_at;
+        $peerLastReadAt = $peerParticipant?->last_read_at;
         $unreadCount = Message::query()
             ->where('conversation_id', $conversation->id)
             ->where('sender_id', '!=', $viewer->id)
@@ -321,8 +370,10 @@ class ChatController extends Controller
                 'body' => $latest->body,
                 'senderId' => (string) $latest->sender_id,
                 'createdAt' => $latest->created_at?->toIso8601String(),
+                'hasAttachment' => $latest->hasAttachment(),
             ] : null,
             'lastReadAt' => $lastReadAt?->toIso8601String(),
+            'peerLastReadAt' => $peerLastReadAt?->toIso8601String(),
             'unreadCount' => $unreadCount,
             'updatedAt' => $conversation->updated_at?->toIso8601String(),
             'createdAt' => $conversation->created_at?->toIso8601String(),
@@ -340,6 +391,12 @@ class ChatController extends Controller
             'senderId' => (string) $message->sender_id,
             'body' => $message->body,
             'createdAt' => $message->created_at?->toIso8601String(),
+            'attachment' => $message->hasAttachment() ? [
+                'name' => $message->attachment_name,
+                'mime' => $message->attachment_mime,
+                'size' => $message->attachment_size,
+                'url' => '/api/conversations/messages/'.$message->id.'/attachment',
+            ] : null,
         ];
     }
 }

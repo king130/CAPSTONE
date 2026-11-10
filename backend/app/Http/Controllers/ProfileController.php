@@ -108,10 +108,20 @@ class ProfileController extends Controller
         }
 
         $profile = is_array($data['profile'] ?? null) ? $data['profile'] : [];
+        $student = $user->student;
+        $existingNumber = \App\Support\StudentNumber::normalize(
+            is_string($student?->student_id_number) ? $student->student_id_number : null
+        );
+        $numberKeys = ['studentNumber', 'studentId', 'student_id_number'];
+        $requestedNumberKey = null;
+        foreach ($numberKeys as $key) {
+            if (array_key_exists($key, $profile)) {
+                $requestedNumberKey = $key;
+                break;
+            }
+        }
+
         $forbiddenProfileKeys = [
-            'studentNumber',
-            'studentId',
-            'student_id_number',
             'course',
             'yearLevel',
             'year_level',
@@ -131,6 +141,13 @@ class ProfileController extends Controller
             'institutionName',
         ];
 
+        // Students may fill a missing student number once; they cannot change one already on file.
+        if ($requestedNumberKey !== null && $existingNumber !== null) {
+            $errors['profile.'.$requestedNumberKey] = [
+                'Your student number is already on file. Ask your school if it needs to be corrected.',
+            ];
+        }
+
         foreach ($forbiddenProfileKeys as $key) {
             if (array_key_exists($key, $profile)) {
                 $errors['profile.'.$key] = [
@@ -146,15 +163,47 @@ class ProfileController extends Controller
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
-        if (array_key_exists('contactNumber', $profile) && $user->student) {
-            $contactNumber = $profile['contactNumber'];
-            $user->student->contact_number = is_string($contactNumber) || is_numeric($contactNumber)
-                ? (string) $contactNumber
-                : $user->student->contact_number;
-            $user->student->save();
+        if ($student && $requestedNumberKey !== null && $existingNumber === null) {
+            $raw = $profile[$requestedNumberKey] ?? null;
+            $numberCheck = \App\Support\StudentNumber::validate(is_string($raw) || is_numeric($raw) ? (string) $raw : null, true);
+            if (! $numberCheck['ok']) {
+                return response()->json([
+                    'message' => $numberCheck['message'],
+                    'errors' => ['profile.studentNumber' => [$numberCheck['message']]],
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+
+            if (! $student->school_id) {
+                return response()->json([
+                    'message' => 'Your school enrollment is incomplete. Contact your school before adding a student number.',
+                    'errors' => ['profile.studentNumber' => ['Your school enrollment is incomplete.']],
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+
+            \App\Support\StudentNumber::assertUniqueInSchool(
+                (int) $student->school_id,
+                $numberCheck['value'],
+                (int) $student->id
+            );
+
+            $student->student_id_number = $numberCheck['value'];
+            $student->save();
 
             $user->profile = array_merge($user->profile ?? [], [
-                'contactNumber' => $user->student->contact_number,
+                'studentNumber' => $numberCheck['value'],
+                'studentId' => $numberCheck['value'],
+            ]);
+        }
+
+        if (array_key_exists('contactNumber', $profile) && $student) {
+            $contactNumber = $profile['contactNumber'];
+            $student->contact_number = is_string($contactNumber) || is_numeric($contactNumber)
+                ? (string) $contactNumber
+                : $student->contact_number;
+            $student->save();
+
+            $user->profile = array_merge($user->profile ?? [], [
+                'contactNumber' => $student->contact_number,
             ]);
         }
 

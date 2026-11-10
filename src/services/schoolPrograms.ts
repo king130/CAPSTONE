@@ -16,12 +16,14 @@ export interface CourseRequirement {
   courseName: string
   requiredHours: number
   eligibleYearLevels: string[]
+  recommendedSkillCategories?: string[]
   configComplete?: boolean
 }
 
 export interface CourseRequirementMeta {
   allowedYearLevels: string[]
   defaultEligibleYearLevels: string[]
+  skillCatalogCategories?: string[]
   incompleteCourses: Array<{
     id: string
     courseName: string
@@ -78,10 +80,15 @@ export async function createCourseRequirement(
   courseName: string,
   requiredHours: number,
   eligibleYearLevels: string[] = [...DEFAULT_ELIGIBLE_YEAR_LEVELS],
+  recommendedSkillCategories?: string[],
 ): Promise<CourseRequirement> {
+  const body: Record<string, unknown> = { courseName, requiredHours, eligibleYearLevels }
+  if (recommendedSkillCategories !== undefined) {
+    body.recommendedSkillCategories = recommendedSkillCategories
+  }
   const response = await apiFetch<CourseRequirementResponse>('/school-course-requirements', {
     method: 'POST',
-    body: JSON.stringify({ courseName, requiredHours, eligibleYearLevels }),
+    body: JSON.stringify(body),
   })
   return normalizeRequirement(response.data)
 }
@@ -91,10 +98,15 @@ export async function updateCourseRequirement(
   courseName: string,
   requiredHours: number,
   eligibleYearLevels: string[],
+  recommendedSkillCategories?: string[],
 ): Promise<CourseRequirement> {
+  const body: Record<string, unknown> = { courseName, requiredHours, eligibleYearLevels }
+  if (recommendedSkillCategories !== undefined) {
+    body.recommendedSkillCategories = recommendedSkillCategories
+  }
   const response = await apiFetch<CourseRequirementResponse>(`/school-course-requirements/${id}`, {
     method: 'PATCH',
-    body: JSON.stringify({ courseName, requiredHours, eligibleYearLevels }),
+    body: JSON.stringify(body),
   })
   return normalizeRequirement(response.data)
 }
@@ -104,9 +116,14 @@ function normalizeRequirement(requirement: CourseRequirement): CourseRequirement
     ? requirement.eligibleYearLevels
     : [...DEFAULT_ELIGIBLE_YEAR_LEVELS]
 
+  const recommendedSkillCategories = Array.isArray(requirement.recommendedSkillCategories)
+    ? requirement.recommendedSkillCategories
+    : []
+
   return {
     ...requirement,
     eligibleYearLevels: levels,
+    recommendedSkillCategories,
     configComplete:
       requirement.configComplete ??
       (Number(requirement.requiredHours) >= 1 && levels.length > 0),

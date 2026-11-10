@@ -96,6 +96,7 @@ function mapUserToProfileSettings(user: UserProfile): ProfileSettings {
   return {
     fullName: user.displayName ?? '',
     phone: String(profile.contactNumber ?? profile.companyContactNumber ?? profile.schoolContactNumber ?? ''),
+    studentNumber: String(profile.studentNumber ?? profile.studentId ?? ''),
     course: String(profile.course ?? ''),
     yearLevel: String(profile.yearLevel ?? ''),
     schoolName: String(profile.schoolName ?? profile.institutionName ?? ''),
@@ -143,13 +144,18 @@ function mapProfileSettingsToPayload(
   profile: Record<string, unknown>
   profileSetupComplete: boolean
 } {
-  // Students may only self-update contact; school-managed identity fields must not be submitted.
+  // Students may self-update contact, and may fill a missing student number once.
   if (role === 'student') {
+    const payload: Record<string, unknown> = {
+      contactNumber: profile.phone,
+    }
+    const number = (profile.studentNumber || '').trim()
+    if (number) {
+      payload.studentNumber = number
+    }
     return {
       profileSetupComplete: true,
-      profile: {
-        contactNumber: profile.phone,
-      },
+      profile: payload,
     }
   }
 

@@ -29,9 +29,9 @@ const buttonClass = computed(() =>
       'border border-border bg-background hover:bg-accent hover:text-accent-foreground':
         props.variant === 'outline',
       'bg-red-600 text-white hover:bg-red-700': props.variant === 'destructive',
-      'h-10 px-4 py-2': props.size === 'default',
-      'h-9 rounded-md px-3': props.size === 'sm',
-      'h-10 w-10': props.size === 'icon',
+      'min-h-11 px-4 py-2': props.size === 'default',
+      'min-h-11 rounded-md px-3': props.size === 'sm',
+      'h-11 w-11 min-h-11 min-w-11': props.size === 'icon',
     },
     props.class,
   ),

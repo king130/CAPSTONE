@@ -85,16 +85,18 @@ watch(
     </template>
 
     <template #default="{ close }">
-      <div class="space-y-3">
-        <div class="flex items-center justify-between px-2 py-1">
-          <div>
+      <div class="flex h-auto flex-col overflow-hidden p-2">
+        <div class="flex shrink-0 items-center justify-between gap-2 px-2 py-1">
+          <div class="min-w-0 flex-1">
             <p class="text-sm font-semibold text-foreground">Notifications</p>
-            <p class="text-xs text-muted-foreground">Recent updates from your workspace</p>
+            <p class="truncate text-xs text-muted-foreground">Recent updates from your workspace</p>
           </div>
-          <Button variant="ghost" size="sm" class="text-primary" @click="handleViewAll(close)">View All</Button>
+          <Button variant="ghost" size="sm" class="shrink-0 text-primary" @click="handleViewAll(close)">
+            View All
+          </Button>
         </div>
 
-        <div class="space-y-2">
+        <div class="notification-popover-scroll max-h-[380px] space-y-2 overflow-y-auto overscroll-contain pr-1">
           <template v-if="notificationStore.loading">
             <div v-for="index in 3" :key="index" class="rounded-lg border border-border/80 p-3">
               <div class="flex gap-3">
@@ -123,6 +125,12 @@ watch(
           >
             You're all caught up.
           </div>
+        </div>
+
+        <div v-if="recentItems.length" class="shrink-0 border-t border-border px-2 pt-2">
+          <Button variant="ghost" size="sm" class="w-full text-primary" @click="handleViewAll(close)">
+            View all notifications
+          </Button>
         </div>
       </div>
     </template>

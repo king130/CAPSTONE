@@ -95,6 +95,18 @@ export async function approveDtr(id: number): Promise<DtrSubmission> {
   return res.data
 }
 
+export async function deleteDtr(id: number): Promise<void> {
+  await apiFetch(`/ojt-dtrs/${id}`, { method: 'DELETE' })
+}
+
+export function isPendingDtr(status: string): boolean {
+  return status === 'draft'
+    || status === 'submitted'
+    || status === 'pending'
+    || status === 'pending_company'
+    || status === 'pending_coordinator'
+}
+
 export async function rejectDtr(id: number, reason: string, revisionRequired = false): Promise<DtrSubmission> {
   const res = await apiFetch<{ data: DtrSubmission }>(`/ojt-dtrs/${id}/reject`, {
     method: 'POST',
@@ -142,6 +154,19 @@ export function dtrStatusLabel(status: DtrDisplayStatus | DtrStatus | string): s
     default:
       return 'Submitted'
   }
+}
+
+export function dtrRowStatus(row: { status: string; displayStatus?: string }): string {
+  return row.displayStatus || row.status
+}
+
+export function dtrStatusDetail(row: { status: string; displayStatus?: string; reviewStage?: DtrReviewStage }): string {
+  const status = dtrRowStatus(row)
+  if (status !== 'submitted') return ''
+  if (row.reviewStage === 'school' || row.status === 'pending_coordinator' || row.status === 'pending') {
+    return 'Awaiting school review'
+  }
+  return 'Awaiting company review'
 }
 
 export function isAwaitingHost(row: { status: string; reviewStage?: DtrReviewStage }): boolean {

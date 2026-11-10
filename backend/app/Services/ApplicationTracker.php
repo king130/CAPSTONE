@@ -17,6 +17,7 @@ class ApplicationTracker
     public function __construct(
         private readonly PlacementScheduleService $placementSchedules,
         private readonly HoursAgreementService $hoursAgreements,
+        private readonly PlacementExclusivityService $placementExclusivity,
     ) {
     }
 
@@ -36,6 +37,14 @@ class ApplicationTracker
 
     public const STAGE_SCHOOL_REJECTED = 'school_rejected';
 
+    public const STAGE_WITHDRAWN_PLACED_ELSEWHERE = 'withdrawn_placed_elsewhere';
+
+    public const STAGE_PLACEMENT_CANCELLED = 'placement_cancelled';
+
+    public const STAGE_PLACEMENT_DECLINED = 'placement_declined';
+
+    public const STAGE_PLACEMENT_ENDED = 'placement_ended';
+
     /**
      * Forward transitions only (rollback handled separately).
      *
@@ -47,9 +56,17 @@ class ApplicationTracker
         self::STAGE_INTERVIEW_SCHEDULED => [self::STAGE_INTERVIEWED, self::STAGE_INTERVIEW_SCHEDULED],
         self::STAGE_INTERVIEWED => [self::STAGE_ASSESSED],
         self::STAGE_ASSESSED => [self::STAGE_ACCEPTED, self::STAGE_REJECTED],
-        self::STAGE_ACCEPTED => [],
+        self::STAGE_ACCEPTED => [
+            self::STAGE_PLACEMENT_CANCELLED,
+            self::STAGE_PLACEMENT_DECLINED,
+            self::STAGE_PLACEMENT_ENDED,
+        ],
         self::STAGE_REJECTED => [],
         self::STAGE_SCHOOL_REJECTED => [],
+        self::STAGE_WITHDRAWN_PLACED_ELSEWHERE => [],
+        self::STAGE_PLACEMENT_CANCELLED => [],
+        self::STAGE_PLACEMENT_DECLINED => [],
+        self::STAGE_PLACEMENT_ENDED => [],
     ];
 
     /**
@@ -186,6 +203,11 @@ class ApplicationTracker
         }
 
         return DB::transaction(function () use ($application, $actor, $from, $to, $reason, $rollback, $appRole) {
+            // Lock the student before accepting so concurrent hosts cannot both place them.
+            if ($to === self::STAGE_ACCEPTED && ! $rollback) {
+                \App\Models\Student::query()->whereKey($application->student_id)->lockForUpdate()->first();
+            }
+
             $org = $actor->activeOrganization();
             $application->forceFill([
                 'tracker_stage' => $to,
@@ -205,7 +227,16 @@ class ApplicationTracker
             ]);
 
             if ($to === self::STAGE_ACCEPTED && ! $rollback) {
+                $this->placementExclusivity->claimPlacementAndWithdrawOthers($application, $actor);
                 $this->placementSchedules->ensureOnAccepted($application);
+            }
+
+            if ($rollback && $from === self::STAGE_ACCEPTED) {
+                $application->forceFill([
+                    'active_placement_key' => null,
+                    'placement_closed_at' => null,
+                    'placement_close_reason' => null,
+                ])->save();
             }
 
             return $application->fresh(['interviews', 'assessments', 'stageEvents.changedBy', 'placementSchedule']);
@@ -223,6 +254,10 @@ class ApplicationTracker
             self::STAGE_ACCEPTED => 'accepted',
             self::STAGE_REJECTED => 'rejected',
             self::STAGE_SCHOOL_REJECTED => 'school_rejected',
+            self::STAGE_WITHDRAWN_PLACED_ELSEWHERE => PlacementExclusivityService::STATUS_WITHDRAWN_PLACED_ELSEWHERE,
+            self::STAGE_PLACEMENT_CANCELLED => self::STAGE_PLACEMENT_CANCELLED,
+            self::STAGE_PLACEMENT_DECLINED => self::STAGE_PLACEMENT_DECLINED,
+            self::STAGE_PLACEMENT_ENDED => self::STAGE_PLACEMENT_ENDED,
             default => 'submitted',
         };
     }
@@ -230,8 +265,51 @@ class ApplicationTracker
     /**
      * @return array<string, mixed>
      */
+    public function stageForDisplay(Application $application): string
+    {
+        $stored = $application->tracker_stage
+            ? $this->normalizeStage((string) $application->tracker_stage)
+            : $this->inferStage($application);
+
+        if ($stored !== self::STAGE_ENDORSED) {
+            return $stored;
+        }
+
+        $application->loadMissing('interviews');
+        $movedToInterview = $application->interviews->contains(
+            fn (ApplicationInterview $interview) => in_array($interview->status, [
+                'proposed',
+                'pending',
+                'confirmed',
+                'scheduled',
+                'accepted',
+                'completed',
+            ], true)
+        );
+
+        return $movedToInterview ? self::STAGE_INTERVIEW_SCHEDULED : $stored;
+    }
+
+    public function reconcileStoredStage(Application $application): void
+    {
+        if (! $application->tracker_stage) {
+            return;
+        }
+
+        $display = $this->stageForDisplay($application);
+        if ($display === $this->normalizeStage((string) $application->tracker_stage)) {
+            return;
+        }
+
+        $application->forceFill([
+            'tracker_stage' => $display,
+            'status' => $this->legacyStatusForStage($display),
+        ])->save();
+    }
+
     public function serializeState(Application $application, ?User $viewer = null): array
     {
+        $this->reconcileStoredStage($application);
         $stage = $this->currentStage($application);
         $application->loadMissing(['stageEvents.changedBy', 'assessments.assessedBy', 'interviews']);
 

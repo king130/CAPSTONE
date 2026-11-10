@@ -1,14 +1,16 @@
 import { apiBase, apiFetch, getToken } from './http'
 
 export interface KpiReport {
-  placementRate: number
+  placementRate: number | null
   applicationCountsByStatus: Record<string, number>
   totalApplications: number
   acceptedApplications: number
   agreementCountsByStatus: Record<string, number>
   totalAgreements: number
-  avgApprovedOjtHours: number
-  avgAssessmentScore: number
+  avgApprovedOjtHours: number | null
+  avgAssessmentScore: number | null
+  ojtStudentCount?: number
+  assessmentCount?: number
   studentCount: number
   scopedRole?: string | null
 }

@@ -65,10 +65,20 @@ class SchoolStudentController extends Controller
         $data = $request->validate([
             'email' => ['required', 'email', 'max:255'],
             'studentName' => ['nullable', 'string', 'max:255'],
-            'studentNumber' => ['nullable', 'string', 'max:255'],
+            'studentNumber' => ['required', 'string', 'max:255'],
             'course' => ['nullable', 'string', 'max:255'],
             'yearLevel' => StudentYearLevel::validationRule(),
         ]);
+
+        $numberCheck = \App\Support\StudentNumber::validate($data['studentNumber'] ?? null, true);
+        if (! $numberCheck['ok']) {
+            return response()->json([
+                'message' => $numberCheck['message'],
+                'errors' => ['studentNumber' => [$numberCheck['message']]],
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+        $data['studentNumber'] = $numberCheck['value'];
+        \App\Support\StudentNumber::assertUniqueInSchool((int) $school->id, $data['studentNumber']);
 
         $yearCheck = $this->courseYearLevels->validateYearForCourse(
             (int) $school->id,
@@ -95,8 +105,8 @@ class SchoolStudentController extends Controller
                 'password' => Str::random(32).'!Aa1',
                 'role' => 'student',
                 'profile' => [
-                    'studentNumber' => $data['studentNumber'] ?? null,
-                    'studentId' => $data['studentNumber'] ?? null,
+                    'studentNumber' => $data['studentNumber'],
+                    'studentId' => $data['studentNumber'],
                     'schoolName' => $school->institution_name,
                     'schoolId' => (string) $school->id,
                     'course' => $data['course'] ?? null,
@@ -111,7 +121,7 @@ class SchoolStudentController extends Controller
             $student = Student::query()->create([
                 'user_id' => $user->id,
                 'school_id' => $school->id,
-                'student_id_number' => $data['studentNumber'] ?? null,
+                'student_id_number' => $data['studentNumber'],
                 'school_name' => $school->institution_name,
                 'school_subscription_code' => $school->subscription_code,
                 'course' => $data['course'] ?? null,
@@ -183,14 +193,26 @@ class SchoolStudentController extends Controller
 
         $data = $request->validate([
             'studentName' => ['sometimes', 'nullable', 'string', 'max:255'],
-            'studentNumber' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'studentNumber' => ['sometimes', 'required', 'string', 'max:255'],
             'course' => ['sometimes', 'nullable', 'string', 'max:255'],
             'yearLevel' => array_merge(['sometimes'], \App\Support\StudentYearLevel::validationRule()),
             'status' => ['sometimes', 'nullable', 'string', 'max:255'],
         ]);
 
         if (array_key_exists('studentNumber', $data)) {
-            $student->student_id_number = $data['studentNumber'];
+            $numberCheck = \App\Support\StudentNumber::validate($data['studentNumber'] ?? null, true);
+            if (! $numberCheck['ok']) {
+                return response()->json([
+                    'message' => $numberCheck['message'],
+                    'errors' => ['studentNumber' => [$numberCheck['message']]],
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+            \App\Support\StudentNumber::assertUniqueInSchool(
+                (int) $school->id,
+                $numberCheck['value'],
+                (int) $student->id
+            );
+            $student->student_id_number = $numberCheck['value'];
         }
         if (array_key_exists('course', $data)) {
             $student->course = $data['course'];
@@ -382,6 +404,10 @@ class SchoolStudentController extends Controller
             $status = 'Pending Setup';
         }
 
+        if (! $student->relationLoaded('skills')) {
+            $student->load('skills');
+        }
+
         return [
             'id' => (string) $student->id,
             'schoolId' => $student->school_id ? (string) $student->school_id : '',
@@ -391,6 +417,13 @@ class SchoolStudentController extends Controller
             'studentNumber' => $student->student_id_number,
             'course' => $student->course,
             'yearLevel' => $student->year_level,
+            'skills' => $student->skills->map(fn ($skill) => [
+                'id' => (string) $skill->id,
+                'name' => $skill->name,
+                'category' => $skill->category,
+                'status' => $skill->status,
+                'level' => $skill->pivot->level ?? 'beginner',
+            ])->values()->all(),
             'status' => $status,
             'createdAt' => $student->created_at?->toIso8601String(),
         ];
@@ -425,6 +458,7 @@ class SchoolStudentController extends Controller
     {
         return [
             'user:id,name,email,is_active,must_change_password',
+            'skills',
         ];
     }
 
@@ -449,7 +483,7 @@ class SchoolStudentController extends Controller
     }
 
     /**
-     * @return array{sent: bool, expiresAt: string|null, errorMessage?: string}
+     * @return array{sent: bool, expiresAt: string|null, setupUrl?: string, errorMessage?: string}
      */
     private function sendSetupLink(User $user, School $school, User $invitedBy): array
     {
@@ -468,6 +502,7 @@ class SchoolStudentController extends Controller
             'expires_at' => $expiresAt,
         ]);
 
+        // Direct HTTPS app URL only — never wrap in a tracking/shortener redirect.
         $frontendBase = rtrim((string) env('FRONTEND_URL', env('APP_URL', 'http://localhost:5173')), '/');
         $setupUrl = "{$frontendBase}/account-setup?token={$plainToken}";
         $schoolSenderEmail = $this->resolveSchoolSenderEmail($school, $invitedBy);
@@ -488,6 +523,7 @@ class SchoolStudentController extends Controller
             return [
                 'sent' => true,
                 'expiresAt' => $expiresAt->toIso8601String(),
+                'setupUrl' => $setupUrl,
             ];
         } catch (\Throwable $exception) {
             report($exception);
@@ -495,6 +531,7 @@ class SchoolStudentController extends Controller
             return [
                 'sent' => false,
                 'expiresAt' => $expiresAt->toIso8601String(),
+                'setupUrl' => $setupUrl,
                 'errorMessage' => 'The account was created, but the setup email could not be sent.',
             ];
         }

@@ -10,6 +10,8 @@ use Symfony\Component\HttpFoundation\Response;
 /**
  * Blocks organization write actions when subscription access is expired.
  * Reads stay allowed. Platform admins and students (for their own flows) are not blocked.
+ *
+ * Uses SubscriptionAccessService::resolve() as the single source of truth for canWrite.
  */
 class EnsureSubscriptionWritable
 {
@@ -18,14 +20,20 @@ class EnsureSubscriptionWritable
     }
 
     /**
-     * Paths that remain writable even when expired (billing + student DTR submit).
+     * Paths that remain writable for every subscription state (including expired).
+     * Must stay aligned with product rules: verification docs, settings/profile,
+     * notifications, billing/upgrade, logout.
      *
      * @var list<string>
      */
-    private array $allowWhenExpired = [
-        'subscriptions/checkout',
-        'subscriptions/verify',
-        'subscriptions/cancel-pending',
+    private array $alwaysWritable = [
+        'subscriptions',
+        'organization-verification',
+        'organization-profile',
+        'profile',
+        'notifications',
+        'auth/logout',
+        'auth/password',
         'ojt-dtrs', // student submit — method POST without /approve|/reject
     ];
 
@@ -56,7 +64,7 @@ class EnsureSubscriptionWritable
             $path = substr($path, 4);
         }
 
-        if ($this->isAllowedWhenExpired($request, $path)) {
+        if ($this->isAlwaysWritable($path)) {
             return $next($request);
         }
 
@@ -88,9 +96,9 @@ class EnsureSubscriptionWritable
         ], 402);
     }
 
-    private function isAllowedWhenExpired(Request $request, string $path): bool
+    private function isAlwaysWritable(string $path): bool
     {
-        foreach ($this->allowWhenExpired as $allowed) {
+        foreach ($this->alwaysWritable as $allowed) {
             if ($path === $allowed || str_starts_with($path, $allowed.'/')) {
                 // Block host DTR review endpoints even under ojt-dtrs prefix.
                 if (preg_match('#^ojt-dtrs/\d+/(approve|reject)$#', $path)) {

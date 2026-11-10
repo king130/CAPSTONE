@@ -91,6 +91,11 @@ async function loadAllContracts(): Promise<ContractRecord[]> {
   return res.data ?? []
 }
 
+/** One-shot agreement list for setup checklists (does not start polling). */
+export async function listAgreements(): Promise<ContractRecord[]> {
+  return loadAllContracts()
+}
+
 const contractsResource = createSharedPollingResource<ContractRecord[]>({
   intervalMs: 15000,
   load: loadAllContracts,
@@ -206,12 +211,41 @@ export interface AmendContractPayload {
   endDate?: string
   terms?: string
   subject?: string
+  files?: File[]
 }
 
 export async function amendContract(contractId: string, payload: AmendContractPayload): Promise<ContractRecord> {
+  const hasFiles = Array.isArray(payload.files) && payload.files.length > 0
+
+  if (hasFiles) {
+    const form = new FormData()
+    if (payload.notes !== undefined) form.append('notes', payload.notes)
+    if (payload.purpose !== undefined) form.append('purpose', payload.purpose)
+    if (payload.startDate !== undefined) form.append('startDate', payload.startDate)
+    if (payload.endDate !== undefined) form.append('endDate', payload.endDate)
+    if (payload.terms !== undefined) form.append('terms', payload.terms)
+    if (payload.subject !== undefined) form.append('subject', payload.subject)
+    for (const file of payload.files ?? []) {
+      form.append('files[]', file)
+    }
+    const res = await apiFetch<{ data: ContractRecord }>(`/agreements/${contractId}/amend`, {
+      method: 'POST',
+      body: form,
+    })
+    await contractsResource.refresh()
+    return res.data
+  }
+
   const res = await apiFetch<{ data: ContractRecord }>(`/agreements/${contractId}/amend`, {
     method: 'PATCH',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      notes: payload.notes,
+      purpose: payload.purpose,
+      startDate: payload.startDate,
+      endDate: payload.endDate,
+      terms: payload.terms,
+      subject: payload.subject,
+    }),
   })
   await contractsResource.refresh()
   return res.data

@@ -8,13 +8,16 @@ use App\Models\OjtDtrSubmission;
 use App\Models\OjtLog;
 use App\Models\Student;
 use App\Services\PermissionGate;
+use App\Services\RequiredOjtHoursAccessor;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 
 class StudentProgressController extends Controller
 {
-    public function __construct(private readonly PermissionGate $permissions)
-    {
+    public function __construct(
+        private readonly PermissionGate $permissions,
+        private readonly RequiredOjtHoursAccessor $requiredOjtHours,
+    ) {
     }
 
     public function index(Request $request)
@@ -44,16 +47,29 @@ class StudentProgressController extends Controller
             return response()->json(['data' => []]);
         }
 
-        $requiredHours = OjtLogController::requiredHoursForOrg($user->activeOrganization());
+        $orgFallback = OjtLogController::requiredHoursForOrg($user->activeOrganization());
 
-        $items = $studentsQuery->orderBy('id')->get()->map(function (Student $student) use ($requiredHours, $company, $appRole) {
-            $applicationsQuery = Application::query()->where('student_id', $student->id);
+        $items = $studentsQuery->orderBy('id')->get()->map(function (Student $student) use ($orgFallback, $company, $appRole) {
+            $applicationsQuery = Application::query()
+                ->with('hoursAgreement')
+                ->where('student_id', $student->id);
             if ($appRole === 'company' && $company) {
                 $applicationsQuery->where('company_id', $company->id);
             }
 
             $latestApplication = (clone $applicationsQuery)->orderByDesc('updated_at')->first();
-            $acceptedApplication = (clone $applicationsQuery)->where('status', 'accepted')->orderByDesc('updated_at')->first();
+            $placementApplication = (clone $applicationsQuery)
+                ->whereIn('status', ['accepted', 'placement_ended'])
+                ->orderByDesc('updated_at')
+                ->first();
+
+            $requiredHours = $orgFallback;
+            if ($placementApplication) {
+                $fromAgreement = $this->requiredOjtHours->forApplication($placementApplication);
+                if ($fromAgreement !== null && $fromAgreement >= 1) {
+                    $requiredHours = $fromAgreement;
+                }
+            }
 
             $approvedHours = (float) OjtLog::query()
                 ->where('student_id', $student->id)
@@ -83,7 +99,7 @@ class StudentProgressController extends Controller
                 'course' => $student->course,
                 'schoolName' => $student->school_name ?? $student->school?->institution_name,
                 'applicationStatus' => $latestApplication?->status,
-                'internshipTitle' => $acceptedApplication?->internship_title ?? $latestApplication?->internship_title,
+                'internshipTitle' => $placementApplication?->internship_title ?? $latestApplication?->internship_title,
                 'approvedOjtHours' => round($approvedHours, 2),
                 'pendingOjtHours' => round($pendingHours, 2),
                 'requiredOjtHours' => $requiredHours,

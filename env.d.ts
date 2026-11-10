@@ -3,6 +3,8 @@
 interface ImportMetaEnv {
   /** Base URL for Laravel API, e.g. http://localhost:8000/api — optional if Vite proxy is used */
   readonly VITE_API_BASE_URL?: string
+  /** Lowercase Median URL scheme. Defaults to ojtintern when unset. */
+  readonly VITE_MEDIAN_APP_SCHEME?: string
 }
 
 interface ImportMeta {

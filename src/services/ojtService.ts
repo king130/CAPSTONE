@@ -8,6 +8,7 @@ export interface OJTLog {
   timeIn: string
   timeOut: string
   hoursRendered: number
+  isMakeup?: boolean
   tasksDone: string
   mood?: 'productive' | 'okay' | 'difficult' | 'great'
   status: 'pending' | 'approved' | 'rejected'
@@ -71,6 +72,7 @@ export interface OJTCreateLogPayload {
   timeOut: string
   tasksDone: string
   mood?: 'productive' | 'okay' | 'difficult' | 'great'
+  isMakeup?: boolean
   application_id?: number
   internship_id?: number
 }
@@ -160,6 +162,7 @@ export async function createOJTLog(payload: OJTCreateLogPayload): Promise<void> 
       timeOut: payload.timeOut,
       tasksDone: payload.tasksDone,
       mood: payload.mood,
+      isMakeup: payload.isMakeup ?? false,
       application_id: payload.application_id,
       internship_id: payload.internship_id,
     }),
@@ -186,6 +189,7 @@ export async function updateOJTLog(logId: number, payload: OJTCreateLogPayload):
       timeOut: payload.timeOut,
       tasksDone: payload.tasksDone,
       mood: payload.mood,
+      isMakeup: payload.isMakeup ?? false,
     }),
   })
 }

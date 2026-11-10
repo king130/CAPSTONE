@@ -17,7 +17,7 @@ import {
 } from 'lucide-vue-next'
 
 import AlertDialog from '@/components/ui/alert-dialog/AlertDialog.vue'
-import OrganizationDirectory from '@/components/opportunities/OrganizationDirectory.vue'
+import HostBrowseTabs from '@/components/opportunities/HostBrowseTabs.vue'
 import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
 import Card from '@/components/ui/card/Card.vue'
@@ -35,8 +35,10 @@ import TableHead from '@/components/ui/table/TableHead.vue'
 import TableHeader from '@/components/ui/table/TableHeader.vue'
 import TableRow from '@/components/ui/table/TableRow.vue'
 import ApplicationTrackerPanel from '@/components/ApplicationTrackerPanel.vue'
-import ApplicationStatusStepper from '@/components/applications/ApplicationStatusStepper.vue'
+import FilePreviewActions from '@/components/FilePreviewActions.vue'
+import SkillChips from '@/components/skills/SkillChips.vue'
 import { useToast } from '@/composables/useToast'
+import type { SelectedSkill } from '@/services/skills'
 import MainLayout from '@/layouts/MainLayout.vue'
 import { assignedPermissionAllows, routePermissionRequirements } from '@/layouts/navigation'
 import {
@@ -47,14 +49,21 @@ import {
 } from '@/services/applications'
 import { subscribeSchoolContracts, type ContractRecord } from '@/services/contracts'
 import { subscribeInternships, type InternshipRecord } from '@/services/internships'
-import { generateCertificate } from '@/services/certificates'
+import {
+  bulkGenerateCertificates,
+  generateCertificate,
+  listCertificateEligible,
+  printCertificateHtml,
+  viewCertificateHtml,
+  type CertificateEligibility,
+} from '@/services/certificates'
 import { exportReport, fetchKpiReport, fetchStudentProgress, type KpiReport, type StudentProgressRow } from '@/services/kpi'
-import { deriveApplicationStepper } from '@/utils/applicationStepper'
 import { hasPermission } from '@/services/permissions'
 import { subscribeSchoolStudents, type SchoolStudentRow } from '@/services/schoolStudents'
 import { listCourseRequirements, type CourseRequirementMeta } from '@/services/schoolPrograms'
 import { verificationStatusLabel } from '@/services/organizationVerification'
 import { useAuthStore } from '@/stores/auth'
+import { statusLabel } from '@/utils/statusLabels'
 
 type SchoolView = 'dashboard' | 'student-interns' | 'opportunities' | 'applications' | 'placements' | 'reports'
 type SchoolDecisionAction = 'endorsed' | 'school_rejected' | 'accepted' | 'rejected'
@@ -75,6 +84,17 @@ type EndorsementDetail = {
   hoursMismatch?: boolean
   schoolRequiredHours?: number | null
   hostRequiredHours?: number | null
+  skills?: SelectedSkill[]
+}
+
+function mapApplicationSkills(application: ApplicationRecord): SelectedSkill[] {
+  return (application.studentSkills || []).map((skill) => ({
+    id: skill.id,
+    name: skill.name,
+    category: skill.category || 'Other',
+    status: (skill.status as SelectedSkill['status']) || 'approved',
+    level: (skill.level as SelectedSkill['level']) || 'beginner',
+  }))
 }
 
 const currentView = ref<SchoolView>('dashboard')
@@ -100,6 +120,13 @@ const studentProgress = ref<StudentProgressRow[]>([])
 const loadingProgress = ref(false)
 const kpi = ref<KpiReport | null>(null)
 const exportingReport = ref(false)
+const certificateCandidates = ref<CertificateEligibility[]>([])
+const loadingCertificates = ref(false)
+const selectedCertificateIds = ref<string[]>([])
+const bulkPreviewOpen = ref(false)
+const bulkConfirmOpen = ref(false)
+const bulkIssuing = ref(false)
+const bulkResultSummary = ref('')
 
 let unsubscribeStudents: (() => void) | null = null
 let unsubscribeInternships: (() => void) | null = null
@@ -177,13 +204,24 @@ const searchableInternRows = computed(() => {
         name: student.studentName || 'Unnamed Intern',
         course: student.course || 'Not set',
         company: relatedApplication?.companyName || 'No application yet',
-        status: normalizeStatus(relatedApplication?.status || student.status),
+        status: relatedApplication
+          ? normalizeStatus(relatedApplication.status)
+          : 'no_application',
         email: student.email,
+        skills: (student.skills || []).map((skill) => ({
+          id: skill.id,
+          name: skill.name,
+          category: skill.category || 'Other',
+          status: (skill.status as SelectedSkill['status']) || 'approved',
+          level: (skill.level as SelectedSkill['level']) || 'beginner',
+        })),
       }
     })
     .filter((row) =>
       !query ||
-      [row.name, row.course, row.company, row.email].some((value) => value.toLowerCase().includes(query)),
+      [row.name, row.course, row.company, row.email, ...row.skills.map((skill) => skill.name)].some((value) =>
+        value.toLowerCase().includes(query),
+      ),
     )
 })
 
@@ -272,10 +310,43 @@ const pendingEndorsements = computed(() => {
       hoursMismatch: !!application.hoursMismatch,
       schoolRequiredHours: application.schoolRequiredHours ?? null,
       hostRequiredHours: application.hostRequiredHours ?? null,
+      skills: mapApplicationSkills(application),
     }))
     .filter((row) =>
       !query ||
       [row.internName, row.email, row.course, row.company, row.school, row.internshipTitle].some((value) =>
+        value.toLowerCase().includes(query),
+      ),
+    )
+})
+
+const withdrawnPlacedElsewhere = computed(() => {
+  const query = searchQuery.value.trim().toLowerCase()
+
+  return applications.value
+    .filter((application) => normalizeStatus(application.status) === 'withdrawn_placed_elsewhere')
+    .map((application) => ({
+      id: application.id,
+      internName: application.studentName || 'Unnamed Intern',
+      email: application.studentEmail || 'No email provided',
+      course: application.studentCourse || 'Not set',
+      company: applicationHostLabel(application),
+      internshipTitle: application.internshipTitle || 'Untitled position',
+      appliedAt: formatDate(application.createdAt),
+      resume: application.resume,
+      school: application.schoolName || 'Current school',
+      status: 'withdrawn_placed_elsewhere' as const,
+      withdrawalReason: application.withdrawalReason || 'Placed elsewhere',
+      hostType: String(application.hostType || (isSchoolHostedApplication(application) ? 'school' : 'company')),
+      isSchoolHosted: isSchoolHostedApplication(application),
+      hoursMismatch: !!application.hoursMismatch,
+      schoolRequiredHours: application.schoolRequiredHours ?? null,
+      hostRequiredHours: application.hostRequiredHours ?? null,
+      skills: mapApplicationSkills(application),
+    }))
+    .filter((row) =>
+      !query ||
+      [row.internName, row.email, row.course, row.company, row.school, row.internshipTitle, row.withdrawalReason].some((value) =>
         value.toLowerCase().includes(query),
       ),
     )
@@ -302,6 +373,7 @@ const pendingSchoolHostedAcceptances = computed(() => {
       status: normalizeStatus(application.status),
       hostType: 'school',
       isSchoolHosted: true,
+      skills: mapApplicationSkills(application),
     }))
     .filter((row) =>
       !query ||
@@ -395,20 +467,37 @@ const compactQuickActions = computed(() => [
   },
 ].filter((item) => !item.route || canOpenRoute(item.route)))
 
+const placementCertificateByApplication = computed(() => {
+  const map = new Map<string, CertificateEligibility>()
+  for (const row of certificateCandidates.value) {
+    map.set(String(row.applicationId), row)
+  }
+  return map
+})
+
 const placementRows = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
 
   return applications.value
-    .filter((application) => normalizeStatus(application.status) === 'accepted')
-    .map((application) => ({
-      id: application.id,
-      internName: application.studentName || 'Unnamed Intern',
-      program: application.studentCourse || 'Program not set',
-      host: application.companyName || application.schoolName || 'Placement not assigned',
-      placementType: application.companyName ? 'Company-hosted' : 'School-hosted',
-      updatedAt: formatDate(application.updatedAt || application.createdAt),
-      status: normalizeStatus(application.status),
-    }))
+    .filter((application) => {
+      const status = normalizeStatus(application.status)
+      return status === 'accepted' || status === 'placement_ended'
+    })
+    .map((application) => {
+      const cert = placementCertificateByApplication.value.get(String(application.id))
+      return {
+        id: application.id,
+        internName: application.studentName || 'Unnamed Intern',
+        program: application.studentCourse || 'Program not set',
+        host: application.companyName || application.schoolName || 'Placement not assigned',
+        placementType: application.companyName ? 'Company-hosted' : 'School-hosted',
+        updatedAt: formatDate(application.updatedAt || application.createdAt),
+        status: normalizeStatus(application.status),
+        certificateId: cert?.certificateId || null,
+        alreadyIssued: Boolean(cert?.alreadyIssued),
+        certificateEligible: Boolean(cert?.eligible),
+      }
+    })
     .filter((row) =>
       !query ||
       [row.internName, row.program, row.host, row.placementType].some((value) =>
@@ -436,6 +525,8 @@ function normalizeStatus(status?: string | null) {
   if (['submitted', 'pending'].includes(normalized)) return 'submitted'
   if (normalized === 'endorsed') return 'endorsed'
   if (['accepted', 'approved', 'active', 'registered'].includes(normalized)) return 'accepted'
+  if (normalized === 'withdrawn_placed_elsewhere') return 'withdrawn_placed_elsewhere'
+  if (['placement_cancelled', 'placement_declined', 'placement_ended'].includes(normalized)) return normalized
   if (['school_rejected', 'rejected', 'declined', 'disabled'].includes(normalized)) return 'rejected'
   return 'submitted'
 }
@@ -457,17 +548,31 @@ function schoolViewFromRouteName(name: unknown): SchoolView {
 }
 
 function badgeLabel(status: string) {
+  if (status === 'no_application' || status === 'none' || status === '') return 'No application'
   if (status === 'accepted') return 'Accepted'
   if (status === 'endorsed') return 'Endorsed'
+  if (status === 'withdrawn_placed_elsewhere') return 'Withdrawn — placed elsewhere'
+  if (status === 'placement_cancelled') return 'Placement cancelled'
+  if (status === 'placement_declined') return 'Placement declined'
+  if (status === 'placement_ended') return 'Placement ended'
   if (status === 'rejected') return 'Rejected'
-  return 'Submitted'
+  if (status === 'submitted') return 'Submitted'
+  return status.replaceAll('_', ' ')
 }
 
 function badgeVariant(status: string) {
+  if (status === 'no_application' || status === 'none' || status === '') return 'outline'
   if (status === 'accepted') return 'success'
   if (status === 'endorsed') return 'outline'
-  if (status === 'rejected') return 'destructive'
+  if (status === 'rejected' || status === 'withdrawn_placed_elsewhere' || status.startsWith('placement_')) {
+    return 'destructive'
+  }
   return 'warning'
+}
+
+function formatKpiValue(value: number | null | undefined, hasData: boolean, suffix = ''): string {
+  if (!hasData || value == null) return '—'
+  return `${value}${suffix}`
 }
 
 function opportunityBadgeLabel(status: string) {
@@ -504,12 +609,6 @@ async function loadApplications() {
 function openDecisionDialog(applicationId: string, action: SchoolDecisionAction, internName: string) {
   pendingDecision.value = { applicationId, action, internName }
 }
-
-const selectedStepper = computed(() =>
-  selectedEndorsement.value
-    ? deriveApplicationStepper({ status: selectedEndorsement.value.status, audience: 'school' })
-    : null,
-)
 
 function openEndorsementDetail(endorsement: EndorsementDetail, mode: 'profile' | 'tracker' = 'profile') {
   endorsementDialogMode.value = mode
@@ -638,8 +737,112 @@ async function issueCertificate(applicationId: string) {
   try {
     await generateCertificate(applicationId)
     success('Certificate of completion issued.')
+    await loadCertificateCandidates()
   } catch (caughtError) {
-    error(caughtError, { fallback: 'Unable to generate certificate. Ensure placement is accepted and OJT hours meet the requirement.' })
+    error(caughtError, {
+      fallback: 'Unable to generate certificate. Ensure the placement is accepted or ended and OJT hours meet the requirement.',
+    })
+  }
+}
+
+async function viewPlacementCertificate(certificateId: string) {
+  try {
+    await viewCertificateHtml(certificateId)
+  } catch (caughtError) {
+    error(caughtError, { fallback: 'Unable to open the certificate.' })
+  }
+}
+
+async function printPlacementCertificate(certificateId: string) {
+  try {
+    await printCertificateHtml(certificateId)
+  } catch (caughtError) {
+    error(caughtError, { fallback: 'Unable to print the certificate.' })
+  }
+}
+
+const eligibleCertificateRows = computed(() =>
+  certificateCandidates.value.filter((row) => row.eligible),
+)
+
+const selectedEligibleCertificates = computed(() =>
+  eligibleCertificateRows.value.filter((row) => selectedCertificateIds.value.includes(row.applicationId)),
+)
+
+function toggleCertificateSelection(applicationId: string, checked: boolean) {
+  if (checked) {
+    if (!selectedCertificateIds.value.includes(applicationId)) {
+      selectedCertificateIds.value = [...selectedCertificateIds.value, applicationId]
+    }
+    return
+  }
+  selectedCertificateIds.value = selectedCertificateIds.value.filter((id) => id !== applicationId)
+}
+
+function toggleSelectAllCertificates(checked: boolean) {
+  selectedCertificateIds.value = checked
+    ? eligibleCertificateRows.value.map((row) => row.applicationId)
+    : []
+}
+
+async function loadCertificateCandidates() {
+  if (!hasPermission('org.approve_certificates')) {
+    certificateCandidates.value = []
+    return
+  }
+  loadingCertificates.value = true
+  try {
+    certificateCandidates.value = await listCertificateEligible()
+    selectedCertificateIds.value = selectedCertificateIds.value.filter((id) =>
+      certificateCandidates.value.some((row) => row.applicationId === id && row.eligible),
+    )
+  } catch (caughtError) {
+    certificateCandidates.value = []
+    error(caughtError, { fallback: 'Unable to load certificate eligibility.' })
+  } finally {
+    loadingCertificates.value = false
+  }
+}
+
+function openBulkPreview() {
+  if (!selectedEligibleCertificates.value.length) {
+    error('Select at least one eligible student.')
+    return
+  }
+  bulkPreviewOpen.value = true
+}
+
+async function confirmBulkIssue() {
+  if (!selectedEligibleCertificates.value.length) return
+  bulkIssuing.value = true
+  try {
+    const result = await bulkGenerateCertificates(
+      selectedEligibleCertificates.value.map((row) => row.applicationId),
+    )
+    const issuedCount = result.issued.length
+    const skippedCount = result.skipped.length
+    const failedCount = result.failed.length
+    bulkResultSummary.value = [
+      issuedCount ? `Issued ${issuedCount}` : '',
+      skippedCount ? `Skipped ${skippedCount}` : '',
+      failedCount ? `Failed ${failedCount}` : '',
+    ].filter(Boolean).join(' · ')
+    if (issuedCount) success(`Issued ${issuedCount} certificate${issuedCount === 1 ? '' : 's'}.`)
+    if (skippedCount || failedCount) {
+      const reasons = [...result.skipped, ...result.failed]
+        .map((row) => `${row.applicationId}: ${row.reason}`)
+        .slice(0, 5)
+        .join(' ')
+      error(reasons || 'Some certificates were skipped.')
+    }
+    bulkConfirmOpen.value = false
+    bulkPreviewOpen.value = false
+    selectedCertificateIds.value = []
+    await loadCertificateCandidates()
+  } catch (caughtError) {
+    error(caughtError, { fallback: 'Unable to issue certificates in bulk.' })
+  } finally {
+    bulkIssuing.value = false
   }
 }
 
@@ -665,6 +868,9 @@ onMounted(() => {
   if (currentView.value === 'reports' || currentView.value === 'placements') {
     void loadStudentProgress()
   }
+  if (currentView.value === 'placements') {
+    void loadCertificateCandidates()
+  }
   void loadCourseSetupWarnings()
 })
 
@@ -686,6 +892,9 @@ watch(currentView, (view) => {
   if (view === 'reports' || view === 'placements') {
     void loadStudentProgress()
   }
+  if (view === 'placements') {
+    void loadCertificateCandidates()
+  }
   // Force a fresh /applications pull when opening Endorsements (polling alone can stay empty after a failed fetch).
   if (view === 'applications') {
     void loadApplications()
@@ -705,7 +914,7 @@ watch(
     <div class="space-y-6">
       <template v-if="currentView === 'dashboard'">
         <section class="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-          <div class="border-b border-border bg-gradient-to-r from-accent via-card to-emerald-50/60 px-6 py-6 sm:px-8">
+          <div class="border-b border-border bg-card px-6 py-6 sm:px-8 dark:bg-card">
             <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div class="flex items-start gap-4">
                 <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-accent text-primary">
@@ -778,7 +987,8 @@ watch(
               {{ courseSetupMeta.flaggedStudentCount }} student{{
                 courseSetupMeta.flaggedStudentCount === 1 ? '' : 's'
               }}
-              have a year level that does not match their course (records were not changed).
+              {{ courseSetupMeta.flaggedStudentCount === 1 ? 'has' : 'have' }}
+              a year level that does not match their course (records were not changed).
             </li>
           </ul>
           <Button class="mt-3" size="sm" variant="outline" @click="router.push({ name: 'settings' })">
@@ -789,7 +999,9 @@ watch(
         <section v-if="kpi" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
             <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Placement rate</p>
-            <p class="mt-2 text-2xl font-semibold text-foreground">{{ kpi.placementRate }}%</p>
+            <p class="mt-2 text-2xl font-semibold text-foreground">
+              {{ formatKpiValue(kpi.placementRate, (kpi.studentCount ?? 0) > 0 || (kpi.totalApplications ?? 0) > 0, '%') }}
+            </p>
           </div>
           <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
             <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Agreements</p>
@@ -797,11 +1009,15 @@ watch(
           </div>
           <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
             <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Avg approved OJT hrs</p>
-            <p class="mt-2 text-2xl font-semibold text-foreground">{{ kpi.avgApprovedOjtHours }}</p>
+            <p class="mt-2 text-2xl font-semibold text-foreground">
+              {{ formatKpiValue(kpi.avgApprovedOjtHours, kpi.avgApprovedOjtHours != null && (kpi.ojtStudentCount ?? 0) > 0) }}
+            </p>
           </div>
           <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
             <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Avg assessment score</p>
-            <p class="mt-2 text-2xl font-semibold text-foreground">{{ kpi.avgAssessmentScore }}</p>
+            <p class="mt-2 text-2xl font-semibold text-foreground">
+              {{ formatKpiValue(kpi.avgAssessmentScore, kpi.avgAssessmentScore != null && (kpi.assessmentCount ?? 0) > 0) }}
+            </p>
           </div>
         </section>
 
@@ -866,14 +1082,8 @@ watch(
       </template>
 
       <Card v-else-if="currentView === 'opportunities'" class="border-border/80 shadow-sm">
-        <CardHeader class="space-y-2">
-          <h2 class="text-2xl font-semibold text-foreground">Companies</h2>
-          <p class="text-sm text-muted-foreground">
-            Discover companies that publish OJT opportunities. Profiles show only the information those companies have made public.
-          </p>
-        </CardHeader>
-        <CardContent>
-          <OrganizationDirectory kind="company" />
+        <CardContent class="pt-6">
+          <HostBrowseTabs />
         </CardContent>
       </Card>
 
@@ -889,8 +1099,8 @@ watch(
           </div>
         </CardHeader>
         <CardContent>
-          <div class="rounded-xl border border-border bg-card">
-            <Table>
+          <div class="overflow-x-auto rounded-xl border border-border bg-card">
+            <Table class="min-w-[40rem]">
               <TableHeader>
                 <TableRow>
                   <TableHead>Intern Name</TableHead>
@@ -911,9 +1121,16 @@ watch(
                 <template v-else-if="searchableInternRows.length">
                   <TableRow v-for="intern in searchableInternRows" :key="intern.id">
                     <TableCell>
-                      <div class="space-y-1">
-                        <p class="font-medium text-foreground">{{ intern.name }}</p>
-                        <p class="text-sm text-muted-foreground">{{ intern.email }}</p>
+                      <div class="space-y-2">
+                        <div class="space-y-1">
+                          <p class="font-medium text-foreground">{{ intern.name }}</p>
+                          <p class="text-sm text-muted-foreground">{{ intern.email }}</p>
+                        </div>
+                        <SkillChips
+                          :skills="intern.skills"
+                          mode="intern"
+                          empty-text="No skills listed"
+                        />
                       </div>
                     </TableCell>
                     <TableCell class="text-foreground">{{ intern.course }}</TableCell>
@@ -945,15 +1162,15 @@ watch(
             <Input v-model="searchQuery" placeholder="Search placements..." class="pl-9" />
           </div>
         </CardHeader>
-        <CardContent>
-          <div class="rounded-xl border border-border bg-card">
-            <Table>
+        <CardContent class="space-y-6">
+          <div class="overflow-x-auto rounded-xl border border-border bg-card">
+            <Table class="min-w-[56rem]">
               <TableHeader>
                 <TableRow>
                   <TableHead>Intern</TableHead>
                   <TableHead>Program</TableHead>
                   <TableHead>Host</TableHead>
-                  <TableHead>Placement Type</TableHead>
+                  <TableHead>Type</TableHead>
                   <TableHead>Updated</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead class="text-right">Certificate</TableHead>
@@ -982,19 +1199,129 @@ watch(
                       <Badge :variant="badgeVariant(placement.status)">{{ badgeLabel(placement.status) }}</Badge>
                     </TableCell>
                     <TableCell class="text-right">
-                      <Button size="sm" variant="outline" @click="issueCertificate(placement.id)">
-                        Issue
-                      </Button>
+                      <div class="flex flex-wrap justify-end gap-2">
+                        <template v-if="placement.alreadyIssued && placement.certificateId">
+                          <Button size="sm" variant="outline" @click="viewPlacementCertificate(placement.certificateId)">
+                            View Certificate
+                          </Button>
+                          <Button size="sm" @click="printPlacementCertificate(placement.certificateId)">
+                            Print Certificate
+                          </Button>
+                        </template>
+                        <Button
+                          v-else-if="hasPermission('org.approve_certificates')"
+                          size="sm"
+                          variant="outline"
+                          :disabled="placement.status === 'placement_ended' && !placement.certificateEligible && !placement.alreadyIssued"
+                          @click="issueCertificate(placement.id)"
+                        >
+                          Issue
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 </template>
                 <TableRow v-else>
                   <TableCell colspan="7" class="py-10 text-center text-muted-foreground">
-                    No accepted placements matched your search.
+                    {{
+                      searchQuery.trim()
+                        ? 'No accepted or ended placements matched your search.'
+                        : 'No placements yet.'
+                    }}
                   </TableCell>
                 </TableRow>
               </TableBody>
             </Table>
+          </div>
+
+          <div
+            v-if="hasPermission('org.approve_certificates')"
+            class="rounded-xl border border-border bg-card p-4 sm:p-5"
+          >
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 class="text-lg font-semibold text-foreground">Bulk certificates</h3>
+                <p class="mt-1 text-sm text-muted-foreground">
+                  Students who completed required OJT hours. Select some or all, preview, then issue in one action.
+                </p>
+                <p v-if="bulkResultSummary" class="mt-2 text-sm text-foreground">{{ bulkResultSummary }}</p>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" :disabled="loadingCertificates" @click="loadCertificateCandidates">
+                  Refresh
+                </Button>
+                <Button
+                  size="sm"
+                  :disabled="!selectedEligibleCertificates.length || bulkIssuing"
+                  @click="openBulkPreview"
+                >
+                  Preview &amp; issue ({{ selectedEligibleCertificates.length }})
+                </Button>
+              </div>
+            </div>
+
+            <div class="mt-4 overflow-x-auto rounded-xl border border-border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead class="w-12">
+                      <input
+                        type="checkbox"
+                        class="h-4 w-4 rounded border-border"
+                        :checked="eligibleCertificateRows.length > 0 && selectedEligibleCertificates.length === eligibleCertificateRows.length"
+                        :disabled="!eligibleCertificateRows.length"
+                        @change="toggleSelectAllCertificates(($event.target as HTMLInputElement).checked)"
+                      />
+                    </TableHead>
+                    <TableHead>Student</TableHead>
+                    <TableHead>Internship</TableHead>
+                    <TableHead>Hours</TableHead>
+                    <TableHead>Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <template v-if="loadingCertificates">
+                    <TableRow v-for="index in 3" :key="index">
+                      <TableCell><Skeleton class="h-4 w-4" /></TableCell>
+                      <TableCell><Skeleton class="h-5 w-36" /></TableCell>
+                      <TableCell><Skeleton class="h-5 w-40" /></TableCell>
+                      <TableCell><Skeleton class="h-5 w-24" /></TableCell>
+                      <TableCell><Skeleton class="h-5 w-28" /></TableCell>
+                    </TableRow>
+                  </template>
+                  <template v-else-if="certificateCandidates.length">
+                    <TableRow v-for="row in certificateCandidates" :key="row.applicationId">
+                      <TableCell>
+                        <input
+                          type="checkbox"
+                          class="h-4 w-4 rounded border-border"
+                          :disabled="!row.eligible"
+                          :checked="selectedCertificateIds.includes(row.applicationId)"
+                          @change="toggleCertificateSelection(row.applicationId, ($event.target as HTMLInputElement).checked)"
+                        />
+                      </TableCell>
+                      <TableCell class="font-medium text-foreground">{{ row.studentName }}</TableCell>
+                      <TableCell class="text-foreground">
+                        <p>{{ row.internshipTitle }}</p>
+                        <p class="text-xs text-muted-foreground">{{ row.hostName }}</p>
+                      </TableCell>
+                      <TableCell class="text-foreground">
+                        {{ Math.round(row.approvedHours) }} / {{ Math.round(row.requiredHours) }}
+                      </TableCell>
+                      <TableCell>
+                        <Badge v-if="row.eligible" variant="secondary">Ready</Badge>
+                        <span v-else class="text-sm text-muted-foreground">{{ row.skipReason || 'Not eligible' }}</span>
+                      </TableCell>
+                    </TableRow>
+                  </template>
+                  <TableRow v-else>
+                    <TableCell colspan="5" class="py-8 text-center text-muted-foreground">
+                      No accepted placements with completed hours yet.
+                    </TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -1019,7 +1346,9 @@ watch(
             <Card class="border-border/70 shadow-none">
               <CardContent class="p-4">
                 <p class="text-xs font-medium text-muted-foreground">KPI placement rate</p>
-                <p class="mt-1 text-2xl font-semibold text-foreground">{{ kpi.placementRate }}%</p>
+                <p class="mt-1 text-2xl font-semibold text-foreground">
+                  {{ formatKpiValue(kpi.placementRate, (kpi.studentCount ?? 0) > 0 || (kpi.totalApplications ?? 0) > 0, '%') }}
+                </p>
               </CardContent>
             </Card>
             <Card class="border-border/70 shadow-none">
@@ -1031,13 +1360,17 @@ watch(
             <Card class="border-border/70 shadow-none">
               <CardContent class="p-4">
                 <p class="text-xs font-medium text-muted-foreground">Avg approved OJT hrs</p>
-                <p class="mt-1 text-2xl font-semibold text-foreground">{{ kpi.avgApprovedOjtHours }}</p>
+                <p class="mt-1 text-2xl font-semibold text-foreground">
+                  {{ formatKpiValue(kpi.avgApprovedOjtHours, kpi.avgApprovedOjtHours != null && (kpi.ojtStudentCount ?? 0) > 0) }}
+                </p>
               </CardContent>
             </Card>
             <Card class="border-border/70 shadow-none">
               <CardContent class="p-4">
                 <p class="text-xs font-medium text-muted-foreground">Avg assessment score</p>
-                <p class="mt-1 text-2xl font-semibold text-foreground">{{ kpi.avgAssessmentScore }}</p>
+                <p class="mt-1 text-2xl font-semibold text-foreground">
+                  {{ formatKpiValue(kpi.avgAssessmentScore, kpi.avgAssessmentScore != null && (kpi.assessmentCount ?? 0) > 0) }}
+                </p>
               </CardContent>
             </Card>
           </div>
@@ -1090,8 +1423,8 @@ watch(
                       </TableCell>
                       <TableCell>
                         <div class="text-sm text-foreground">{{ row.internshipTitle || '—' }}</div>
-                        <Badge class="mt-1" :variant="badgeVariant(row.applicationStatus || '')">
-                          {{ badgeLabel(row.applicationStatus || 'none') }}
+                        <Badge class="mt-1" :variant="badgeVariant(row.applicationStatus || 'no_application')">
+                          {{ badgeLabel(row.applicationStatus || 'no_application') }}
                         </Badge>
                       </TableCell>
                       <TableCell class="text-foreground">
@@ -1100,7 +1433,7 @@ watch(
                       <TableCell class="text-foreground">{{ row.ojtPercentComplete }}%</TableCell>
                       <TableCell class="text-muted-foreground">
                         <template v-if="row.latestAssessment">
-                          {{ row.latestAssessment.stage }}
+                          {{ statusLabel(row.latestAssessment.stage) }}
                           <span v-if="row.latestAssessment.overallScore != null">
                             · {{ row.latestAssessment.overallScore }}
                           </span>
@@ -1163,10 +1496,10 @@ watch(
                       <p class="text-sm text-muted-foreground">{{ endorsement.course }} · {{ endorsement.company }}</p>
                       <p class="text-sm text-muted-foreground">Applied {{ endorsement.appliedAt }}</p>
                     </div>
-                    <div class="flex gap-3">
+                    <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                       <Button
                         variant="ghost"
-                        class="gap-2"
+                        class="w-full gap-2 sm:w-auto"
                         :disabled="submittingDecision"
                         @click="openEndorsementDetail(endorsement, 'profile')"
                       >
@@ -1175,14 +1508,14 @@ watch(
                       </Button>
                       <Button
                         variant="outline"
-                        class="gap-2"
+                        class="w-full gap-2 sm:w-auto"
                         :disabled="submittingDecision"
                         @click="openEndorsementDetail(endorsement, 'tracker')"
                       >
                         Open tracker
                       </Button>
                       <Button
-                        class="gap-2"
+                        class="w-full gap-2 sm:w-auto"
                         :disabled="submittingDecision"
                         @click="openDecisionDialog(endorsement.id, 'endorsed', endorsement.internName)"
                       >
@@ -1191,7 +1524,7 @@ watch(
                       </Button>
                       <Button
                         variant="outline"
-                        class="gap-2"
+                        class="w-full gap-2 sm:w-auto"
                         :disabled="submittingDecision"
                         @click="openDecisionDialog(endorsement.id, 'school_rejected', endorsement.internName)"
                       >
@@ -1202,11 +1535,9 @@ watch(
                   </CardContent>
                 </Card>
               </template>
-              <Card v-else class="border-dashed border-border/80 shadow-none">
-                <CardContent class="py-8 text-center text-muted-foreground">
-                  No submitted applications are waiting for school endorsement.
-                </CardContent>
-              </Card>
+              <p v-else class="text-sm text-muted-foreground">
+                No submitted applications are waiting for school endorsement.
+              </p>
             </div>
 
             <div class="space-y-4">
@@ -1227,10 +1558,10 @@ watch(
                       <p class="text-sm text-muted-foreground">{{ endorsement.course }} · {{ endorsement.company }}</p>
                       <p class="text-sm text-muted-foreground">Applied {{ endorsement.appliedAt }}</p>
                     </div>
-                    <div class="flex gap-3">
+                    <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                       <Button
                         variant="ghost"
-                        class="gap-2"
+                        class="w-full gap-2 sm:w-auto"
                         :disabled="submittingDecision"
                         @click="openEndorsementDetail(endorsement, 'profile')"
                       >
@@ -1239,14 +1570,14 @@ watch(
                       </Button>
                       <Button
                         variant="outline"
-                        class="gap-2"
+                        class="w-full gap-2 sm:w-auto"
                         :disabled="submittingDecision"
                         @click="openEndorsementDetail(endorsement, 'tracker')"
                       >
                         Open tracker
                       </Button>
                       <Button
-                        class="gap-2"
+                        class="w-full gap-2 sm:w-auto"
                         :disabled="submittingDecision"
                         @click="openDecisionDialog(endorsement.id, 'accepted', endorsement.internName)"
                       >
@@ -1255,7 +1586,7 @@ watch(
                       </Button>
                       <Button
                         variant="outline"
-                        class="gap-2"
+                        class="w-full gap-2 sm:w-auto"
                         :disabled="submittingDecision"
                         @click="openDecisionDialog(endorsement.id, 'rejected', endorsement.internName)"
                       >
@@ -1266,11 +1597,55 @@ watch(
                   </CardContent>
                 </Card>
               </template>
-              <Card v-else class="border-dashed border-border/80 shadow-none">
-                <CardContent class="py-8 text-center text-muted-foreground">
-                  No endorsed school-hosted applications are waiting for acceptance.
-                </CardContent>
-              </Card>
+              <p v-else class="text-sm text-muted-foreground">
+                No endorsed school-hosted applications are waiting for acceptance.
+              </p>
+            </div>
+
+            <div class="space-y-4">
+              <h3 class="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Withdrawn — placed elsewhere</h3>
+              <template v-if="withdrawnPlacedElsewhere.length">
+                <Card
+                  v-for="endorsement in withdrawnPlacedElsewhere"
+                  :key="endorsement.id"
+                  class="border-border/70 shadow-none"
+                >
+                  <CardContent class="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
+                    <div class="space-y-2">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <h3 class="text-lg font-semibold text-foreground">{{ endorsement.internName }}</h3>
+                        <Badge variant="destructive">{{ badgeLabel(endorsement.status) }}</Badge>
+                      </div>
+                      <p class="text-sm text-muted-foreground">
+                        {{ endorsement.internshipTitle }} · {{ endorsement.company }}
+                      </p>
+                      <p class="text-sm text-muted-foreground">
+                        Reason: {{ endorsement.withdrawalReason }} · Applied {{ endorsement.appliedAt }}
+                      </p>
+                    </div>
+                    <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                      <Button
+                        variant="ghost"
+                        class="w-full gap-2 sm:w-auto"
+                        @click="openEndorsementDetail(endorsement, 'profile')"
+                      >
+                        <Eye class="h-4 w-4" />
+                        View Profile
+                      </Button>
+                      <Button
+                        variant="outline"
+                        class="w-full gap-2 sm:w-auto"
+                        @click="openEndorsementDetail(endorsement, 'tracker')"
+                      >
+                        Open tracker
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </template>
+              <p v-else class="text-sm text-muted-foreground">
+                No applications were withdrawn because the intern placed elsewhere.
+              </p>
             </div>
           </template>
         </CardContent>
@@ -1285,6 +1660,43 @@ watch(
       :action-variant="pendingDecision?.action === 'endorsed' || pendingDecision?.action === 'accepted' ? 'default' : 'outline'"
       @update:open="(open) => { if (!open) pendingDecision = null }"
       @action="confirmDecision"
+    />
+
+    <Dialog :open="bulkPreviewOpen" @update:open="(open) => { bulkPreviewOpen = open }">
+      <template #default="{ close }">
+        <DialogHeader>
+          <DialogTitle>Preview certificates</DialogTitle>
+          <p class="text-sm text-muted-foreground">
+            Review the {{ selectedEligibleCertificates.length }} student{{ selectedEligibleCertificates.length === 1 ? '' : 's' }} selected for issuance.
+          </p>
+        </DialogHeader>
+        <div class="mt-4 max-h-72 space-y-2 overflow-y-auto">
+          <div
+            v-for="row in selectedEligibleCertificates"
+            :key="row.applicationId"
+            class="rounded-lg border border-border px-3 py-2 text-sm"
+          >
+            <p class="font-medium text-foreground">{{ row.studentName }}</p>
+            <p class="text-muted-foreground">
+              {{ row.internshipTitle }} · {{ Math.round(row.approvedHours) }}/{{ Math.round(row.requiredHours) }} hrs
+            </p>
+          </div>
+        </div>
+        <div class="mt-6 flex justify-end gap-3">
+          <Button variant="outline" @click="close">Cancel</Button>
+          <Button @click="bulkConfirmOpen = true">Continue</Button>
+        </div>
+      </template>
+    </Dialog>
+
+    <AlertDialog
+      :open="bulkConfirmOpen"
+      title="Issue certificates?"
+      :description="`This will issue certificates for ${selectedEligibleCertificates.length} student${selectedEligibleCertificates.length === 1 ? '' : 's'}. Ineligible or already-issued rows are skipped automatically.`"
+      action-label="Issue certificates"
+      :action-variant="'default'"
+      @update:open="(open) => { bulkConfirmOpen = open }"
+      @action="confirmBulkIssue"
     />
 
     <Dialog :open="!!selectedEndorsement" @update:open="(open) => { if (!open) selectedEndorsement = null }">
@@ -1303,9 +1715,6 @@ watch(
         </DialogHeader>
 
         <div v-if="selectedEndorsement" class="mt-6 space-y-4">
-          <div v-if="endorsementDialogMode === 'tracker' && selectedStepper" class="rounded-2xl border border-border/70 p-4">
-            <ApplicationStatusStepper :result="selectedStepper" />
-          </div>
           <div v-if="endorsementDialogMode === 'profile'" class="grid gap-4 sm:grid-cols-2">
             <div class="rounded-xl bg-muted p-4">
               <p class="text-sm text-muted-foreground">Applicant</p>
@@ -1323,16 +1732,23 @@ watch(
             </div>
             <div class="rounded-xl bg-muted p-4">
               <p class="text-sm text-muted-foreground">Resume</p>
-              <a
-                v-if="selectedEndorsement.resume"
-                :href="selectedEndorsement.resume"
-                class="mt-2 block font-medium text-primary underline-offset-4 hover:underline"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                View resume
-              </a>
+              <div v-if="selectedEndorsement.resume" class="mt-2">
+                <FilePreviewActions
+                  file-name="Resume"
+                  :source="selectedEndorsement.resume"
+                />
+              </div>
               <p v-else class="mt-2 font-medium text-foreground">No resume on file</p>
+            </div>
+            <div class="rounded-xl bg-muted p-4 sm:col-span-2">
+              <p class="text-sm text-muted-foreground">Skills</p>
+              <div class="mt-2">
+                <SkillChips
+                  :skills="selectedEndorsement.skills || []"
+                  mode="intern"
+                  empty-text="This student has not added skills yet."
+                />
+              </div>
             </div>
           </div>
 
@@ -1359,7 +1775,7 @@ watch(
 
     <div
       v-if="submittingDecision"
-      class="fixed bottom-6 right-6 z-dropdown flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm text-background shadow-lg"
+      class="fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-4 z-dropdown flex max-w-[calc(100vw-2rem)] items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm text-background shadow-lg sm:right-6"
     >
       <LoaderCircle class="h-4 w-4 animate-spin" />
       Saving decision...

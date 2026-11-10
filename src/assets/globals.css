@@ -3,6 +3,21 @@
 @tailwind utilities;
 
 @layer base {
+  /* Prevent iOS Safari auto-zoom on focus (requires >= 16px on mobile). */
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  @media (min-width: 768px) {
+    input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']),
+    select,
+    textarea {
+      font-size: inherit;
+    }
+  }
+
   :root {
     color-scheme: light;
     /* Stacking scale. In-page sticky content stays below the shell. */
@@ -34,6 +49,12 @@
     --input: 214.3 31.8% 91.4%;
     --ring: 222.2 84% 4.9%;
     --radius: 0.5rem;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --shell-tabbar-height: 0px;
+    --shell-chat-clearance: calc(5.5rem + var(--safe-bottom) + var(--shell-tabbar-height));
   }
 
   .dark {
@@ -49,7 +70,8 @@
     --secondary: 217.2 32.6% 17.5%;
     --secondary-foreground: 210 40% 98%;
     --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
+    /* One step brighter for projector / dark-room readability */
+    --muted-foreground: 215 20% 78%;
     --accent: 217.2 32.6% 17.5%;
     --accent-foreground: 210 40% 98%;
     --destructive: 0 62.8% 40%;
@@ -63,11 +85,102 @@
     @apply border-border;
   }
 
+  html {
+    height: 100%;
+  }
+
   body {
     @apply bg-background text-foreground;
+    min-height: 100%;
+    min-height: 100dvh;
   }
 
   [data-sonner-toaster] {
     z-index: var(--z-toast) !important;
+  }
+
+  /* Prefer card list over wide tables on phones. */
+  .responsive-table-desktop {
+    display: none;
+  }
+
+  .responsive-table-mobile {
+    display: block;
+  }
+
+  @media (min-width: 768px) {
+    .responsive-table-desktop {
+      display: block;
+    }
+
+    .responsive-table-mobile {
+      display: none;
+    }
+  }
+}
+
+@layer utilities {
+  .pt-safe {
+    padding-top: var(--safe-top);
+  }
+
+  .pb-safe {
+    padding-bottom: var(--safe-bottom);
+  }
+
+  .min-h-dvh-safe {
+    min-height: 100dvh;
+  }
+
+  .touch-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+@layer components {
+  /* Shared thin scrollbar (sidebar + notification popover). */
+  .shell-menu-scroll,
+  .notification-popover-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(215 19% 35% / 0.7) transparent;
+  }
+
+  .shell-menu-scroll {
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .shell-menu-scroll::-webkit-scrollbar,
+  .notification-popover-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .shell-menu-scroll::-webkit-scrollbar-button,
+  .notification-popover-scroll::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  .shell-menu-scroll::-webkit-scrollbar-track,
+  .notification-popover-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .shell-menu-scroll::-webkit-scrollbar-thumb,
+  .notification-popover-scroll::-webkit-scrollbar-thumb {
+    background-color: hsl(215 19% 35% / 0.7);
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+  }
+
+  .shell-menu-scroll::-webkit-scrollbar-thumb:hover,
+  .notification-popover-scroll::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(215 19% 35% / 0.9);
   }
 }

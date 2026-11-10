@@ -175,19 +175,17 @@ class OjtDtrWorkflowTest extends TestCase
         Sanctum::actingAs($ctx['companyUser']);
         $companyApproved = $this->postJson("/api/ojt-dtrs/{$dtrId}/approve");
         $companyApproved->assertOk();
-        $companyApproved->assertJsonPath('data.status', 'submitted');
-        $companyApproved->assertJsonPath('data.displayStatus', 'submitted');
-        $companyApproved->assertJsonPath('data.reviewStage', 'school');
+        $companyApproved->assertJsonPath('data.status', 'approved');
+        $companyApproved->assertJsonPath('data.displayStatus', 'approved');
+        $companyApproved->assertJsonPath('data.reviewStage', null);
         $this->assertNotNull(OjtDtrSubmission::query()->find($dtrId)?->company_reviewed_at);
+        $this->assertSame('approved', OjtDtrSubmission::query()->find($dtrId)?->status);
 
         Sanctum::actingAs($ctx['companyUser']);
         $this->postJson("/api/ojt-dtrs/{$dtrId}/approve")->assertStatus(422);
 
         Sanctum::actingAs($ctx['schoolUser']);
-        $final = $this->postJson("/api/ojt-dtrs/{$dtrId}/approve");
-        $final->assertOk();
-        $final->assertJsonPath('data.status', 'approved');
-        $this->assertSame('approved', OjtDtrSubmission::query()->find($dtrId)?->status);
+        $this->postJson("/api/ojt-dtrs/{$dtrId}/approve")->assertStatus(422);
     }
 
     public function test_company_submit_skips_to_pending_coordinator(): void
@@ -198,13 +196,13 @@ class OjtDtrWorkflowTest extends TestCase
         $response = $this->post('/api/ojt-dtrs', $this->payload($ctx['application']->id), ['Accept' => 'application/json']);
 
         $response->assertCreated();
-        $response->assertJsonPath('data.status', 'submitted');
-        $response->assertJsonPath('data.displayStatus', 'submitted');
-        $response->assertJsonPath('data.reviewStage', 'school');
+        $response->assertJsonPath('data.status', 'approved');
+        $response->assertJsonPath('data.displayStatus', 'approved');
+        $response->assertJsonPath('data.reviewStage', null);
         $this->assertDatabaseHas('ojt_dtr_submissions', [
             'application_id' => $ctx['application']->id,
-            'status' => 'submitted',
-            'review_stage' => 'school',
+            'status' => 'approved',
+            'review_stage' => null,
             'submitted_by_user_id' => $ctx['companyUser']->id,
         ]);
     }
@@ -275,37 +273,39 @@ class OjtDtrWorkflowTest extends TestCase
 
         $created = $this->post('/api/ojt-dtrs', $this->payload($ctx['application']->id), ['Accept' => 'application/json']);
         $created->assertCreated();
+        $created->assertJsonPath('data.status', 'approved');
         $dtrId = $created->json('data.id');
 
         Sanctum::actingAs($ctx['studentUser']);
-        $pendingProgress = $this->getJson('/api/ojt-logs/progress');
-        $pendingProgress->assertOk();
-        $pendingProgress->assertJsonPath('data.totalApproved', 8);
-        $this->assertEquals(4, $pendingProgress->json('data.totalPending'));
+        $approvedProgress = $this->getJson('/api/ojt-logs/progress');
+        $approvedProgress->assertOk();
+        $approvedProgress->assertJsonPath('data.totalApproved', 12);
+        $this->assertEquals(0, $approvedProgress->json('data.totalPending'));
 
         Sanctum::actingAs($ctx['companyUser']);
         $this->postJson("/api/ojt-dtrs/{$dtrId}/approve")->assertStatus(422);
 
         Sanctum::actingAs($ctx['schoolUser']);
-        $this->postJson("/api/ojt-dtrs/{$dtrId}/approve")->assertOk();
         $this->postJson("/api/ojt-dtrs/{$dtrId}/approve")->assertStatus(422);
-
-        Sanctum::actingAs($ctx['studentUser']);
-        $approvedProgress = $this->getJson('/api/ojt-logs/progress');
-        $approvedProgress->assertJsonPath('data.totalApproved', 12);
     }
 
     public function test_rejection_requires_a_reason_and_does_not_count_hours(): void
     {
         $ctx = $this->createContext();
-        Sanctum::actingAs($ctx['companyUser']);
+        Sanctum::actingAs($ctx['studentUser']);
         $dtrId = $this->post('/api/ojt-dtrs', $this->payload($ctx['application']->id), ['Accept' => 'application/json'])->json('data.id');
 
-        Sanctum::actingAs($ctx['schoolUser']);
+        Sanctum::actingAs($ctx['companyUser']);
         $this->postJson("/api/ojt-dtrs/{$dtrId}/reject", [])->assertStatus(422);
         $this->postJson("/api/ojt-dtrs/{$dtrId}/reject", [
             'reason' => 'DTR period does not match the submitted OJT dates.',
         ])->assertOk();
+
+        $this->assertSame('rejected', OjtDtrSubmission::query()->find($dtrId)?->status);
+        $this->assertSame(
+            'DTR period does not match the submitted OJT dates.',
+            OjtDtrSubmission::query()->find($dtrId)?->rejection_reason
+        );
 
         Sanctum::actingAs($ctx['studentUser']);
         $this->getJson('/api/ojt-logs/progress')->assertJsonPath('data.totalApproved', 0);
@@ -314,11 +314,14 @@ class OjtDtrWorkflowTest extends TestCase
         $list = $this->getJson('/api/ojt-dtrs');
         $list->assertOk();
         $list->assertJsonPath('data.0.rejectionReason', 'DTR period does not match the submitted OJT dates.');
+        $list->assertJsonPath('data.0.status', 'rejected');
 
+        Sanctum::actingAs($ctx['studentUser']);
         $resubmitted = $this->post("/api/ojt-dtrs/{$dtrId}/resubmit", $this->payload($ctx['application']->id), ['Accept' => 'application/json']);
         $resubmitted->assertCreated();
         $resubmitted->assertJsonPath('data.displayStatus', 'submitted');
         $resubmitted->assertJsonPath('data.status', 'submitted');
+        $resubmitted->assertJsonPath('data.reviewStage', 'host');
         $resubmitted->assertJsonPath('data.previousSubmissionId', $dtrId);
         $this->assertSame('rejected', OjtDtrSubmission::query()->find($dtrId)?->status);
     }
@@ -343,6 +346,23 @@ class OjtDtrWorkflowTest extends TestCase
 
         Sanctum::actingAs($otherUser);
         $this->postJson("/api/ojt-dtrs/{$dtrId}/approve")->assertForbidden();
-        $this->assertSame('submitted', OjtDtrSubmission::query()->find($dtrId)?->status);
+        $this->assertSame('approved', OjtDtrSubmission::query()->find($dtrId)?->status);
+    }
+
+    public function test_company_can_delete_a_pending_dtr_but_not_an_approved_one(): void
+    {
+        $ctx = $this->createContext();
+        Sanctum::actingAs($ctx['studentUser']);
+        $dtrId = $this->post('/api/ojt-dtrs', $this->payload($ctx['application']->id), ['Accept' => 'application/json'])->json('data.id');
+
+        Sanctum::actingAs($ctx['companyUser']);
+        $this->deleteJson("/api/ojt-dtrs/{$dtrId}")->assertNoContent();
+        $this->assertDatabaseMissing('ojt_dtr_submissions', ['id' => $dtrId]);
+
+        $approvedId = $this->post('/api/ojt-dtrs', $this->payload($ctx['application']->id), ['Accept' => 'application/json'])->json('data.id');
+        $this->assertSame('approved', OjtDtrSubmission::query()->find($approvedId)?->status);
+
+        $this->deleteJson("/api/ojt-dtrs/{$approvedId}")->assertStatus(422);
+        $this->assertDatabaseHas('ojt_dtr_submissions', ['id' => $approvedId]);
     }
 }

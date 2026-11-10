@@ -14,7 +14,22 @@ export type LayoutIconName =
   | 'briefcase'
   | 'activity'
   | 'clock'
-  | 'file-text'
+  | 'home'
+  | 'bookmark'
+  | 'send'
+  | 'map-pin'
+  | 'search'
+  | 'file-check'
+  | 'graduation-cap'
+  | 'clipboard'
+  | 'chart'
+  | 'shield'
+  | 'key'
+  | 'credit-card'
+  | 'calendar'
+  | 'sparkles'
+  | 'handshake'
+  | 'receipt'
 
 export interface LayoutNavItem {
   key: string
@@ -23,6 +38,13 @@ export interface LayoutNavItem {
   to?: RouteLocationRaw
   /** Any one of these assigned membership keys shows the item. Cross-feature aliases are not applied. */
   permissions?: string[]
+}
+
+export interface LayoutNavSection {
+  key: string
+  /** Shown as a small uppercase sidebar category header. Empty string = no header. */
+  label: string
+  items: LayoutNavItem[]
 }
 
 const reportKeys = ['org.view_reports', 'org.reports_view', 'view_reports']
@@ -37,69 +59,212 @@ const dtrReviewKeys = ['org.approve_ojt_logs']
 const roleKeys = ['org.manage_roles', 'manage_roles', 'manage_permissions']
 const subscriptionKeys = ['org.manage_subscription', 'manage_subscription']
 
-export const defaultNavItems: Record<LayoutRole, LayoutNavItem[]> = {
+export const defaultNavSections: Record<LayoutRole, LayoutNavSection[]> = {
   admin: [
-    { key: 'admin-overview', label: 'Dashboard', icon: 'layout-dashboard', to: { name: 'admin-overview' } },
-    { key: 'admin-manage-interns', label: 'Manage Interns', icon: 'users', to: { name: 'admin-manage-interns' } },
-    { key: 'admin-manage-schools', label: 'Manage Schools', icon: 'school', to: { name: 'admin-manage-schools' } },
-    { key: 'admin-manage-companies', label: 'Manage Companies', icon: 'building', to: { name: 'admin-manage-companies' } },
-    { key: 'tenant-role-management', label: 'Tenant Roles', icon: 'users', to: { name: 'tenant-role-management' } },
-    { key: 'tenant-permission-assignment', label: 'Permissions', icon: 'settings', to: { name: 'tenant-permission-assignment' } },
-    { key: 'ojt-hours', label: 'OJT Hours', icon: 'clock', to: { name: 'ojt-hours' } },
-    { key: 'admin-reports', label: 'Reports', icon: 'file-text', to: { name: 'admin-reports' } },
-    { key: 'admin-subscriptions', label: 'Subscription Plans', icon: 'settings', to: { name: 'admin-subscriptions' } },
     {
-      key: 'admin-organization-subscriptions',
-      label: 'Org Subscriptions',
-      icon: 'briefcase',
-      to: { name: 'admin-organization-subscriptions' },
+      key: 'overview',
+      label: 'Overview',
+      items: [
+        { key: 'admin-overview', label: 'Dashboard', icon: 'layout-dashboard', to: { name: 'admin-overview' } },
+      ],
     },
     {
-      key: 'admin-holidays',
-      label: 'Public Holidays',
-      icon: 'activity',
-      to: { name: 'admin-holidays' },
+      key: 'directory',
+      label: 'Directory',
+      items: [
+        { key: 'admin-manage-interns', label: 'Manage Interns', icon: 'users', to: { name: 'admin-manage-interns' } },
+        { key: 'admin-manage-schools', label: 'Manage Schools', icon: 'school', to: { name: 'admin-manage-schools' } },
+        { key: 'admin-manage-companies', label: 'Manage Companies', icon: 'building', to: { name: 'admin-manage-companies' } },
+      ],
     },
-    { key: 'admin-settings', label: 'Settings', icon: 'settings', to: { name: 'admin-settings' } },
+    {
+      key: 'access',
+      label: 'Access Control',
+      items: [
+        { key: 'tenant-role-management', label: 'Tenant Roles', icon: 'shield', to: { name: 'tenant-role-management' } },
+        { key: 'tenant-permission-assignment', label: 'Permissions', icon: 'key', to: { name: 'tenant-permission-assignment' } },
+      ],
+    },
+    {
+      key: 'ojt-tracking',
+      label: 'OJT & Tracking',
+      items: [
+        { key: 'ojt-hours', label: 'OJT Hours', icon: 'clock', to: { name: 'ojt-hours' } },
+        { key: 'admin-dtr', label: 'DTR Records', icon: 'clipboard', to: { name: 'admin-dtr' } },
+      ],
+    },
+    {
+      key: 'reports-billing',
+      label: 'Reports & Billing',
+      items: [
+        { key: 'admin-reports', label: 'Reports', icon: 'chart', to: { name: 'admin-reports' } },
+        { key: 'admin-subscriptions', label: 'Subscription Plans', icon: 'credit-card', to: { name: 'admin-subscriptions' } },
+        {
+          key: 'admin-organization-subscriptions',
+          label: 'Org Subscriptions',
+          icon: 'receipt',
+          to: { name: 'admin-organization-subscriptions' },
+        },
+      ],
+    },
+    {
+      key: 'administration',
+      label: 'Administration',
+      items: [
+        {
+          key: 'admin-holidays',
+          label: 'Public Holidays',
+          icon: 'calendar',
+          to: { name: 'admin-holidays' },
+        },
+        {
+          key: 'admin-skills',
+          label: 'Skills Review',
+          icon: 'sparkles',
+          to: { name: 'admin-skills' },
+        },
+        { key: 'admin-settings', label: 'Settings', icon: 'settings', to: { name: 'admin-settings' } },
+      ],
+    },
   ],
   student: [
-    { key: 'settings', label: 'My Profile', icon: 'user', to: { name: 'intern' } },
-    { key: 'opportunities', label: 'Companies', icon: 'briefcase', to: { name: 'intern-opportunities' } },
-    { key: 'saved', label: 'Saved', icon: 'briefcase', to: { name: 'intern-saved' } },
-    { key: 'documents', label: 'Documents', icon: 'file-text', to: { name: 'intern-documents' } },
-    { key: 'internship', label: 'My Applications', icon: 'briefcase', to: { name: 'intern-applications' } },
-    { key: 'placement', label: 'Placement', icon: 'layout-dashboard', to: { name: 'intern-placement' } },
-    { key: 'ojt-hours', label: 'OJT Hours', icon: 'clock', to: { name: 'ojt-hours' } },
-    { key: 'dashboard', label: 'Status Tracker', icon: 'activity', to: { name: 'intern-tracker' } },
-    { key: 'ojt-calendar', label: 'OJT Calendar', icon: 'activity', to: { name: 'intern-tracker' } },
+    {
+      key: 'profile',
+      label: 'Profile',
+      items: [
+        { key: 'settings', label: 'My Profile', icon: 'user', to: { name: 'intern' } },
+      ],
+    },
+    {
+      key: 'internships-placement',
+      label: 'Internships & Placement',
+      items: [
+        { key: 'opportunities', label: 'Partner Companies', icon: 'building', to: { name: 'intern-opportunities' } },
+        { key: 'openings', label: 'Internship Opportunities', icon: 'search', to: { name: 'intern-openings' } },
+        { key: 'saved', label: 'Saved', icon: 'bookmark', to: { name: 'intern-saved' } },
+        { key: 'documents', label: 'Documents', icon: 'file-text', to: { name: 'intern-documents' } },
+        { key: 'internship', label: 'Applications', icon: 'send', to: { name: 'intern-applications' } },
+        { key: 'placement', label: 'Placement', icon: 'map-pin', to: { name: 'intern-placement' } },
+      ],
+    },
+    {
+      key: 'ojt-tracking',
+      label: 'OJT & Tracking',
+      items: [
+        { key: 'ojt-hours', label: 'DTR', icon: 'clock', to: { name: 'ojt-hours' } },
+        // OJT Calendar lives inside Status Tracker (OjtCalendarPanel) — keep a single nav entry
+        // so both labels do not appear selected for the same route.
+        { key: 'dashboard', label: 'Interviews', icon: 'activity', to: { name: 'intern-tracker' } },
+      ],
+    },
   ],
   school: [
-    { key: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard', to: { name: 'school' }, permissions: [...reportKeys, ...applicationKeys, ...studentViewKeys, ...internshipKeys] },
-    { key: 'student-accounts', label: 'Student Accounts', icon: 'users', to: { name: 'school-students' }, permissions: studentManageKeys },
-    { key: 'tenant-role-management', label: 'Role Management', icon: 'users', to: { name: 'tenant-role-management' }, permissions: roleKeys },
-    { key: 'tenant-permission-assignment', label: 'Permissions', icon: 'settings', to: { name: 'tenant-permission-assignment' }, permissions: roleKeys },
-    { key: 'student-interns', label: 'Interns List', icon: 'users', to: { name: 'school-interns' }, permissions: studentViewKeys },
-    { key: 'opportunities', label: 'Browse', icon: 'briefcase', to: { name: 'school-opportunities' } },
-    { key: 'applications', label: 'Endorsements', icon: 'file-text', to: { name: 'school-endorsements' }, permissions: applicationKeys },
-    { key: 'placements', label: 'Placements', icon: 'briefcase', to: { name: 'school-placements' }, permissions: [...applicationKeys, ...studentViewKeys] },
-    { key: 'reports', label: 'Reports', icon: 'file-text', to: { name: 'school-reports' }, permissions: reportKeys },
-    { key: 'subscription', label: 'Subscription', icon: 'settings', to: { name: 'organization-subscription' }, permissions: subscriptionKeys },
-    { key: 'agreements', label: 'Agreements', icon: 'file-text', to: { name: 'agreements' }, permissions: agreementKeys },
-    { key: 'ojt-hours', label: 'OJT Hours', icon: 'clock', to: { name: 'ojt-hours' }, permissions: ojtKeys },
-    { key: 'dtr-review', label: 'DTR Review', icon: 'file-text', to: { name: 'school-dtr' }, permissions: dtrReviewKeys },
+    {
+      key: 'overview',
+      label: 'Overview',
+      items: [
+        {
+          key: 'dashboard',
+          label: 'Dashboard',
+          icon: 'layout-dashboard',
+          to: { name: 'school' },
+          permissions: [...reportKeys, ...applicationKeys, ...studentViewKeys, ...internshipKeys],
+        },
+      ],
+    },
+    {
+      key: 'students',
+      label: 'Students',
+      items: [
+        { key: 'student-accounts', label: 'Student Accounts', icon: 'users', to: { name: 'school-students' }, permissions: studentManageKeys },
+        { key: 'student-interns', label: 'Interns List', icon: 'graduation-cap', to: { name: 'school-interns' }, permissions: studentViewKeys },
+      ],
+    },
+    {
+      key: 'internships-placement',
+      label: 'Internships & Placement',
+      items: [
+        { key: 'opportunities', label: 'Partner Companies', icon: 'search', to: { name: 'school-opportunities' } },
+        { key: 'applications', label: 'Endorsements', icon: 'file-check', to: { name: 'school-endorsements' }, permissions: applicationKeys },
+        { key: 'placements', label: 'Placements', icon: 'map-pin', to: { name: 'school-placements' }, permissions: [...applicationKeys, ...studentViewKeys] },
+      ],
+    },
+    {
+      key: 'ojt-tracking',
+      label: 'OJT & Tracking',
+      items: [
+        { key: 'ojt-hours', label: 'OJT Hours', icon: 'clock', to: { name: 'ojt-hours' }, permissions: ojtKeys },
+        { key: 'dtr-review', label: 'DTR Review', icon: 'clipboard', to: { name: 'school-dtr' }, permissions: dtrReviewKeys },
+      ],
+    },
+    {
+      key: 'agreements-reports',
+      label: 'Agreements & Reports',
+      items: [
+        { key: 'agreements', label: 'Agreements', icon: 'handshake', to: { name: 'agreements' }, permissions: agreementKeys },
+        { key: 'reports', label: 'Reports', icon: 'chart', to: { name: 'school-reports' }, permissions: reportKeys },
+      ],
+    },
+    {
+      key: 'administration',
+      label: 'Administration',
+      items: [
+        { key: 'tenant-role-management', label: 'Role Management', icon: 'shield', to: { name: 'tenant-role-management' }, permissions: roleKeys },
+        { key: 'tenant-permission-assignment', label: 'Permissions', icon: 'key', to: { name: 'tenant-permission-assignment' }, permissions: roleKeys },
+        { key: 'subscription', label: 'Subscription', icon: 'credit-card', to: { name: 'organization-subscription' }, permissions: subscriptionKeys },
+      ],
+    },
   ],
   company: [
-    { key: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard', to: { name: 'dashboard' }, permissions: [...internshipKeys, ...applicationKeys] },
-    { key: 'opportunities', label: 'Browse', icon: 'briefcase', to: { name: 'company-opportunities' } },
-    { key: 'internships', label: 'Posted Jobs', icon: 'briefcase', to: { name: 'company-internships' }, permissions: internshipKeys },
-    { key: 'applications', label: 'Applicants', icon: 'users', to: { name: 'company-applicants' }, permissions: applicationKeys },
-    { key: 'tenant-role-management', label: 'Role Management', icon: 'users', to: { name: 'tenant-role-management' }, permissions: roleKeys },
-    { key: 'tenant-permission-assignment', label: 'Permissions', icon: 'settings', to: { name: 'tenant-permission-assignment' }, permissions: roleKeys },
-    { key: 'subscription', label: 'Subscription', icon: 'settings', to: { name: 'organization-subscription' }, permissions: subscriptionKeys },
-    { key: 'agreements', label: 'Agreements', icon: 'file-text', to: { name: 'agreements' }, permissions: agreementKeys },
-    { key: 'ojt-hours', label: 'OJT Hours', icon: 'clock', to: { name: 'ojt-hours' }, permissions: ojtKeys },
-    { key: 'dtr-submissions', label: 'DTR Submissions', icon: 'file-text', to: { name: 'company-dtr' }, permissions: dtrUploadKeys },
+    {
+      key: 'overview',
+      label: 'Overview',
+      items: [
+        {
+          key: 'dashboard',
+          label: 'Dashboard',
+          icon: 'layout-dashboard',
+          to: { name: 'dashboard' },
+          permissions: [...internshipKeys, ...applicationKeys],
+        },
+      ],
+    },
+    {
+      key: 'internships-placement',
+      label: 'Internships & Placement',
+      items: [
+        { key: 'opportunities', label: 'Partner Schools', icon: 'search', to: { name: 'company-opportunities' } },
+        { key: 'internships', label: 'Posted Jobs', icon: 'briefcase', to: { name: 'company-internships' }, permissions: internshipKeys },
+        { key: 'applications', label: 'Applicants', icon: 'users', to: { name: 'company-applicants' }, permissions: applicationKeys },
+      ],
+    },
+    {
+      key: 'ojt-tracking',
+      label: 'OJT & Tracking',
+      items: [
+        { key: 'ojt-hours', label: 'OJT Hours', icon: 'clock', to: { name: 'ojt-hours' }, permissions: ojtKeys },
+        { key: 'dtr-submissions', label: 'DTR Submissions', icon: 'clipboard', to: { name: 'company-dtr' }, permissions: dtrUploadKeys },
+        { key: 'agreements', label: 'Agreements', icon: 'handshake', to: { name: 'agreements' }, permissions: agreementKeys },
+      ],
+    },
+    {
+      key: 'administration',
+      label: 'Administration',
+      items: [
+        { key: 'tenant-role-management', label: 'Role Management', icon: 'shield', to: { name: 'tenant-role-management' }, permissions: roleKeys },
+        { key: 'tenant-permission-assignment', label: 'Permissions', icon: 'key', to: { name: 'tenant-permission-assignment' }, permissions: roleKeys },
+        { key: 'subscription', label: 'Subscription', icon: 'credit-card', to: { name: 'organization-subscription' }, permissions: subscriptionKeys },
+      ],
+    },
   ],
+}
+
+/** Flat nav lists derived from sections — kept for TenantRbac and route helpers. */
+export const defaultNavItems: Record<LayoutRole, LayoutNavItem[]> = {
+  admin: defaultNavSections.admin.flatMap((section) => section.items),
+  student: defaultNavSections.student.flatMap((section) => section.items),
+  school: defaultNavSections.school.flatMap((section) => section.items),
+  company: defaultNavSections.company.flatMap((section) => section.items),
 }
 
 const navPaths: Record<string, string> = {
@@ -128,10 +293,22 @@ export function assignedPermissionAllows(assigned: string[], required: string[])
   return required.some((key) => assigned.includes(key))
 }
 
-export function visibleNavItems(role: LayoutRole, assigned: string[]): LayoutNavItem[] {
-  const items = defaultNavItems[role]
-  if (role === 'admin' || role === 'student') return items
+function filterNavItemsByPermission(items: LayoutNavItem[], assigned: string[]): LayoutNavItem[] {
   return items.filter((item) => !item.permissions?.length || assignedPermissionAllows(assigned, item.permissions))
+}
+
+export function visibleNavSections(role: LayoutRole, assigned: string[]): LayoutNavSection[] {
+  if (role === 'admin' || role === 'student') return defaultNavSections[role]
+  return defaultNavSections[role]
+    .map((section) => ({
+      ...section,
+      items: filterNavItemsByPermission(section.items, assigned),
+    }))
+    .filter((section) => section.items.length > 0)
+}
+
+export function visibleNavItems(role: LayoutRole, assigned: string[]): LayoutNavItem[] {
+  return visibleNavSections(role, assigned).flatMap((section) => section.items)
 }
 
 export function firstAllowedOrgPath(role: 'school' | 'company', assigned: string[]): string {

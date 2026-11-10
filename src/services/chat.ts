@@ -6,11 +6,19 @@ export interface ChatPeer {
   role: string | null
 }
 
+export interface ChatAttachment {
+  name: string | null
+  mime: string | null
+  size: number | null
+  url: string
+}
+
 export interface ChatLatestMessage {
   id: string
   body: string
   senderId: string
   createdAt: string | null
+  hasAttachment?: boolean
 }
 
 export interface ChatConversation {
@@ -18,6 +26,7 @@ export interface ChatConversation {
   peer: ChatPeer | null
   latestMessage: ChatLatestMessage | null
   lastReadAt: string | null
+  peerLastReadAt?: string | null
   unreadCount: number
   updatedAt: string | null
   createdAt: string | null
@@ -29,6 +38,7 @@ export interface ChatMessage {
   senderId: string
   body: string
   createdAt: string | null
+  attachment?: ChatAttachment | null
 }
 
 /** @deprecated Prefer ChatMessage.body — kept for UI compatibility mapping */
@@ -55,6 +65,9 @@ function inferChatErrorStatus(message: string): number {
   }
   if (normalized.includes('unauthenticated') || normalized === 'unauthorized') {
     return 401
+  }
+  if (normalized.includes('verification is pending') || normalized.includes('under review')) {
+    return 403
   }
   return 0
 }
@@ -102,7 +115,22 @@ export async function listMessages(conversationId: string): Promise<ChatMessage[
   return Array.isArray(res.data) ? res.data : []
 }
 
-export async function sendChatMessage(conversationId: string, body: string): Promise<ChatMessage> {
+export async function sendChatMessage(
+  conversationId: string,
+  body: string,
+  attachment?: File | null,
+): Promise<ChatMessage> {
+  if (attachment) {
+    const form = new FormData()
+    if (body.trim()) form.append('body', body.trim())
+    form.append('attachment', attachment)
+    const res = await chatFetch<{ data: ChatMessage }>(`/conversations/${conversationId}/messages`, {
+      method: 'POST',
+      body: form,
+    })
+    return res.data
+  }
+
   const res = await chatFetch<{ data: ChatMessage }>(`/conversations/${conversationId}/messages`, {
     method: 'POST',
     body: JSON.stringify({ body }),

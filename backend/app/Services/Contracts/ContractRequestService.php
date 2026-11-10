@@ -215,7 +215,7 @@ class ContractRequestService
      * @param  mixed  $existing
      * @return array<int, array<string, mixed>>
      */
-    private function storeAttachments(Contract $contract, array $files, mixed $existing = null): array
+    public function storeAttachments(Contract $contract, array $files, mixed $existing = null): array
     {
         $attachments = is_array($existing) ? $existing : [];
 

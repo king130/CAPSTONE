@@ -76,7 +76,7 @@ function handleMarkRead() {
     :class="compact ? 'rounded-lg' : ''"
     @click="handleOpen"
   >
-    <div class="flex items-start gap-4 p-4" :class="compact ? 'p-3' : 'p-4'">
+    <div class="flex items-start gap-3 p-4" :class="compact ? 'gap-3 p-3' : 'gap-4 p-4'">
       <div
         class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl"
         :class="[iconConfig.class, compact ? 'h-10 w-10 rounded-xl' : '']"
@@ -86,27 +86,35 @@ function handleMarkRead() {
 
       <div class="min-w-0 flex-1">
         <p
-          class="leading-6 text-muted-foreground"
-          :class="props.notification.isRead ? 'font-medium' : 'font-semibold text-foreground'"
+          class="leading-snug text-muted-foreground"
+          :class="[
+            props.notification.isRead ? 'font-medium' : 'font-semibold text-foreground',
+            compact ? 'line-clamp-2' : '',
+          ]"
         >
           {{ props.notification.message }}
         </p>
-        <div class="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
-          <BellRing class="h-3.5 w-3.5" />
-          <span>{{ timeAgo }}</span>
+        <div class="mt-2 flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
+          <BellRing class="h-3.5 w-3.5 shrink-0" />
+          <span class="truncate">{{ timeAgo }}</span>
         </div>
       </div>
 
       <div class="flex shrink-0 items-center gap-2" @click.stop>
-        <span v-if="!props.notification.isRead" class="h-2.5 w-2.5 rounded-full bg-sky-500" />
+        <span
+          v-if="!props.notification.isRead"
+          class="h-2.5 w-2.5 shrink-0 rounded-full bg-sky-500"
+          aria-hidden="true"
+        />
         <Button
           v-if="!props.notification.isRead"
           variant="ghost"
           size="sm"
-          class="text-sky-700 hover:text-sky-800"
+          class="h-8 shrink-0 px-2 text-sky-700 hover:text-sky-800"
+          :aria-label="compact ? 'Mark as read' : undefined"
           @click="handleMarkRead"
         >
-          <CheckCheck class="h-4 w-4" />
+          <CheckCheck class="h-4 w-4 shrink-0" />
           <span v-if="!compact">Mark as read</span>
         </Button>
       </div>

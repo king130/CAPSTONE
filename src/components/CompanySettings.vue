@@ -9,6 +9,7 @@ import { ensurePublicProfile } from '@/services/profilesPublic'
 import Swal from '@/services/swal'
 import { BellIcon } from '@heroicons/vue/24/outline'
 import Select from '@/components/ui/select/Select.vue'
+import PasswordInput from '@/components/ui/password-input/PasswordInput.vue'
 
 const authStore = useAuthStore()
 
@@ -703,21 +704,21 @@ function handleImageError(event: Event) {
             <div class="card-body">
               <div class="form-group">
                 <label class="form-label">New Password</label>
-                <input 
+                <PasswordInput
                   v-model="security.newPassword"
-                  type="password" 
                   class="form-input"
                   placeholder="Enter new password"
+                  autocomplete="new-password"
                 />
               </div>
 
               <div class="form-group">
                 <label class="form-label">Confirm New Password</label>
-                <input 
+                <PasswordInput
                   v-model="security.confirmPassword"
-                  type="password" 
                   class="form-input"
                   placeholder="Confirm new password"
+                  autocomplete="new-password"
                 />
                 <div v-if="security.newPassword" class="password-strength">
                   <div class="strength-bar">

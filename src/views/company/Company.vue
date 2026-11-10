@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import {
   BriefcaseBusiness,
   Building2,
@@ -23,6 +23,8 @@ import {
 import AlertDialog from '@/components/ui/alert-dialog/AlertDialog.vue'
 import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
+import RowActionsMenu from '@/components/ui/row-actions-menu/RowActionsMenu.vue'
+import StatusBadgeMenu from '@/components/ui/status-badge-menu/StatusBadgeMenu.vue'
 import Card from '@/components/ui/card/Card.vue'
 import CardContent from '@/components/ui/card/CardContent.vue'
 import CardHeader from '@/components/ui/card/CardHeader.vue'
@@ -42,8 +44,10 @@ import TableHead from '@/components/ui/table/TableHead.vue'
 import TableHeader from '@/components/ui/table/TableHeader.vue'
 import TableRow from '@/components/ui/table/TableRow.vue'
 import { caviteBarangaysByLocation, caviteLocationGroups } from '@/config/courseCatalog'
+import { formatAllowanceDisplay } from '@/utils/formatAllowance'
+import { formatDate, toTitleCaseName } from '@/utils/formatDisplay'
 import ApplicationTrackerPanel from '@/components/ApplicationTrackerPanel.vue'
-import ApplicationStatusStepper from '@/components/applications/ApplicationStatusStepper.vue'
+import FilePreviewActions from '@/components/FilePreviewActions.vue'
 import ScheduleEditor from '@/components/ScheduleEditor.vue'
 import {
   DAY_OPTIONS,
@@ -55,8 +59,6 @@ import { useToast } from '@/composables/useToast'
 import MainLayout from '@/layouts/MainLayout.vue'
 import { assignedPermissionAllows, routePermissionRequirements } from '@/layouts/navigation'
 import { subscribeCompanyApplications, updateApplicationStatus, type ApplicationRecord } from '@/services/applications'
-import { listAssessments, type AssessmentRecord } from '@/services/assessments'
-import { listInterviews, type InterviewRecord } from '@/services/interviews'
 import { fetchKpiReport, type KpiReport } from '@/services/kpi'
 import {
   createInternship,
@@ -65,13 +67,24 @@ import {
   updateInternship,
   type InternshipRecord,
 } from '@/services/internships'
+import {
+  listCertificates,
+  printCertificateHtml,
+  viewCertificateHtml,
+  type CertificateRecord,
+} from '@/services/certificates'
 import { verificationStatusLabel } from '@/services/organizationVerification'
 import { useAuthStore } from '@/stores/auth'
-import { deriveApplicationStepper } from '@/utils/applicationStepper'
+import { jobStatusLabel, normalizeJobStatus, type JobStatusValue } from '@/utils/jobStatus'
+import SkillChips from '@/components/skills/SkillChips.vue'
+import SkillsWizard from '@/components/skills/SkillsWizard.vue'
+import type { SelectedSkill } from '@/services/skills'
+import { recommendedSkillCategoriesForCourses } from '@/utils/courseSkillCategoryDefaults'
 
 type CompanyView = 'dashboard' | 'internships' | 'applications'
 type ApplicantAction = 'accepted' | 'rejected'
 type JobWizardStep = 'basic' | 'details' | 'programs' | 'requirements'
+type JobRow = InternshipRecord & { applicationCount: number }
 
 interface JobFormState {
   title: string
@@ -85,7 +98,7 @@ interface JobFormState {
   duration: string
   hostRequiredHours: string
   slotsAvailable: number
-  status: 'active' | 'draft' | 'closed'
+  status: JobStatusValue
   allowance: string
   startDate: string
   endDate: string
@@ -119,10 +132,16 @@ const router = useRouter()
 const currentView = ref<CompanyView>('dashboard')
 const internships = ref<InternshipRecord[]>([])
 const applications = ref<ApplicationRecord[]>([])
+const certificates = ref<CertificateRecord[]>([])
+const certificatesLoading = ref(false)
+const certificatesError = ref<string | null>(null)
+const certificateActionId = ref<string | null>(null)
 const loadingJobs = ref(true)
 const loadingApplications = ref(true)
 const searchJobs = ref('')
 const searchApplicants = ref('')
+const applicantStatusTab = ref<'all' | 'needs_review' | 'interview' | 'accepted' | 'rejected' | 'withdrawn'>('all')
+const hostHoursAdvancedOpen = ref(false)
 const jobEditorOpen = ref(false)
 const jobDetailsOpen = ref(false)
 const savingJob = ref(false)
@@ -130,45 +149,24 @@ const applicantDialogOpen = ref(false)
 const applicantDialogMode = ref<'profile' | 'tracker'>('profile')
 const selectedJob = ref<(InternshipRecord & { applicationCount?: number }) | null>(null)
 const selectedApplicant = ref<ApplicationRecord | null>(null)
-const applicantInterviews = ref<InterviewRecord[]>([])
-const applicantAssessments = ref<AssessmentRecord[]>([])
-const applicantStepper = computed(() =>
-  selectedApplicant.value
-    ? deriveApplicationStepper({
-        status: selectedApplicant.value.status,
-        trackerStage: selectedApplicant.value.trackerStage,
-        interviews: applicantInterviews.value,
-        assessments: applicantAssessments.value,
-        audience: 'company',
-      })
-    : null,
-)
-
-async function loadApplicantExtras(applicationId?: string) {
-  const id = applicationId || selectedApplicant.value?.id
-  if (!id) return
-  const [interviews, assessments] = await Promise.all([
-    listInterviews(id).catch(() => [] as InterviewRecord[]),
-    listAssessments(id).catch(() => [] as AssessmentRecord[]),
-  ])
-  if (selectedApplicant.value?.id !== id) return
-  applicantInterviews.value = interviews
-  applicantAssessments.value = assessments
-}
-
 async function onTrackerUpdated() {
   await refreshApplications()
-  await loadApplicantExtras()
 }
-
-watch(selectedApplicant, (applicant) => {
-  applicantInterviews.value = []
-  applicantAssessments.value = []
-  if (!applicant?.id) return
-  void loadApplicantExtras(applicant.id)
-})
-const pendingDeleteJobId = ref<string | null>(null)
+const pendingDeleteJob = ref<{
+  id: string
+  title: string
+  applicationCount: number
+  isDraft: boolean
+} | null>(null)
 const deletingJobId = ref<string | null>(null)
+const pendingStatusChange = ref<{
+  jobId: string
+  title: string
+  applicationCount: number
+  next: JobStatusValue
+  previous: JobStatusValue
+} | null>(null)
+const statusUpdatingJobId = ref<string | null>(null)
 const processingApplicantId = ref<string | null>(null)
 const editingJobId = ref<string | null>(null)
 const kpi = ref<KpiReport | null>(null)
@@ -178,11 +176,46 @@ const chipInput = ref<ChipFieldState>({
   requiredSkill: '',
   requiredDocument: '',
 })
+const draftSaveState = ref<'idle' | 'dirty' | 'saving' | 'saved' | 'error'>('idle')
+const draftSavedAt = ref<Date | null>(null)
+const publishFieldErrors = ref<Record<string, string>>({})
+const publishingJob = ref(false)
+const suppressAutosave = ref(false)
+const jobSkills = ref<SelectedSkill[]>([])
+const skillsWizardOpen = ref(false)
+const jobSkillsRecommendedCategories = computed(() => {
+  const selected = asList(jobForm.value.eligibleCoursesText)
+  const courses = selected.length ? selected : companyAcceptedCourses.value
+  return recommendedSkillCategoriesForCourses(courses)
+})
 
 const jobForm = ref<JobFormState>(defaultJobForm())
 
 let unsubscribeInternships: (() => void) | null = null
 let unsubscribeApplications: (() => void) | null = null
+let autosaveTimer: ReturnType<typeof setTimeout> | undefined
+let lastSavedFingerprint = ''
+
+const isEditingDraft = computed(
+  () => !editingJobId.value || normalizeJobStatus(jobForm.value.status) === 'draft',
+)
+
+const draftSaveLabel = computed(() => {
+  if (!isEditingDraft.value) {
+    if (draftSaveState.value === 'dirty') return 'Unsaved changes'
+    return ''
+  }
+  if (draftSaveState.value === 'saving') return 'Saving...'
+  if (draftSaveState.value === 'error') return 'Draft save failed'
+  if (draftSaveState.value === 'dirty') return 'Unsaved changes'
+  if (draftSaveState.value === 'saved' && draftSavedAt.value) {
+    const seconds = Math.max(0, Math.round((Date.now() - draftSavedAt.value.getTime()) / 1000))
+    if (seconds < 8) return 'Draft saved just now'
+    if (seconds < 60) return `Draft saved ${seconds}s ago`
+    return `Draft saved ${draftSavedAt.value.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+  }
+  return editingJobId.value ? 'Draft saved' : ''
+})
 
 const pageTitle = computed(() => {
   const titles: Record<CompanyView, string> = {
@@ -222,11 +255,6 @@ const workSetupOptions = [
   { value: 'Hybrid', label: 'Hybrid', description: 'Intern splits time between workplace and remote work.' },
   { value: 'Remote', label: 'Remote', description: 'Intern completes tasks fully online.' },
   { value: 'Field Work', label: 'Field Work', description: 'Internship includes travel or site-based work.' },
-]
-const statusOptions = [
-  { value: 'active', label: 'Open', description: 'Visible to schools and ready for endorsements.' },
-  { value: 'draft', label: 'Draft', description: 'Saved privately until you finish the posting.' },
-  { value: 'closed', label: 'Closed', description: 'No longer accepting applicants.' },
 ]
 const wizardSteps: Array<{ id: JobWizardStep; label: string; caption: string }> = [
   { id: 'basic', label: 'Basic Information', caption: 'Title, organization details, work setup, and Cavite location' },
@@ -351,10 +379,39 @@ const jobRows = computed(() => {
     )
 })
 
+function applicantFilterBucket(application: ApplicationRecord): 'needs_review' | 'interview' | 'accepted' | 'rejected' | 'withdrawn' | 'other' {
+  const stage = String(application.trackerStage || '').trim().toLowerCase()
+  const status = normalizeApplicationStatus(application.status)
+  if (
+    status === 'withdrawn_placed_elsewhere'
+    || stage === 'withdrawn_placed_elsewhere'
+    || application.withdrawalReason === 'Placed elsewhere'
+  ) {
+    return 'withdrawn'
+  }
+  if (status === 'accepted' || stage === 'accepted') return 'accepted'
+  if (
+    status === 'rejected'
+    || status === 'school_rejected'
+    || stage === 'rejected'
+    || stage === 'school_rejected'
+    || status.startsWith('placement_')
+  ) {
+    return 'rejected'
+  }
+  if (['interview_scheduled', 'interviewed', 'assessed'].includes(stage)) return 'interview'
+  if (status === 'endorsed' || stage === 'endorsed') return 'needs_review'
+  return 'other'
+}
+
 const applicantRows = computed(() => {
   const query = searchApplicants.value.trim().toLowerCase()
+  const tab = applicantStatusTab.value
 
   return applications.value.filter((application) => {
+    const bucket = applicantFilterBucket(application)
+    if (tab !== 'all' && bucket !== tab) return false
+
     const values = [
       application.studentName,
       application.schoolName,
@@ -374,6 +431,11 @@ const applicantRows = computed(() => {
   })
 })
 
+function selectAllAcceptedCourses() {
+  jobForm.value.eligibleCoursesText = companyAcceptedCourses.value.join(', ')
+  onJobFieldBlur()
+}
+
 function defaultJobForm(): JobFormState {
   return {
     title: '',
@@ -384,10 +446,10 @@ function defaultJobForm(): JobFormState {
     barangay: '',
     locationDetails: '',
     type: 'On-site',
-    duration: '486 hours',
+    duration: '',
     hostRequiredHours: '',
     slotsAvailable: 1,
-    status: 'active',
+    status: 'draft',
     allowance: '',
     startDate: '',
     endDate: '',
@@ -448,18 +510,13 @@ function companyViewFromRouteName(name: unknown): CompanyView {
   return 'dashboard'
 }
 
-function normalizeJobStatus(status?: string | null) {
-  const normalized = String(status || 'draft').trim().toLowerCase()
-  if (normalized === 'closed') return 'closed'
-  if (normalized === 'active') return 'active'
-  return 'draft'
-}
-
 function normalizeApplicationStatus(status?: string | null) {
   const normalized = String(status || 'submitted').trim().toLowerCase()
   if (['submitted', 'pending'].includes(normalized)) return 'submitted'
   if (normalized === 'endorsed') return 'endorsed'
   if (['accepted', 'approved', 'active'].includes(normalized)) return 'accepted'
+  if (normalized === 'withdrawn_placed_elsewhere') return 'withdrawn_placed_elsewhere'
+  if (['placement_cancelled', 'placement_declined', 'placement_ended'].includes(normalized)) return normalized
   if (['rejected', 'declined', 'cancelled'].includes(normalized)) return 'rejected'
   if (normalized === 'school_rejected') return 'school_rejected'
   return 'submitted'
@@ -470,31 +527,47 @@ function badgeLabel(status?: string | null) {
   if (normalized === 'submitted') return 'Awaiting School Endorsement'
   if (normalized === 'endorsed') return 'Endorsed'
   if (normalized === 'accepted') return 'Accepted'
+  if (normalized === 'withdrawn_placed_elsewhere') return 'Withdrawn — placed elsewhere'
+  if (normalized === 'placement_cancelled') return 'Placement cancelled'
+  if (normalized === 'placement_declined') return 'Placement declined'
+  if (normalized === 'placement_ended') return 'Placement ended'
   if (normalized === 'school_rejected') return 'Rejected By School'
   return 'Rejected'
 }
 
-function jobBadgeVariant(status?: string | null) {
-  const normalized = normalizeJobStatus(status)
-  if (normalized === 'active') return 'success'
-  if (normalized === 'closed') return 'destructive'
-  return 'warning'
+function applicantProgressLabel(applicant: {
+  status?: string | null
+  trackerStage?: string | null
+  withdrawalReason?: string | null
+}) {
+  const stage = String(applicant.trackerStage || '').trim().toLowerCase()
+  if (stage === 'withdrawn_placed_elsewhere' || applicant.withdrawalReason === 'Placed elsewhere') {
+    return 'Withdrawn — placed elsewhere'
+  }
+  if (stage === 'interview_scheduled') return 'Interview Scheduled'
+  if (stage === 'interviewed') return 'Interviewed'
+  if (stage === 'assessed') return 'Assessed'
+  if (stage === 'accepted') return 'Accepted'
+  if (stage === 'rejected') return 'Rejected'
+  if (stage === 'school_rejected') return 'Rejected By School'
+  if (stage === 'placement_cancelled') return 'Placement cancelled'
+  if (stage === 'placement_declined') return 'Placement declined'
+  if (stage === 'placement_ended') return 'Placement ended'
+  return badgeLabel(applicant.status)
 }
 
 function applicantBadgeVariant(status?: string | null) {
   const normalized = normalizeApplicationStatus(status)
   if (normalized === 'accepted') return 'success'
-  if (normalized === 'rejected') return 'destructive'
+  if (
+    normalized === 'rejected'
+    || normalized === 'withdrawn_placed_elsewhere'
+    || normalized.startsWith('placement_')
+  ) {
+    return 'destructive'
+  }
   if (normalized === 'school_rejected') return 'outline'
   return 'warning'
-}
-
-function formatDate(value?: string) {
-  if (!value) return '—'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime())
-    ? '—'
-    : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
 function asList(value: string) {
@@ -615,6 +688,7 @@ function fillJobForm(job?: InternshipRecord) {
       eligibleCoursesText: '',
     }
     chipInput.value = { requiredSkill: '', requiredDocument: '' }
+    jobSkills.value = []
     editingJobId.value = null
     currentJobStep.value = 'basic'
     return
@@ -632,7 +706,7 @@ function fillJobForm(job?: InternshipRecord) {
     barangay: locationParts.barangay,
     locationDetails: locationParts.locationDetails,
     type: job.type || 'On-site',
-    duration: job.duration || '486 hours',
+    duration: job.duration || '',
     hostRequiredHours: job.hostRequiredHours != null ? String(job.hostRequiredHours) : '',
     slotsAvailable: Number(job.slotsAvailable || 1),
     status: normalizeJobStatus(job.status),
@@ -652,7 +726,10 @@ function fillJobForm(job?: InternshipRecord) {
     weeklyHours: job.weeklyHours != null ? String(job.weeklyHours) : '',
     isFlexible: Boolean(job.isFlexible),
     tasks: job.tasks || '',
-    requiredSkillsText: (job.requiredSkills || job.requirements || []).join(', '),
+    requiredSkillsText: (job.skills?.length
+      ? job.skills.map((skill) => skill.name)
+      : job.requiredSkills || job.requirements || []
+    ).join(', '),
     internGains: job.internGains || '',
     requiredDocumentsText: (job.requiredDocuments || []).join(', '),
     requiresResume: job.requiresResume !== false,
@@ -661,19 +738,205 @@ function fillJobForm(job?: InternshipRecord) {
     eligibleCoursesText: (job.eligibleCourses || companyAcceptedCourses.value).join(', '),
   }
   chipInput.value = { requiredSkill: '', requiredDocument: '' }
+  jobSkills.value = (job.skills || []).map((skill) => ({
+    id: skill.id,
+    name: skill.name,
+    category: skill.category || 'Other',
+    status: (skill.status as SelectedSkill['status']) || 'approved',
+    importance: skill.importance || 'required',
+  }))
   editingJobId.value = job.id
   currentJobStep.value = 'basic'
 }
 
+function formFingerprint() {
+  return JSON.stringify({
+    form: jobForm.value,
+    chips: chipInput.value,
+    skills: jobSkills.value,
+    step: currentJobStep.value,
+  })
+}
+
+function buildJobPayload(status: JobStatusValue) {
+  syncScheduleFromSlots(jobForm.value.scheduleSlots)
+  const eligibleCourses = asList(jobForm.value.eligibleCoursesText)
+  const skillNames = jobSkills.value.map((skill) => skill.name)
+  const requiredNames = jobSkills.value
+    .filter((skill) => (skill.importance || 'required') === 'required')
+    .map((skill) => skill.name)
+  const title = jobForm.value.title.trim() || (status === 'draft' ? 'Untitled draft' : '')
+  return {
+    companyId: authStore.user?.uid || '',
+    companyName: companyName.value,
+    industry: companyIndustry.value || undefined,
+    title,
+    description: jobForm.value.description.trim(),
+    location: buildLocation(),
+    type: jobForm.value.type.trim(),
+    duration: jobForm.value.duration.trim(),
+    hostRequiredHours: jobForm.value.hostRequiredHours.trim()
+      ? Number(jobForm.value.hostRequiredHours)
+      : null,
+    slotsAvailable: Number(jobForm.value.slotsAvailable || 1),
+    status,
+    eligibleCourses: eligibleCourses.length ? eligibleCourses : companyAcceptedCourses.value,
+    requirements: requiredNames.length ? requiredNames : skillNames,
+    allowance: jobForm.value.allowance.trim() || null,
+    startDate: jobForm.value.startDate || undefined,
+    endDate: jobForm.value.endDate || undefined,
+    schedule: buildSchedule() || undefined,
+    scheduleType: jobForm.value.scheduleType || undefined,
+    weeklyHours: jobForm.value.weeklyHours ? Number(jobForm.value.weeklyHours) : undefined,
+    scheduleDays: jobForm.value.scheduleDays,
+    timeIn: jobForm.value.scheduleStartTime || undefined,
+    timeOut: jobForm.value.scheduleEndTime || undefined,
+    scheduleSlots: jobForm.value.scheduleSlots,
+    isFlexible: jobForm.value.isFlexible,
+    tasks: jobForm.value.tasks.trim() || undefined,
+    requiredSkills: skillNames,
+    skills: jobSkills.value.map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      category: skill.category,
+      status: skill.status,
+      importance: skill.importance || 'required',
+    })),
+    internGains: jobForm.value.internGains.trim() || undefined,
+    requiredDocuments: ['Endorsement'],
+    requiresResume: false,
+    applicationInstructions: jobForm.value.applicationInstructions.trim() || undefined,
+    contactInfo: companyContactInfo.value || jobForm.value.contactInfo.trim() || undefined,
+  }
+}
+
+function validatePublishFields() {
+  const errors: Record<string, string> = {}
+  if (!jobForm.value.title.trim() || jobForm.value.title.trim() === 'Untitled draft') {
+    errors.title = 'Enter a job title before publishing.'
+  }
+  if (!jobForm.value.locationArea.trim()) {
+    errors.locationArea = 'Choose a Cavite location before publishing.'
+  }
+  if (!jobForm.value.type.trim()) {
+    errors.type = 'Choose a work setup before publishing.'
+  }
+  if (!jobForm.value.duration.trim()) {
+    errors.duration = 'Enter the internship duration before publishing.'
+  }
+  if (!Number(jobForm.value.slotsAvailable || 0)) {
+    errors.slotsAvailable = 'Enter at least one available slot before publishing.'
+  }
+  if (!jobForm.value.description.trim()) {
+    errors.description = 'Add a short role description before publishing.'
+  }
+  return errors
+}
+
+function markFormDirty() {
+  if (suppressAutosave.value || !jobEditorOpen.value) return
+  if (formFingerprint() === lastSavedFingerprint) {
+    if (draftSaveState.value === 'dirty') {
+      draftSaveState.value = isEditingDraft.value && editingJobId.value ? 'saved' : 'idle'
+    }
+    return
+  }
+  draftSaveState.value = 'dirty'
+  // Autosave drafts only — never demote a published job to draft via typing.
+  if (isEditingDraft.value) scheduleDraftAutosave()
+}
+
+function scheduleDraftAutosave() {
+  if (publishingJob.value || savingJob.value) return
+  if (autosaveTimer) clearTimeout(autosaveTimer)
+  autosaveTimer = setTimeout(() => {
+    void saveDraft({ silent: true })
+  }, 3000)
+}
+
+function onJobFieldBlur() {
+  if (!jobEditorOpen.value || !isEditingDraft.value) return
+  if (publishingJob.value || savingJob.value) return
+  if (autosaveTimer) clearTimeout(autosaveTimer)
+  void saveDraft({ silent: true })
+}
+
+async function saveDraft(options: { silent?: boolean; force?: boolean } = {}) {
+  if (!jobEditorOpen.value) return false
+  // Never race a publish/save — that can demote an Open job back to Draft.
+  if (publishingJob.value || savingJob.value) return false
+  // Decision: autosave/create draft only for new postings or existing drafts.
+  // Published jobs with (or without) applications are never rewritten as drafts here.
+  if (!isEditingDraft.value) return false
+  if (draftSaveState.value === 'saving') return false
+  if (!options.force && formFingerprint() === lastSavedFingerprint && editingJobId.value) {
+    draftSaveState.value = 'saved'
+    return true
+  }
+
+  // Keep draft even with empty title (backend stores "Untitled draft").
+  draftSaveState.value = 'saving'
+  try {
+    const payload = buildJobPayload('draft')
+    if (editingJobId.value) {
+      await updateInternship(editingJobId.value, payload)
+    } else {
+      const id = await createInternship(payload)
+      editingJobId.value = id || editingJobId.value
+    }
+    jobForm.value.status = 'draft'
+    draftSavedAt.value = new Date()
+    lastSavedFingerprint = formFingerprint()
+    draftSaveState.value = 'saved'
+    if (!options.silent) {
+      success('Draft saved', { description: 'You can leave and continue later.' })
+    }
+    return true
+  } catch (caughtError) {
+    draftSaveState.value = 'error'
+    if (!options.silent) {
+      error(caughtError, { fallback: 'Unable to save draft.' })
+    }
+    return false
+  }
+}
+
 async function openJobEditor() {
   jobEditorOpen.value = true
+  publishFieldErrors.value = {}
+  suppressAutosave.value = true
   await nextTick()
+  lastSavedFingerprint = formFingerprint()
+  draftSaveState.value = editingJobId.value ? 'saved' : 'idle'
+  draftSavedAt.value = editingJobId.value
+    ? internships.value.find((job) => job.id === editingJobId.value)?.updatedAt
+      ? new Date(String(internships.value.find((job) => job.id === editingJobId.value)?.updatedAt))
+      : null
+    : null
+  suppressAutosave.value = false
   jobEditorRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
-function closeJobEditor() {
+async function closeJobEditor() {
+  if (draftSaveState.value === 'dirty' || draftSaveState.value === 'saving') {
+    if (isEditingDraft.value) {
+      const leave = window.confirm('You have unsaved changes. Save draft before closing?')
+      if (leave) {
+        const saved = await saveDraft({ silent: true, force: true })
+        if (!saved && !window.confirm('Draft could not be saved. Close anyway?')) return
+      } else if (!window.confirm('Close without saving your latest changes?')) {
+        return
+      }
+    } else if (!window.confirm('You have unsaved changes. Close without saving?')) {
+      return
+    }
+  }
+  if (autosaveTimer) clearTimeout(autosaveTimer)
   jobEditorOpen.value = false
+  publishFieldErrors.value = {}
+  draftSaveState.value = 'idle'
   fillJobForm()
+  lastSavedFingerprint = formFingerprint()
 }
 
 async function openCreateJobDialog() {
@@ -709,84 +972,219 @@ async function editSelectedJobFromView() {
   await openEditJobDialog(job)
 }
 
+function slotsFilledLabel(job: Pick<InternshipRecord, 'filledSlots' | 'slotsAvailable' | 'slotsRemaining'>) {
+  const total = Math.max(0, Number(job.slotsAvailable) || 0)
+  const remaining = job.slotsRemaining
+  const filled =
+    job.filledSlots != null
+      ? Math.max(0, Number(job.filledSlots) || 0)
+      : remaining == null
+        ? 0
+        : Math.max(0, total - Number(remaining))
+  if (!total) return '0 slots'
+  return `${Math.min(filled, total)} of ${total} filled`
+}
+
+async function requestJobStatusChange(job: JobRow | InternshipRecord, nextStatus: string) {
+  const status = normalizeJobStatus(nextStatus)
+  const previous = normalizeJobStatus(job.status)
+  if (previous === status) return
+
+  const applicationCount =
+    'applicationCount' in job
+      ? Number(job.applicationCount) || 0
+      : applications.value.filter((application) => application.internshipId === job.id).length
+
+  if (previous === 'draft' && status === 'active') {
+    await openEditJobDialog(job as InternshipRecord)
+    await publishJob()
+    return
+  }
+
+  if (status === 'draft' && previous !== 'draft' && applicationCount > 0) {
+    error('Jobs with applications cannot be converted back to a draft.')
+    return
+  }
+
+  if (status === 'closed' && applicationCount > 0) {
+    pendingStatusChange.value = {
+      jobId: job.id,
+      title: job.title || 'Untitled job',
+      applicationCount,
+      next: status,
+      previous,
+    }
+    return
+  }
+
+  void applyJobStatusChange(job.id, previous, status)
+}
+
+async function applyJobStatusChange(jobId: string, previous: JobStatusValue, status: JobStatusValue) {
+  statusUpdatingJobId.value = jobId
+  internships.value = internships.value.map((item) =>
+    item.id === jobId ? { ...item, status } : item,
+  )
+  if (selectedJob.value?.id === jobId) {
+    selectedJob.value = { ...selectedJob.value, status }
+  }
+
+  try {
+    await updateInternship(jobId, { status })
+    success('Status updated', {
+      description: `Job marked as ${jobStatusLabel(status)}.`,
+    })
+  } catch (caughtError) {
+    internships.value = internships.value.map((item) =>
+      item.id === jobId ? { ...item, status: previous } : item,
+    )
+    if (selectedJob.value?.id === jobId) {
+      selectedJob.value = { ...selectedJob.value, status: previous }
+    }
+    error(caughtError, { fallback: 'Unable to update job status. Previous status restored.' })
+  } finally {
+    statusUpdatingJobId.value = null
+    pendingStatusChange.value = null
+  }
+}
+
+async function confirmPendingStatusChange() {
+  if (!pendingStatusChange.value) return
+  const { jobId, previous, next } = pendingStatusChange.value
+  await applyJobStatusChange(jobId, previous, next)
+}
+
 async function refreshApplications() {
   loadingApplications.value = false
 }
 
-async function saveJob() {
+async function publishJob() {
+  if (publishingJob.value || savingJob.value) return
+  if (autosaveTimer) clearTimeout(autosaveTimer)
+  publishingJob.value = true
   savingJob.value = true
+  publishFieldErrors.value = {}
   try {
     const scheduleError = jobForm.value.scheduleSlots.length
       ? validateSlots(jobForm.value.scheduleSlots)
       : null
     if (scheduleError) {
       error(scheduleError)
-      savingJob.value = false
       return
     }
-    syncScheduleFromSlots(jobForm.value.scheduleSlots)
-    const eligibleCourses = asList(jobForm.value.eligibleCoursesText)
-    const requiredSkills = asList(jobForm.value.requiredSkillsText)
-    const payload = {
-      companyId: authStore.user?.uid || '',
-      companyName: companyName.value,
-      industry: companyIndustry.value || undefined,
-      title: jobForm.value.title.trim(),
-      description: jobForm.value.description.trim(),
-      location: buildLocation(),
-      type: jobForm.value.type.trim(),
-      duration: jobForm.value.duration.trim(),
-      hostRequiredHours: jobForm.value.hostRequiredHours.trim()
-        ? Number(jobForm.value.hostRequiredHours)
-        : null,
-      slotsAvailable: Number(jobForm.value.slotsAvailable || 1),
-      status: jobForm.value.status,
-      eligibleCourses: eligibleCourses.length ? eligibleCourses : companyAcceptedCourses.value,
-      requirements: requiredSkills,
-      allowance: jobForm.value.allowance.trim() || null,
-      startDate: jobForm.value.startDate || undefined,
-      endDate: jobForm.value.endDate || undefined,
-      schedule: buildSchedule() || undefined,
-      scheduleType: jobForm.value.scheduleType || undefined,
-      weeklyHours: jobForm.value.weeklyHours ? Number(jobForm.value.weeklyHours) : undefined,
-      scheduleDays: jobForm.value.scheduleDays,
-      timeIn: jobForm.value.scheduleStartTime || undefined,
-      timeOut: jobForm.value.scheduleEndTime || undefined,
-      scheduleSlots: jobForm.value.scheduleSlots,
-      isFlexible: jobForm.value.isFlexible,
-      tasks: jobForm.value.tasks.trim() || undefined,
-      requiredSkills: requiredSkills,
-      internGains: jobForm.value.internGains.trim() || undefined,
-      requiredDocuments: ['Endorsement'],
-      requiresResume: false,
-      applicationInstructions: jobForm.value.applicationInstructions.trim() || undefined,
-      contactInfo: companyContactInfo.value || jobForm.value.contactInfo.trim() || undefined,
+
+    const fieldErrors = validatePublishFields()
+    publishFieldErrors.value = fieldErrors
+    if (Object.keys(fieldErrors).length) {
+      error('Complete the required fields before publishing.')
+      const firstKey = Object.keys(fieldErrors)[0]
+      if (firstKey === 'description' || firstKey === 'tasks') currentJobStep.value = 'details'
+      else if (firstKey === 'duration' || firstKey === 'slotsAvailable') currentJobStep.value = 'details'
+      else if (firstKey === 'title' || firstKey === 'locationArea' || firstKey === 'type') currentJobStep.value = 'basic'
+      return
     }
 
+    const payload = buildJobPayload('active')
     if (editingJobId.value) {
       await updateInternship(editingJobId.value, payload)
     } else {
       await createInternship(payload)
     }
 
-    success(editingJobId.value ? 'Job updated.' : 'Job created.', {
-      description: 'Your posted jobs list has been refreshed.',
+    success('Job published.', {
+      description: 'Students can now find this opening.',
     })
-    closeJobEditor()
+    if (autosaveTimer) clearTimeout(autosaveTimer)
+    draftSaveState.value = 'idle'
+    jobEditorOpen.value = false
+    fillJobForm()
+    lastSavedFingerprint = formFingerprint()
   } catch (caughtError) {
+    const maybe = caughtError as { errors?: Record<string, string[]>; message?: string }
+    if (maybe?.errors) {
+      const mapped: Record<string, string> = {}
+      for (const [key, messages] of Object.entries(maybe.errors)) {
+        mapped[key === 'slots_available' ? 'slotsAvailable' : key === 'location' ? 'locationArea' : key] =
+          messages[0] || 'Invalid value'
+      }
+      publishFieldErrors.value = mapped
+    }
     error(caughtError, {
-      fallback: 'Unable to save the job posting.',
+      fallback: 'Unable to publish the job posting.',
     })
+  } finally {
+    savingJob.value = false
+    publishingJob.value = false
+  }
+}
+
+/** Save edits to an already-published job without changing status to draft. */
+async function savePublishedJob() {
+  if (savingJob.value || publishingJob.value || !editingJobId.value) return
+  savingJob.value = true
+  publishFieldErrors.value = {}
+  try {
+    const scheduleError = jobForm.value.scheduleSlots.length
+      ? validateSlots(jobForm.value.scheduleSlots)
+      : null
+    if (scheduleError) {
+      error(scheduleError)
+      return
+    }
+    const fieldErrors = validatePublishFields()
+    publishFieldErrors.value = fieldErrors
+    if (Object.keys(fieldErrors).length) {
+      error('Complete the required fields before saving.')
+      return
+    }
+    const status = normalizeJobStatus(jobForm.value.status)
+    await updateInternship(editingJobId.value, buildJobPayload(status === 'draft' ? 'active' : status))
+    success('Job updated.', { description: 'Your changes have been saved.' })
+    draftSaveState.value = 'idle'
+    jobEditorOpen.value = false
+    fillJobForm()
+    lastSavedFingerprint = formFingerprint()
+  } catch (caughtError) {
+    error(caughtError, { fallback: 'Unable to save the job posting.' })
   } finally {
     savingJob.value = false
   }
 }
 
+async function saveJob() {
+  if (isEditingDraft.value) await publishJob()
+  else await savePublishedJob()
+}
+
+async function publishDraftFromTable(job: JobRow) {
+  if (publishingJob.value) return
+  await openEditJobDialog(job)
+  await nextTick()
+  await publishJob()
+}
+
+function formatSavedAt(value?: unknown) {
+  if (!value) return 'Not saved yet'
+  const date = new Date(String(value))
+  if (Number.isNaN(date.getTime())) return 'Not saved yet'
+  return `Saved ${date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+}
+
+function askDeleteJob(job: JobRow) {
+  const isDraft = normalizeJobStatus(job.status) === 'draft'
+  pendingDeleteJob.value = {
+    id: job.id,
+    title: job.title || (isDraft ? 'Untitled draft' : 'Untitled job'),
+    applicationCount: job.applicationCount,
+    isDraft,
+  }
+}
+
 async function confirmDeleteJob() {
-  if (!pendingDeleteJobId.value) return
-  deletingJobId.value = pendingDeleteJobId.value
+  if (!pendingDeleteJob.value) return
+  deletingJobId.value = pendingDeleteJob.value.id
   try {
-    await deleteInternship(pendingDeleteJobId.value)
+    await deleteInternship(pendingDeleteJob.value.id)
     success('Job deleted.', {
       description: 'The posting has been removed.',
     })
@@ -796,9 +1194,28 @@ async function confirmDeleteJob() {
     })
   } finally {
     deletingJobId.value = null
-    pendingDeleteJobId.value = null
+    pendingDeleteJob.value = null
   }
 }
+
+const deleteJobDialogDescription = computed(() => {
+  const job = pendingDeleteJob.value
+  if (!job) return ''
+  if (job.isDraft) {
+    return `Delete draft “${job.title}”? This permanently removes the unfinished posting. This cannot be undone.`
+  }
+  const base = `Delete “${job.title}”? This permanently removes the posting from your workspace.`
+  if (job.applicationCount > 0) {
+    return `${base} This job has ${job.applicationCount} application${job.applicationCount === 1 ? '' : 's'}. Related applicant records may be affected.`
+  }
+  return base
+})
+
+const statusChangeDialogDescription = computed(() => {
+  const pending = pendingStatusChange.value
+  if (!pending) return ''
+  return `Close “${pending.title}”? New students will no longer be able to apply. Your ${pending.applicationCount} existing applicant${pending.applicationCount === 1 ? '' : 's'} will keep their current progress and will not be removed.`
+})
 
 function openApplicantProfile(application: ApplicationRecord, mode: 'profile' | 'tracker' = 'profile') {
   selectedApplicant.value = application
@@ -809,11 +1226,30 @@ function openApplicantProfile(application: ApplicationRecord, mode: 'profile' | 
 async function updateApplicant(applicationId: string, status: ApplicantAction) {
   processingApplicantId.value = applicationId
   try {
+    const application = applications.value.find((item) => item.id === applicationId)
     await updateApplicationStatus(applicationId, status)
     await refreshApplications()
     success(status === 'accepted' ? 'Applicant accepted.' : 'Applicant rejected.', {
       description: 'The application status has been updated.',
     })
+
+    // Decision: auto-mark Filled only when accepting fills the last remaining slot.
+    // We do not rewrite Open jobs just because the list page loaded.
+    if (status === 'accepted' && application?.internshipId) {
+      const job = internships.value.find((item) => item.id === application.internshipId)
+      if (job && normalizeJobStatus(job.status) === 'active') {
+        const total = Math.max(0, Number(job.slotsAvailable) || 0)
+        const remainingBefore =
+          job.slotsRemaining != null
+            ? Number(job.slotsRemaining)
+            : job.filledSlots != null
+              ? Math.max(0, total - Number(job.filledSlots))
+              : null
+        if (total > 0 && remainingBefore === 1) {
+          await applyJobStatusChange(job.id, 'active', 'filled')
+        }
+      }
+    }
   } catch (caughtError) {
     error(caughtError, {
       fallback: 'Unable to update applicant status.',
@@ -868,12 +1304,82 @@ onMounted(() => {
     .catch(() => {
       kpi.value = null
     })
+
+  void loadCompanyCertificates()
 })
+
+async function loadCompanyCertificates() {
+  certificatesLoading.value = true
+  certificatesError.value = null
+  try {
+    certificates.value = await listCertificates()
+  } catch (error) {
+    certificates.value = []
+    certificatesError.value = error instanceof Error ? error.message : 'Unable to load certificates.'
+  } finally {
+    certificatesLoading.value = false
+  }
+}
+
+async function viewCompanyCertificate(certificateId: string) {
+  certificateActionId.value = certificateId
+  try {
+    await viewCertificateHtml(certificateId)
+  } catch (err) {
+    error(err instanceof Error ? err.message : 'Unable to open certificate.')
+  } finally {
+    certificateActionId.value = null
+  }
+}
+
+async function printCompanyCertificate(certificateId: string) {
+  certificateActionId.value = certificateId
+  try {
+    await printCertificateHtml(certificateId)
+  } catch (err) {
+    error(err instanceof Error ? err.message : 'Unable to print certificate.')
+  } finally {
+    certificateActionId.value = null
+  }
+}
 
 onUnmounted(() => {
   unsubscribeInternships?.()
   unsubscribeApplications?.()
+  if (autosaveTimer) clearTimeout(autosaveTimer)
+  window.removeEventListener('beforeunload', onBeforeUnloadGuard)
 })
+
+function onBeforeUnloadGuard(event: BeforeUnloadEvent) {
+  if (!jobEditorOpen.value) return
+  if (draftSaveState.value !== 'dirty' && draftSaveState.value !== 'saving') return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+window.addEventListener('beforeunload', onBeforeUnloadGuard)
+
+onBeforeRouteLeave(() => {
+  if (!jobEditorOpen.value) return true
+  if (draftSaveState.value !== 'dirty' && draftSaveState.value !== 'saving') return true
+  return window.confirm('You have unsaved draft changes. Leave this page anyway?')
+})
+
+watch(
+  jobForm,
+  () => {
+    markFormDirty()
+  },
+  { deep: true },
+)
+
+watch(
+  jobSkills,
+  () => {
+    markFormDirty()
+  },
+  { deep: true },
+)
 
 watch(
   () => jobForm.value.locationArea,
@@ -958,8 +1464,16 @@ watch(
 
         <section v-if="kpi" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
-            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Placement rate</p>
-            <p class="mt-2 text-2xl font-semibold text-foreground">{{ kpi.placementRate }}%</p>
+            <p class="inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Placement rate
+              <span
+                class="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-border text-[10px] font-semibold normal-case tracking-normal"
+                title="Share of your students or applicants who reached an accepted placement."
+              >?</span>
+            </p>
+            <p class="mt-2 text-2xl font-semibold text-foreground">
+              {{ kpi.placementRate == null ? '—' : `${kpi.placementRate}%` }}
+            </p>
           </div>
           <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
             <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Agreements</p>
@@ -967,11 +1481,73 @@ watch(
           </div>
           <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
             <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Avg approved OJT hrs</p>
-            <p class="mt-2 text-2xl font-semibold text-foreground">{{ kpi.avgApprovedOjtHours }}</p>
+            <p class="mt-2 text-2xl font-semibold text-foreground">
+              {{ kpi.avgApprovedOjtHours == null ? '—' : kpi.avgApprovedOjtHours }}
+            </p>
           </div>
           <div class="rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
-            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Avg assessment score</p>
-            <p class="mt-2 text-2xl font-semibold text-foreground">{{ kpi.avgAssessmentScore }}</p>
+            <p class="inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Avg assessment score
+              <span
+                class="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-border text-[10px] font-semibold normal-case tracking-normal"
+                title="Average overall assessment score on a 0–100 scale."
+              >?</span>
+            </p>
+            <p class="mt-2 text-2xl font-semibold text-foreground">
+              {{ kpi.avgAssessmentScore == null ? '—' : kpi.avgAssessmentScore }}
+            </p>
+          </div>
+        </section>
+
+        <section class="rounded-2xl border border-border bg-card shadow-sm">
+          <div class="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
+            <div>
+              <h3 class="text-lg font-semibold text-foreground">Certificates</h3>
+              <p class="text-sm text-muted-foreground">Issued certificates for interns hosted by your company.</p>
+            </div>
+            <Button size="sm" variant="outline" :disabled="certificatesLoading" @click="void loadCompanyCertificates()">
+              Refresh
+            </Button>
+          </div>
+          <div class="divide-y divide-border">
+            <div v-if="certificatesLoading" class="space-y-2 px-5 py-4">
+              <Skeleton class="h-4 w-48" />
+              <Skeleton class="h-3 w-64" />
+            </div>
+            <p v-else-if="certificatesError" class="px-5 py-4 text-sm text-destructive">{{ certificatesError }}</p>
+            <p v-else-if="certificates.length === 0" class="px-5 py-4 text-sm text-muted-foreground">
+              No certificates issued yet for your company’s placements.
+            </p>
+            <div
+              v-for="certificate in certificates"
+              :key="certificate.id"
+              class="flex flex-wrap items-center justify-between gap-3 px-5 py-4"
+            >
+              <div class="min-w-0">
+                <p class="font-medium text-foreground">{{ toTitleCaseName(certificate.studentName) || 'Intern' }}</p>
+                <p class="text-sm text-muted-foreground">
+                  {{ certificate.internshipTitle || 'Internship' }}
+                  <span v-if="certificate.issuedAt"> · Issued {{ formatDate(certificate.issuedAt) }}</span>
+                </p>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  :disabled="certificateActionId === certificate.id"
+                  @click="void viewCompanyCertificate(certificate.id)"
+                >
+                  View Certificate
+                </Button>
+                <Button
+                  size="sm"
+                  :disabled="certificateActionId === certificate.id"
+                  @click="void printCompanyCertificate(certificate.id)"
+                >
+                  Print Certificate
+                </Button>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -998,7 +1574,7 @@ watch(
                   class="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
                 >
                   <div class="min-w-0">
-                    <p class="font-medium text-foreground">{{ item.studentName || 'Unnamed applicant' }}</p>
+                    <p class="font-medium text-foreground">{{ toTitleCaseName(item.studentName) || 'Unnamed applicant' }}</p>
                     <p class="truncate text-sm text-muted-foreground">
                       {{ item.internshipTitle || 'Untitled role' }} · {{ item.schoolName || 'School' }}
                     </p>
@@ -1059,10 +1635,28 @@ watch(
               <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
                   <h3 class="text-xl font-semibold text-foreground">
-                    {{ editingJobId ? 'Edit Job Posting' : 'Create Job Posting' }}
+                    {{
+                      isEditingDraft
+                        ? editingJobId
+                          ? 'Continue draft'
+                          : 'Post a job'
+                        : 'Edit Job Posting'
+                    }}
                   </h3>
                   <p class="text-sm text-muted-foreground">
-                    Build a complete internship posting with the role fit, Cavite location, accepted programs, and contact flow schools need to review.
+                    {{
+                      isEditingDraft
+                        ? 'Drafts autosave as you type. Only your company can see them until you publish.'
+                        : 'Update this posting. Published jobs with applications cannot be converted back to a draft.'
+                    }}
+                  </p>
+                  <p
+                    v-if="draftSaveLabel"
+                    class="mt-2 text-xs font-medium"
+                    :class="draftSaveState === 'error' ? 'text-destructive' : 'text-muted-foreground'"
+                    aria-live="polite"
+                  >
+                    {{ draftSaveLabel }}
                   </p>
                 </div>
                 <Button type="button" variant="outline" class="self-start" @click="closeJobEditor">
@@ -1093,14 +1687,21 @@ watch(
                   <div class="sm:col-span-2">
                     <p class="text-sm font-semibold text-foreground">Basic Information</p>
                     <p class="mt-1 text-sm text-muted-foreground">
-                      Start with the subject or title, then confirm the {{ hostOrgLabel.toLowerCase() }} profile details and Cavite location.
+                      Start with the job title, then confirm the {{ hostOrgLabel.toLowerCase() }} profile details and Cavite location.
                     </p>
                   </div>
                   <FormItem class="sm:col-span-2">
-                    <FormLabel for="jobTitle">Subject or Title</FormLabel>
+                    <FormLabel for="jobTitle">Job title</FormLabel>
                     <FormControl>
-                      <Input id="jobTitle" v-model="jobForm.title" placeholder="Software Engineering Intern" />
+                      <Input
+                        id="jobTitle"
+                        v-model="jobForm.title"
+                        placeholder="Software Engineering Intern"
+                        :aria-invalid="!!publishFieldErrors.title"
+                        @blur="onJobFieldBlur"
+                      />
                     </FormControl>
+                    <p v-if="publishFieldErrors.title" class="mt-1 text-xs text-destructive">{{ publishFieldErrors.title }}</p>
                   </FormItem>
                   <FormItem>
                     <FormLabel for="jobCompanyName">{{ hostOrgLabel }} Name</FormLabel>
@@ -1123,30 +1724,35 @@ watch(
                           :key="option.value"
                           type="button"
                           class="rounded-2xl border p-4 text-left transition"
-                          :class="jobForm.type === option.value ? 'border-primary/40 bg-accent shadow-sm' : 'border-border bg-muted hover:border-border'"
-                          @click="jobForm.type = option.value"
+                          :class="[
+                            jobForm.type === option.value ? 'border-primary/40 bg-accent shadow-sm' : 'border-border bg-muted hover:border-border',
+                            publishFieldErrors.type ? 'ring-1 ring-destructive/40' : '',
+                          ]"
+                          @click="jobForm.type = option.value; onJobFieldBlur()"
                         >
                           <p class="text-sm font-semibold text-foreground">{{ option.label }}</p>
                           <p class="mt-1 text-xs leading-5 text-muted-foreground">{{ option.description }}</p>
                         </button>
                       </div>
                     </FormControl>
+                    <p v-if="publishFieldErrors.type" class="mt-1 text-xs text-destructive">{{ publishFieldErrors.type }}</p>
                   </FormItem>
                   <FormItem>
                     <FormLabel for="jobLocationArea">City or Municipality in Cavite</FormLabel>
                     <FormControl>
-                      <Select id="jobLocationArea" v-model="jobForm.locationArea">
+                      <Select id="jobLocationArea" v-model="jobForm.locationArea" @blur="onJobFieldBlur">
                         <option value="">Select a location</option>
                         <optgroup v-for="group in caviteLocationGroups" :key="group.label" :label="group.label">
                           <option v-for="option in group.options" :key="option" :value="option">{{ option }}</option>
                         </optgroup>
                       </Select>
                     </FormControl>
+                    <p v-if="publishFieldErrors.locationArea" class="mt-1 text-xs text-destructive">{{ publishFieldErrors.locationArea }}</p>
                   </FormItem>
                   <FormItem>
                     <FormLabel for="jobBarangay">Barangay</FormLabel>
                     <FormControl>
-                      <Select id="jobBarangay" v-model="jobForm.barangay" :disabled="!jobForm.locationArea">
+                      <Select id="jobBarangay" v-model="jobForm.barangay" :disabled="!jobForm.locationArea" @blur="onJobFieldBlur">
                         <option value="">{{ availableBarangays.length ? 'Select a barangay' : 'Select a city or municipality first' }}</option>
                         <option v-for="option in availableBarangays" :key="option" :value="option">{{ option }}</option>
                       </Select>
@@ -1155,7 +1761,12 @@ watch(
                   <FormItem class="sm:col-span-2">
                     <FormLabel for="jobLocationDetails">Specific Address or Landmark</FormLabel>
                     <FormControl>
-                      <Input id="jobLocationDetails" v-model="jobForm.locationDetails" placeholder="Building, street, or landmark" />
+                      <Input
+                        id="jobLocationDetails"
+                        v-model="jobForm.locationDetails"
+                        placeholder="Building, street, or landmark"
+                        @blur="onJobFieldBlur"
+                      />
                     </FormControl>
                   </FormItem>
                 </section>
@@ -1169,37 +1780,70 @@ watch(
                   <FormItem>
                     <FormLabel for="jobDuration">Duration</FormLabel>
                     <FormControl>
-                      <Select id="jobDuration" v-model="jobForm.duration">
-                        <option v-for="option in commonDurationOptions" :key="option" :value="option">{{ option }}</option>
-                      </Select>
-                    </FormControl>
-                  </FormItem>
-                  <FormItem class="sm:col-span-2 lg:col-span-2">
-                    <FormLabel for="jobHostHours">Hours offered by {{ hostOrgLabel.toLowerCase() }} (optional)</FormLabel>
-                    <FormControl>
                       <Input
-                        id="jobHostHours"
-                        v-model="jobForm.hostRequiredHours"
-                        type="number"
-                        min="1"
-                        max="10000"
-                        placeholder="e.g. 300"
+                        id="jobDuration"
+                        v-model="jobForm.duration"
+                        list="job-duration-suggestions"
+                        placeholder="e.g. 120"
+                        @blur="onJobFieldBlur"
                       />
+                      <datalist id="job-duration-suggestions">
+                        <option v-for="option in commonDurationOptions" :key="option" :value="option" />
+                      </datalist>
                     </FormControl>
-                    <p class="mt-1 text-xs text-muted-foreground">
-                      Optional. If this differs from the student’s school course requirement, a hours agreement is created when they apply. Leave blank for no comparison. Max 10,000.
-                    </p>
+                    <p v-if="publishFieldErrors.duration" class="mt-1 text-xs text-destructive">{{ publishFieldErrors.duration }}</p>
                   </FormItem>
+                  <details
+                    class="sm:col-span-2 lg:col-span-3 rounded-2xl border border-border bg-muted/40 px-4 py-3"
+                    :open="hostHoursAdvancedOpen || !!jobForm.hostRequiredHours"
+                    @toggle="hostHoursAdvancedOpen = ($event.target as HTMLDetailsElement).open"
+                  >
+                    <summary class="cursor-pointer text-sm font-semibold text-foreground">Advanced</summary>
+                    <FormItem class="mt-3">
+                      <FormLabel for="jobHostHours">Different hours from the school requirement? (optional)</FormLabel>
+                      <FormControl>
+                        <Input
+                          id="jobHostHours"
+                          v-model="jobForm.hostRequiredHours"
+                          type="number"
+                          min="1"
+                          max="10000"
+                          placeholder="e.g. 300"
+                        />
+                      </FormControl>
+                      <p class="mt-1 text-xs text-muted-foreground">
+                        Optional. If this differs from the student’s school course requirement, an hours agreement is created when they apply. Leave blank for no comparison. Max 10,000.
+                      </p>
+                    </FormItem>
+                  </details>
                   <FormItem>
                     <FormLabel for="jobSlots">Slots</FormLabel>
                     <FormControl>
-                      <Input id="jobSlots" v-model.number="jobForm.slotsAvailable" type="number" min="1" />
+                      <Input
+                        id="jobSlots"
+                        v-model.number="jobForm.slotsAvailable"
+                        type="number"
+                        min="1"
+                        @blur="onJobFieldBlur"
+                      />
                     </FormControl>
+                    <p v-if="publishFieldErrors.slotsAvailable" class="mt-1 text-xs text-destructive">{{ publishFieldErrors.slotsAvailable }}</p>
                   </FormItem>
                   <FormItem>
                     <FormLabel for="jobAllowance">Allowance (optional)</FormLabel>
                     <FormControl>
-                      <Input id="jobAllowance" v-model="jobForm.allowance" placeholder="PHP 5,000 / month" />
+                      <div class="relative">
+                        <span
+                          class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground"
+                          aria-hidden="true"
+                        >₱</span>
+                        <Input
+                          id="jobAllowance"
+                          v-model="jobForm.allowance"
+                          class="pl-9"
+                          placeholder="5,000 / month"
+                        />
+                      </div>
                     </FormControl>
                     <p class="mt-1 text-xs text-muted-foreground">
                       Leave blank if this posting has no allowance.
@@ -1220,24 +1864,6 @@ watch(
                       <div class="relative">
                         <CalendarDays class="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                         <Input id="jobEndDate" v-model="jobForm.endDate" type="date" class="pl-10" />
-                      </div>
-                    </FormControl>
-                  </FormItem>
-                  <FormItem class="sm:col-span-2 lg:col-span-3">
-                    <FormLabel>Status</FormLabel>
-                    <FormControl>
-                      <div class="grid gap-3 sm:grid-cols-3">
-                        <button
-                          v-for="option in statusOptions"
-                          :key="option.value"
-                          type="button"
-                          class="rounded-2xl border p-4 text-left transition"
-                          :class="jobForm.status === option.value ? 'border-primary/40 bg-accent shadow-sm' : 'border-border bg-muted hover:border-border'"
-                          @click="jobForm.status = option.value as JobFormState['status']"
-                        >
-                          <p class="text-sm font-semibold text-foreground">{{ option.label }}</p>
-                          <p class="mt-1 text-xs leading-5 text-muted-foreground">{{ option.description }}</p>
-                        </button>
                       </div>
                     </FormControl>
                   </FormItem>
@@ -1292,10 +1918,13 @@ watch(
                         id="jobDescription"
                         v-model="jobForm.description"
                         rows="4"
-                        class="flex min-h-[110px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        class="flex min-h-[110px] w-full rounded-md border border-input bg-background px-3 py-2 text-[16px] ring-offset-background md:text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        :class="publishFieldErrors.description ? 'border-destructive' : ''"
                         placeholder="Describe the role, team, and internship environment."
+                        @blur="onJobFieldBlur"
                       />
                     </FormControl>
+                    <p v-if="publishFieldErrors.description" class="mt-1 text-xs text-destructive">{{ publishFieldErrors.description }}</p>
                   </FormItem>
                   <FormItem class="sm:col-span-2">
                     <FormLabel for="jobTasks">Key Tasks and Responsibilities</FormLabel>
@@ -1304,44 +1933,26 @@ watch(
                         id="jobTasks"
                         v-model="jobForm.tasks"
                         rows="4"
-                        class="flex min-h-[110px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        class="flex min-h-[110px] w-full rounded-md border border-input bg-background px-3 py-2 text-[16px] ring-offset-background md:text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                         placeholder="List the core tasks the intern will handle."
                       />
                     </FormControl>
                   </FormItem>
                   <FormItem class="sm:col-span-2">
-                    <FormLabel for="jobRequiredSkills">Required Skills or Tools</FormLabel>
+                    <FormLabel>Skills for this role</FormLabel>
                     <FormControl>
                       <div class="space-y-4 rounded-2xl border border-border bg-muted/80 p-4">
-                        <div class="flex flex-col gap-3 sm:flex-row">
-                          <Input
-                            id="jobRequiredSkills"
-                            v-model="chipInput.requiredSkill"
-                            class="bg-card"
-                            placeholder="Add a skill like Communication, Git, or Excel"
-                            @keydown.enter.prevent="commitChipInput('requiredSkill')"
-                          />
-                          <Button type="button" variant="outline" class="shrink-0 bg-card" @click="commitChipInput('requiredSkill')">
-                            Add Skill
-                          </Button>
-                        </div>
-                        <div v-if="asList(jobForm.requiredSkillsText).length" class="flex flex-wrap gap-2">
-                          <span
-                            v-for="skill in asList(jobForm.requiredSkillsText)"
-                            :key="skill"
-                            class="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground shadow-sm"
-                          >
-                            {{ skill }}
-                            <button
-                              type="button"
-                              class="rounded-full px-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                              @click="removeListItem('requiredSkillsText', skill)"
-                            >
-                              x
-                            </button>
-                          </span>
-                        </div>
-                        <p v-else class="text-sm text-muted-foreground">No required skills added yet.</p>
+                        <p class="text-sm text-muted-foreground">
+                          Choose up to 10 skills from the shared list. Mark which ones are required and which are nice to have.
+                        </p>
+                        <SkillChips
+                          :skills="jobSkills"
+                          mode="job"
+                          empty-text="No skills selected yet."
+                        />
+                        <Button type="button" variant="outline" class="bg-card" @click="skillsWizardOpen = true">
+                          {{ jobSkills.length ? 'Edit skills' : 'Add skills' }}
+                        </Button>
                       </div>
                     </FormControl>
                   </FormItem>
@@ -1352,7 +1963,7 @@ watch(
                         id="jobInternGains"
                         v-model="jobForm.internGains"
                         rows="3"
-                        class="flex min-h-[90px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        class="flex min-h-[90px] w-full rounded-md border border-input bg-background px-3 py-2 text-[16px] ring-offset-background md:text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                         placeholder="Describe the mentorship, tools, and experience the intern will gain."
                       />
                     </FormControl>
@@ -1361,17 +1972,22 @@ watch(
                 </section>
 
                 <section v-else-if="currentJobStep === 'programs'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
-                  <div class="sm:col-span-2">
-                    <p class="text-sm font-semibold text-foreground">Accepted Programs</p>
-                    <p class="mt-1 text-sm text-muted-foreground">
-                      These courses come from the {{ hostOrgLabel.toLowerCase() }} account so you only choose which of your accepted programs apply to this post.
-                    </p>
-                  </div>
-                  <div
-                    v-if="companyAcceptedCourses.length"
-                    class="rounded-2xl border border-border bg-accent px-4 py-3 text-sm text-foreground"
-                  >
-                    {{ hostOrgLabel }} profile courses: {{ companyAcceptedCourses.join(', ') }}
+                  <div class="sm:col-span-2 flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p class="text-sm font-semibold text-foreground">Accepted Programs</p>
+                      <p class="mt-1 text-sm text-muted-foreground">
+                        Select the courses this job is open to. These come from your {{ hostOrgLabel.toLowerCase() }} profile.
+                      </p>
+                    </div>
+                    <Button
+                      v-if="companyAcceptedCourses.length"
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      @click="selectAllAcceptedCourses"
+                    >
+                      Select all
+                    </Button>
                   </div>
                   <div v-if="companyAcceptedCourses.length" class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     <button
@@ -1379,20 +1995,31 @@ watch(
                       :key="course"
                       type="button"
                       class="rounded-2xl border p-4 text-left transition"
-                      :class="asList(jobForm.eligibleCoursesText).includes(course) ? 'border-primary/40 bg-accent shadow-sm' : 'border-border bg-muted hover:border-border'"
+                      :class="asList(jobForm.eligibleCoursesText).includes(course)
+                        ? 'border-primary bg-accent shadow-sm ring-2 ring-primary/30'
+                        : 'border-border bg-muted hover:border-border'"
+                      :aria-pressed="asList(jobForm.eligibleCoursesText).includes(course)"
                       @click="asList(jobForm.eligibleCoursesText).includes(course) ? removeListItem('eligibleCoursesText', course) : addListItem('eligibleCoursesText', course)"
                     >
-                      <p class="text-sm font-semibold text-foreground">{{ course }}</p>
+                      <div class="flex items-start justify-between gap-2">
+                        <p class="text-sm font-semibold text-foreground">{{ course }}</p>
+                        <span
+                          class="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border"
+                          :class="asList(jobForm.eligibleCoursesText).includes(course)
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-border bg-background'"
+                          aria-hidden="true"
+                        >
+                          <CheckCircle2 v-if="asList(jobForm.eligibleCoursesText).includes(course)" class="h-3 w-3" />
+                        </span>
+                      </div>
                       <p class="mt-1 text-xs text-muted-foreground">
-                        {{ asList(jobForm.eligibleCoursesText).includes(course) ? 'Included in this post' : 'Click to include this course' }}
+                        {{ asList(jobForm.eligibleCoursesText).includes(course) ? 'Selected' : 'Click to select' }}
                       </p>
                     </button>
                   </div>
                   <div v-else class="rounded-2xl border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 px-4 py-3 text-sm text-amber-900">
                     No accepted courses are saved on the {{ hostOrgLabel.toLowerCase() }} account yet. Add them in settings first.
-                  </div>
-                  <div v-if="asList(jobForm.eligibleCoursesText).length" class="rounded-2xl border border-border bg-muted px-4 py-3 text-sm text-foreground">
-                    Selected for this post: {{ asList(jobForm.eligibleCoursesText).join(', ') }}
                   </div>
                 </section>
 
@@ -1404,9 +2031,7 @@ watch(
                   <div class="sm:col-span-2 rounded-2xl border border-border bg-muted px-4 py-4 text-sm text-foreground">
                     <p class="font-semibold">Required document</p>
                     <p class="mt-1 text-muted-foreground">
-                      Applicants must upload an <span class="font-medium text-foreground">Endorsement</span> letter.
-                      No other documents can be required on this posting. A student resume may still appear from their
-                      profile as optional information for your review.
+                      Students attach their school endorsement letter. Their resume is shown to you automatically.
                     </p>
                     <p class="mt-3 inline-flex rounded-full border border-border bg-background px-3 py-1 text-xs font-semibold">
                       Endorsement
@@ -1419,7 +2044,7 @@ watch(
                         id="jobApplicationInstructions"
                         v-model="jobForm.applicationInstructions"
                         rows="3"
-                        class="flex min-h-[90px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        class="flex min-h-[90px] w-full rounded-md border border-input bg-background px-3 py-2 text-[16px] ring-offset-background md:text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                         placeholder="Explain the application steps, review process, or endorsement instructions."
                       />
                     </FormControl>
@@ -1434,7 +2059,10 @@ watch(
               </div>
 
               <div class="mt-6 flex flex-col gap-3 border-t border-border pt-6 sm:flex-row sm:items-center sm:justify-between">
-                <div class="text-sm text-muted-foreground">Step {{ wizardStepIndex + 1 }} of {{ wizardSteps.length }}</div>
+                <div class="space-y-1 text-sm text-muted-foreground">
+                  <p>Step {{ wizardStepIndex + 1 }} of {{ wizardSteps.length }}</p>
+                  <p v-if="draftSaveLabel" class="text-xs" aria-live="polite">{{ draftSaveLabel }}</p>
+                </div>
                 <div class="flex flex-wrap justify-end gap-3">
                   <Button type="button" variant="outline" @click="closeJobEditor">
                     Cancel
@@ -1447,18 +2075,44 @@ watch(
                     Next
                     <ChevronRight class="h-4 w-4" />
                   </Button>
-                  <Button v-else type="button" :disabled="savingJob || !jobForm.title.trim()" @click="saveJob">
-                    <LoaderCircle v-if="savingJob" class="h-4 w-4 animate-spin" />
-                    <span>{{ savingJob ? 'Saving...' : editingJobId ? 'Save Changes' : 'Create Job' }}</span>
-                  </Button>
+                  <template v-else>
+                    <Button
+                      v-if="isEditingDraft"
+                      type="button"
+                      variant="outline"
+                      :disabled="draftSaveState === 'saving'"
+                      @click="void saveDraft({ force: true })"
+                    >
+                      <LoaderCircle v-if="draftSaveState === 'saving'" class="h-4 w-4 animate-spin" />
+                      <span>{{ draftSaveState === 'saving' ? 'Saving...' : 'Save as draft' }}</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      :disabled="savingJob || publishingJob"
+                      @click="isEditingDraft ? publishJob() : savePublishedJob()"
+                    >
+                      <LoaderCircle v-if="savingJob || publishingJob" class="h-4 w-4 animate-spin" />
+                      <span>
+                        {{
+                          publishingJob || savingJob
+                            ? isEditingDraft
+                              ? 'Publishing...'
+                              : 'Saving...'
+                            : isEditingDraft
+                              ? 'Publish job'
+                              : 'Save Changes'
+                        }}
+                      </span>
+                    </Button>
+                  </template>
                 </div>
               </div>
             </CardContent>
             </Card>
           </div>
 
-          <div class="rounded-xl border border-border bg-card">
-            <Table>
+          <div v-if="!jobEditorOpen" class="overflow-x-auto rounded-xl border border-border bg-card">
+            <Table class="min-w-[44rem]">
               <TableHeader>
                 <TableRow>
                   <TableHead>Job Title</TableHead>
@@ -1472,45 +2126,95 @@ watch(
                 <template v-if="loadingJobs || loadingApplications">
                   <TableRow v-for="index in 5" :key="index">
                     <TableCell><Skeleton class="h-5 w-44" /></TableCell>
-                    <TableCell><Skeleton class="h-5 w-12" /></TableCell>
-                    <TableCell><Skeleton class="h-5 w-12" /></TableCell>
                     <TableCell><Skeleton class="h-5 w-20" /></TableCell>
-                    <TableCell><Skeleton class="ml-auto h-9 w-9 rounded-md" /></TableCell>
+                    <TableCell><Skeleton class="h-5 w-12" /></TableCell>
+                    <TableCell><Skeleton class="h-7 w-20 rounded-full" /></TableCell>
+                    <TableCell><Skeleton class="ml-auto h-8 w-28 rounded-md" /></TableCell>
                   </TableRow>
                 </template>
                 <template v-else-if="jobRows.length">
-                  <TableRow v-for="job in jobRows" :key="job.id">
-                    <TableCell>
-                      <div class="space-y-1">
-                        <p class="font-medium text-foreground">{{ job.title }}</p>
-                        <p class="text-sm text-muted-foreground">{{ job.location || 'Location not set' }}</p>
+                  <TableRow v-for="job in jobRows" :key="job.id" class="align-middle">
+                    <TableCell class="py-3">
+                      <div class="min-w-0 max-w-[14rem] space-y-0.5 sm:max-w-none">
+                        <p class="truncate font-medium text-foreground">{{ job.title }}</p>
+                        <p class="truncate text-sm text-muted-foreground">
+                          {{
+                            normalizeJobStatus(job.status) === 'draft'
+                              ? formatSavedAt(job.updatedAt)
+                              : job.location || 'Location not set'
+                          }}
+                        </p>
                       </div>
                     </TableCell>
-                    <TableCell class="text-foreground">{{ job.slotsAvailable }}</TableCell>
-                    <TableCell class="text-foreground">{{ job.applicationCount }}</TableCell>
-                    <TableCell>
-                      <Badge :variant="jobBadgeVariant(job.status)">{{ badgeLabel(job.status) }}</Badge>
+                    <TableCell class="whitespace-nowrap py-3 text-sm text-foreground">
+                      {{ normalizeJobStatus(job.status) === 'draft' ? '—' : slotsFilledLabel(job) }}
                     </TableCell>
-                    <TableCell class="text-right">
-                      <div class="flex justify-end gap-2">
-                        <Button variant="ghost" size="sm" class="gap-2" @click="openViewJobDialog(job)">
-                          <Eye class="h-4 w-4" />
-                          <span>View</span>
-                        </Button>
-                        <Button variant="ghost" size="sm" class="gap-2" @click="openEditJobDialog(job)">
-                          <Pencil class="h-4 w-4" />
-                          <span>Edit</span>
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          class="gap-2 text-red-600 hover:text-red-600"
-                          :disabled="deletingJobId === job.id"
-                          @click="pendingDeleteJobId = job.id"
-                        >
-                          <Trash2 class="h-4 w-4" />
-                          <span>{{ deletingJobId === job.id ? 'Deleting...' : 'Delete' }}</span>
-                        </Button>
+                    <TableCell class="py-3 text-sm text-foreground">
+                      {{ normalizeJobStatus(job.status) === 'draft' ? '—' : job.applicationCount }}
+                    </TableCell>
+                    <TableCell class="py-3">
+                      <StatusBadgeMenu
+                        :model-value="normalizeJobStatus(job.status)"
+                        :disabled="statusUpdatingJobId === job.id || publishingJob"
+                        :has-applications="job.applicationCount > 0"
+                        :aria-label="`Change status for ${job.title || 'job'}`"
+                        @select="requestJobStatusChange(job, $event)"
+                      />
+                    </TableCell>
+                    <TableCell class="py-3 text-right">
+                      <div class="inline-flex items-center justify-end gap-1">
+                        <template v-if="normalizeJobStatus(job.status) === 'draft'">
+                          <Button variant="ghost" size="sm" class="h-8 gap-1.5 px-2" @click="openEditJobDialog(job)">
+                            <Pencil class="h-4 w-4" />
+                            <span class="hidden sm:inline">Continue editing</span>
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            class="h-8 gap-1.5 px-2"
+                            :disabled="publishingJob"
+                            @click="publishDraftFromTable(job)"
+                          >
+                            <CheckCircle2 class="h-4 w-4" />
+                            <span class="hidden sm:inline">Publish</span>
+                          </Button>
+                          <RowActionsMenu
+                            :label="`More actions for draft ${job.title || ''}`"
+                            :items="[
+                              {
+                                key: 'delete',
+                                label: deletingJobId === job.id ? 'Deleting...' : 'Delete',
+                                icon: Trash2,
+                                destructive: true,
+                                disabled: deletingJobId === job.id,
+                              },
+                            ]"
+                            @select="(key) => key === 'delete' && askDeleteJob(job)"
+                          />
+                        </template>
+                        <template v-else>
+                          <Button variant="ghost" size="sm" class="h-8 gap-1.5 px-2" @click="openViewJobDialog(job)">
+                            <Eye class="h-4 w-4" />
+                            <span class="hidden sm:inline">View</span>
+                          </Button>
+                          <Button variant="ghost" size="sm" class="h-8 gap-1.5 px-2" @click="openEditJobDialog(job)">
+                            <Pencil class="h-4 w-4" />
+                            <span class="hidden sm:inline">Edit</span>
+                          </Button>
+                          <RowActionsMenu
+                            :label="`More actions for ${job.title || 'job'}`"
+                            :items="[
+                              {
+                                key: 'delete',
+                                label: deletingJobId === job.id ? 'Deleting...' : 'Delete',
+                                icon: Trash2,
+                                destructive: true,
+                                disabled: deletingJobId === job.id,
+                              },
+                            ]"
+                            @select="(key) => key === 'delete' && askDeleteJob(job)"
+                          />
+                        </template>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -1532,14 +2236,34 @@ watch(
             <h2 class="text-2xl font-semibold text-foreground">Applicants</h2>
             <p class="text-sm text-muted-foreground">Review endorsed applicants, open their profile summary, and make the final company decision.</p>
           </div>
-          <div class="relative max-w-md">
-            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input v-model="searchApplicants" placeholder="Search applicants..." class="pl-9" />
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div class="flex flex-wrap gap-2">
+              <Button
+                v-for="tab in [
+                  { id: 'all', label: 'All' },
+                  { id: 'needs_review', label: 'Needs review' },
+                  { id: 'interview', label: 'Interview' },
+                  { id: 'accepted', label: 'Accepted' },
+                  { id: 'rejected', label: 'Rejected' },
+                  { id: 'withdrawn', label: 'Withdrawn' },
+                ] as const"
+                :key="tab.id"
+                size="sm"
+                :variant="applicantStatusTab === tab.id ? 'default' : 'outline'"
+                @click="applicantStatusTab = tab.id"
+              >
+                {{ tab.label }}
+              </Button>
+            </div>
+            <div class="relative max-w-md flex-1">
+              <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input v-model="searchApplicants" placeholder="Search applicants..." class="pl-9" />
+            </div>
           </div>
         </CardHeader>
         <CardContent>
-          <div class="rounded-xl border border-border bg-card">
-            <Table>
+          <div class="overflow-x-auto rounded-xl border border-border bg-card">
+            <Table class="min-w-[44rem]">
               <TableHeader>
                 <TableRow>
                   <TableHead>Intern Name</TableHead>
@@ -1563,28 +2287,38 @@ watch(
                   <TableRow v-for="applicant in applicantRows" :key="applicant.id">
                     <TableCell>
                       <div class="space-y-1">
-                        <p class="font-medium text-foreground">{{ applicant.studentName || 'Unnamed intern' }}</p>
+                        <p class="font-medium text-foreground">{{ toTitleCaseName(applicant.studentName) || 'Unnamed intern' }}</p>
                         <p class="text-sm text-muted-foreground">{{ applicant.internshipTitle || 'Untitled role' }}</p>
                       </div>
                     </TableCell>
                     <TableCell class="text-foreground">{{ applicant.schoolName || 'School not provided' }}</TableCell>
                     <TableCell class="text-muted-foreground">{{ formatDate(applicant.createdAt) }}</TableCell>
                     <TableCell>
-                      <Badge :variant="applicantBadgeVariant(applicant.status)">{{ badgeLabel(applicant.status) }}</Badge>
+                      <Badge :variant="applicantBadgeVariant(applicant.trackerStage || applicant.status)">{{ applicantProgressLabel(applicant) }}</Badge>
                     </TableCell>
-                    <TableCell>
-                      <div class="flex justify-end gap-2">
-                        <Button variant="ghost" class="gap-2" @click="openApplicantProfile(applicant, 'profile')">
-                          <Eye class="h-4 w-4" />
-                          View Profile
-                        </Button>
+                    <TableCell class="text-right">
+                      <div class="inline-flex items-center justify-end gap-1">
                         <Button
-                          variant="outline"
-                          class="gap-2"
+                          size="sm"
+                          class="h-8 gap-1.5 px-2"
                           @click="openApplicantProfile(applicant, 'tracker')"
                         >
-                          Open tracker
+                          Review
                         </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          class="h-8 gap-1.5 px-2"
+                          @click="openApplicantProfile(applicant, 'profile')"
+                        >
+                          <Eye class="h-4 w-4" />
+                          <span class="hidden sm:inline">View</span>
+                        </Button>
+                        <RowActionsMenu
+                          :label="`More actions for ${applicant.studentName || 'applicant'}`"
+                          :items="[{ key: 'tracker', label: 'Open tracker', icon: FileText }]"
+                          @select="(key) => key === 'tracker' && openApplicantProfile(applicant, 'tracker')"
+                        />
                       </div>
                     </TableCell>
                   </TableRow>
@@ -1601,27 +2335,26 @@ watch(
       </Card>
     </div>
 
-    <Dialog v-model:open="applicantDialogOpen">
+    <Dialog v-model:open="applicantDialogOpen" :hide-header-bar="applicantDialogMode === 'profile'">
       <template #default="{ close }">
-        <DialogHeader>
-          <DialogTitle>{{ applicantDialogMode === 'profile' ? 'Applicant profile' : 'Application tracker' }}</DialogTitle>
-          <p class="text-sm text-muted-foreground">
-            {{
-              applicantDialogMode === 'profile'
-                ? 'Personal and school details for this applicant.'
-                : 'Progress stages for this application.'
-            }}
-          </p>
+        <DialogHeader v-if="applicantDialogMode === 'tracker'">
+          <DialogTitle>Application tracker</DialogTitle>
+          <p class="text-sm text-muted-foreground">Progress stages for this application. Schedule interview, assess, and accept or reject here.</p>
         </DialogHeader>
-
-        <div v-if="selectedApplicant && applicantDialogMode === 'tracker' && applicantStepper" class="mt-6 rounded-2xl border border-border/70 p-4">
-          <ApplicationStatusStepper :result="applicantStepper" />
+        <div v-else class="flex items-start justify-between gap-3">
+          <div>
+            <h2 class="text-lg font-semibold text-foreground">Applicant profile</h2>
+            <p class="text-sm text-muted-foreground">Personal details and documents for this applicant.</p>
+          </div>
+          <Button variant="ghost" size="icon" class="shrink-0 text-muted-foreground" @click="close">
+            <XCircle class="h-4 w-4" />
+          </Button>
         </div>
 
         <div v-if="selectedApplicant && applicantDialogMode === 'profile'" class="mt-6 grid gap-4 sm:grid-cols-2">
           <div class="rounded-2xl bg-muted p-4">
             <p class="text-sm font-medium text-muted-foreground">Intern Name</p>
-            <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedApplicant.studentName || 'Not provided' }}</p>
+            <p class="mt-2 text-sm font-semibold text-foreground">{{ toTitleCaseName(selectedApplicant.studentName) || 'Not provided' }}</p>
           </div>
           <div class="rounded-2xl bg-muted p-4">
             <p class="text-sm font-medium text-muted-foreground">Email</p>
@@ -1642,7 +2375,54 @@ watch(
           <div class="rounded-2xl bg-muted p-4">
             <p class="text-sm font-medium text-muted-foreground">Current Status</p>
             <div class="mt-2">
-              <Badge :variant="applicantBadgeVariant(selectedApplicant.status)">{{ badgeLabel(selectedApplicant.status) }}</Badge>
+              <Badge :variant="applicantBadgeVariant(selectedApplicant.trackerStage || selectedApplicant.status)">{{ applicantProgressLabel(selectedApplicant) }}</Badge>
+            </div>
+          </div>
+          <div class="rounded-2xl bg-muted p-4 sm:col-span-2">
+            <p class="text-sm font-medium text-muted-foreground">Documents</p>
+            <div class="mt-2 space-y-3">
+              <div v-if="selectedApplicant.resume" class="flex flex-wrap items-center gap-3">
+                <span class="text-sm font-medium text-foreground">Resume</span>
+                <FilePreviewActions
+                  file-name="Resume"
+                  :source="selectedApplicant.resume"
+                />
+              </div>
+              <div
+                v-for="(doc, index) in selectedApplicant.documents || []"
+                :key="`${doc}-${index}`"
+                class="flex flex-wrap items-center gap-3"
+              >
+                <span class="text-sm font-medium text-foreground">
+                  {{ index === 0 ? 'Endorsement letter' : `Document ${index + 1}` }}
+                </span>
+                <FilePreviewActions
+                  :file-name="index === 0 ? 'Endorsement letter' : `Document ${index + 1}`"
+                  :source="doc"
+                />
+              </div>
+              <p
+                v-if="!selectedApplicant.resume && !(selectedApplicant.documents || []).length"
+                class="text-sm text-muted-foreground"
+              >
+                No resume or endorsement letter attached yet.
+              </p>
+            </div>
+          </div>
+          <div class="rounded-2xl bg-muted p-4 sm:col-span-2">
+            <p class="text-sm font-medium text-muted-foreground">Skills</p>
+            <div class="mt-2">
+              <SkillChips
+                :skills="(selectedApplicant.studentSkills || []).map((skill) => ({
+                  id: skill.id,
+                  name: skill.name,
+                  category: skill.category || 'Other',
+                  status: (skill.status as any) || 'approved',
+                  level: (skill.level as any) || 'beginner',
+                }))"
+                mode="intern"
+                empty-text="This applicant has not added skills yet."
+              />
             </div>
           </div>
         </div>
@@ -1677,7 +2457,15 @@ watch(
             <div class="rounded-2xl bg-muted p-4">
               <p class="text-sm font-medium text-muted-foreground">Status</p>
               <div class="mt-2">
-                <Badge :variant="jobBadgeVariant(selectedJob.status)">{{ badgeLabel(selectedJob.status) }}</Badge>
+                <StatusBadgeMenu
+                  :model-value="normalizeJobStatus(selectedJob.status)"
+                  :disabled="statusUpdatingJobId === selectedJob.id"
+                  aria-label="Change job status"
+                  @select="requestJobStatusChange(selectedJob, $event)"
+                />
+                <p class="mt-2 text-xs text-muted-foreground">
+                  Closed stops new applications. Filled means all slots are taken.
+                </p>
               </div>
             </div>
             <div class="rounded-2xl bg-muted p-4">
@@ -1694,7 +2482,7 @@ watch(
             </div>
             <div class="rounded-2xl bg-muted p-4">
               <p class="text-sm font-medium text-muted-foreground">Slots</p>
-              <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedJob.slotsAvailable || 0 }}</p>
+              <p class="mt-2 text-sm font-semibold text-foreground">{{ slotsFilledLabel(selectedJob) }}</p>
             </div>
             <div class="rounded-2xl bg-muted p-4">
               <p class="text-sm font-medium text-muted-foreground">Applicants</p>
@@ -1702,7 +2490,7 @@ watch(
             </div>
             <div class="rounded-2xl bg-muted p-4">
               <p class="text-sm font-medium text-muted-foreground">Allowance</p>
-              <p class="mt-2 text-sm font-semibold text-foreground">{{ selectedJob.allowance?.trim() || 'No allowance' }}</p>
+              <p class="mt-2 text-sm font-semibold text-foreground">{{ formatAllowanceDisplay(selectedJob.allowance) }}</p>
             </div>
             <div class="rounded-2xl bg-muted p-4">
               <p class="text-sm font-medium text-muted-foreground">Start Date</p>
@@ -1730,7 +2518,19 @@ watch(
             </div>
             <div class="rounded-2xl bg-muted p-4 sm:col-span-2">
               <p class="text-sm font-medium text-muted-foreground">Required Skills</p>
-              <p class="mt-2 text-sm text-foreground">{{ (selectedJob.requiredSkills || selectedJob.requirements || []).join(', ') || 'Not provided' }}</p>
+              <div class="mt-2">
+                <SkillChips
+                  :skills="(selectedJob.skills || []).map((skill) => ({
+                    id: skill.id,
+                    name: skill.name,
+                    category: skill.category || 'Other',
+                    status: (skill.status as any) || 'approved',
+                    importance: skill.importance || 'required',
+                  }))"
+                  mode="job"
+                  :empty-text="(selectedJob.requiredSkills || selectedJob.requirements || []).join(', ') || 'Not provided'"
+                />
+              </div>
             </div>
             <div class="rounded-2xl bg-muted p-4 sm:col-span-2">
               <p class="text-sm font-medium text-muted-foreground">Required Documents</p>
@@ -1761,12 +2561,31 @@ watch(
     </Dialog>
 
     <AlertDialog
-      :open="!!pendingDeleteJobId"
-      title="Delete job posting?"
-      description="This will permanently remove the selected job posting from your organization workspace."
+      :open="!!pendingDeleteJob"
+      :title="pendingDeleteJob?.isDraft ? 'Delete this draft?' : 'Delete job posting?'"
+      :description="deleteJobDialogDescription"
       action-label="Delete"
-      @update:open="(open) => { if (!open) pendingDeleteJobId = null }"
+      action-variant="destructive"
+      @update:open="(open) => { if (!open) pendingDeleteJob = null }"
       @action="confirmDeleteJob"
+    />
+
+    <AlertDialog
+      :open="!!pendingStatusChange"
+      title="Close this job?"
+      :description="statusChangeDialogDescription"
+      action-label="Close job"
+      @update:open="(open) => { if (!open) pendingStatusChange = null }"
+      @action="confirmPendingStatusChange"
+    />
+
+    <SkillsWizard
+      v-model="jobSkills"
+      v-model:open="skillsWizardOpen"
+      mode="job"
+      :limit="10"
+      :recommended-categories="jobSkillsRecommendedCategories"
+      @done="() => markFormDirty()"
     />
   </MainLayout>
 </template>

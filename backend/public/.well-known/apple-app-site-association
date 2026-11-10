@@ -1,0 +1,20 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "REPLACE_WITH_TEAM_ID.REPLACE_WITH_BUNDLE_ID",
+        "paths": [
+          "*",
+          "/account-setup*",
+          "/intern*",
+          "/login*",
+          "/ojt-hours*"
+        ]
+      }
+    ]
+  },
+  "webcredentials": {
+    "apps": ["REPLACE_WITH_TEAM_ID.REPLACE_WITH_BUNDLE_ID"]
+  }
+}

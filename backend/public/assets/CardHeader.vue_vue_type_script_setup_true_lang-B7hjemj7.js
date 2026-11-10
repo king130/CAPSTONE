@@ -1,0 +1,1 @@
+import{c}from"./utils-C8nBGPD0.js";import{d as r,c as l,e as t,E as n,j as p,m}from"./index-Cup9-gzb.js";const i=r({__name:"CardHeader",props:{class:{default:""}},setup(e){const s=e,a=m(()=>c("flex flex-col space-y-1.5 p-6",s.class));return(o,d)=>(l(),t("div",{class:p(a.value)},[n(o.$slots,"default")],2))}});export{i as _};

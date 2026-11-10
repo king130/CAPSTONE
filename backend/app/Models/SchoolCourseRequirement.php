@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\CourseSkillCategoryDefaults;
 use App\Support\StudentYearLevel;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -15,6 +16,7 @@ class SchoolCourseRequirement extends Model
         'course_name_key',
         'required_hours',
         'eligible_year_levels',
+        'recommended_skill_categories',
     ];
 
     protected function casts(): array
@@ -22,6 +24,7 @@ class SchoolCourseRequirement extends Model
         return [
             'required_hours' => 'integer',
             'eligible_year_levels' => 'array',
+            'recommended_skill_categories' => 'array',
         ];
     }
 
@@ -49,6 +52,23 @@ class SchoolCourseRequirement extends Model
                 $levels = StudentYearLevel::DEFAULT_ELIGIBLE;
             }
             $requirement->eligible_year_levels = $levels;
+
+            if ($requirement->recommended_skill_categories !== null) {
+                $requirement->recommended_skill_categories = CourseSkillCategoryDefaults::normalizeList(
+                    $requirement->recommended_skill_categories
+                );
+            }
+        });
+
+        static::creating(function (self $requirement): void {
+            if ($requirement->recommended_skill_categories !== null) {
+                return;
+            }
+
+            $defaults = CourseSkillCategoryDefaults::forCourseName((string) $requirement->course_name);
+            if ($defaults !== []) {
+                $requirement->recommended_skill_categories = $defaults;
+            }
         });
     }
 

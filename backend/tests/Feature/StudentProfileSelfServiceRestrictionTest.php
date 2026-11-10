@@ -190,6 +190,28 @@ class StudentProfileSelfServiceRestrictionTest extends TestCase
         $this->assertSame('STU-1001', $context['student']->student_id_number);
     }
 
+    public function test_student_can_fill_missing_student_number_once(): void
+    {
+        $context = $this->createProvisionedStudent();
+        $context['student']->student_id_number = null;
+        $context['student']->save();
+        $user = $context['user'];
+        $profile = $user->profile ?? [];
+        unset($profile['studentNumber'], $profile['studentId']);
+        $user->profile = $profile;
+        $user->save();
+
+        Sanctum::actingAs($user);
+
+        $response = $this->patchJson('/api/profile', [
+            'profile' => ['studentNumber' => '  FILL-42  '],
+        ]);
+
+        $response->assertOk();
+        $context['student']->refresh();
+        $this->assertSame('FILL-42', $context['student']->student_id_number);
+    }
+
     public function test_student_cannot_modify_school_name_or_school_id(): void
     {
         $other = $this->createApprovedSchool('Other University');

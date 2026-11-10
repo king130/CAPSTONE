@@ -21,7 +21,7 @@ const emit = defineEmits<{
 
 const panelClass = computed(() =>
   cn(
-    'fixed inset-y-0 z-sheet w-[18rem] border-border bg-background p-6 shadow-xl transition-transform duration-200 ease-out',
+    'fixed top-0 z-sheet flex h-dvh max-h-dvh w-[18rem] flex-col overflow-hidden border-border bg-background shadow-xl transition-transform duration-200 ease-out',
     props.side === 'left'
       ? 'left-0 border-r data-[open=true]:translate-x-0'
       : 'right-0 border-l data-[open=true]:translate-x-0',
@@ -62,14 +62,20 @@ function closeSheet() {
     </transition>
 
     <div v-if="open" :class="panelClass">
-      <div class="mb-6 flex items-center justify-between">
+      <div class="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-4">
         <slot name="header" />
-        <Button variant="ghost" size="icon" class="text-muted-foreground" @click="closeSheet">
+        <Button variant="ghost" size="icon" class="shrink-0 text-muted-foreground" @click="closeSheet">
           <X class="h-4 w-4" />
         </Button>
       </div>
 
-      <slot :close="closeSheet" />
+      <div class="shell-menu-scroll px-3 py-4">
+        <slot :close="closeSheet" />
+      </div>
+
+      <div v-if="$slots.footer" class="shrink-0 border-t border-border px-3 py-3">
+        <slot name="footer" :close="closeSheet" />
+      </div>
     </div>
   </Teleport>
 </template>

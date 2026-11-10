@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BadgeCheck, Building2, ExternalLink, MapPin } from 'lucide-vue-next'
+import { BadgeCheck, Building2, ExternalLink, FilePlus2, MapPin } from 'lucide-vue-next'
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
@@ -18,6 +18,12 @@ import {
   fetchPublicOrganization,
   type PublicOrganizationProfile,
 } from '@/services/organizationsPublic'
+import {
+  filterAgreementDirectoryPartners,
+  isAgreementPartnerSelectable,
+  listPublicProfiles,
+  type PublicProfile,
+} from '@/services/profilesPublic'
 import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
@@ -39,7 +45,11 @@ const backTo = computed(() => {
 const pageShell = computed(() => (appRole.value ? MainLayout : 'div'))
 const pageShellProps = computed(() =>
   appRole.value
-    ? { role: appRole.value, title: appRole.value === 'student' ? 'Companies' : 'Browse', activeItem: 'opportunities' }
+    ? {
+        role: appRole.value,
+        title: appRole.value === 'student' ? 'Partner Companies' : 'Browse',
+        activeItem: 'opportunities',
+      }
     : { class: 'min-h-screen bg-background text-foreground' },
 )
 
@@ -48,12 +58,15 @@ const notFound = ref(false)
 const errorMessage = ref('')
 const organization = ref<PublicOrganizationProfile | null>(null)
 const gallery = ref<Array<{ id: string; url: string; caption?: string | null }>>([])
+const directoryPartner = ref<PublicProfile | null>(null)
+const loadingAgreementAction = ref(false)
 
 const internships = computed<InternshipRecord[]>(() => organization.value?.internships ?? [])
 const isCompany = computed(() => {
   const type = organization.value?.type
   return type === 'company' || type === 'municipal_hall'
 })
+const isSchool = computed(() => organization.value?.type === 'school')
 const hostNoun = computed(() =>
   organization.value?.type === 'municipal_hall' ? 'Municipal Hall' : 'Company',
 )
@@ -64,6 +77,63 @@ const locationLabel = computed(() => {
   if (city) return `${city}, Cavite, Philippines`
   return ''
 })
+
+/** Company → school, or school → host: show agreement CTA (never guest/student). */
+const canRequestAgreement = computed(() => {
+  if (appRole.value === 'company' && isSchool.value) return true
+  if (appRole.value === 'school' && isCompany.value) return true
+  return false
+})
+
+const agreementActionLabel = computed(() => {
+  if (!directoryPartner.value) return 'Request Agreement'
+  if (directoryPartner.value.agreementStatus === 'active') return 'Agreement active'
+  if (directoryPartner.value.agreementStatus === 'pending') return 'Agreement pending'
+  if (!isAgreementPartnerSelectable(directoryPartner.value)) return 'Not available'
+  return 'Request Agreement'
+})
+
+const agreementActionEnabled = computed(() => {
+  if (!directoryPartner.value) return false
+  return isAgreementPartnerSelectable(directoryPartner.value)
+})
+
+const agreementActionHint = computed(() => {
+  if (loadingAgreementAction.value) return 'Checking agreement status…'
+  if (!directoryPartner.value) {
+    return 'This organization is not available for a new agreement request yet.'
+  }
+  if (directoryPartner.value.agreementStatusLabel) return directoryPartner.value.agreementStatusLabel
+  if (!isAgreementPartnerSelectable(directoryPartner.value)) {
+    return 'This organization cannot receive a new agreement request right now.'
+  }
+  return appRole.value === 'company'
+    ? 'Start an agreement request with this school.'
+    : `Start an agreement request with this ${hostNoun.value.toLowerCase()}.`
+})
+
+const requestAgreementTo = computed(() => ({
+  name: 'agreements-new' as const,
+  query: { organizationId: organization.value?.id || '' },
+}))
+
+async function loadAgreementAction(organizationId: string) {
+  directoryPartner.value = null
+  if (!canRequestAgreement.value || !organizationId) return
+
+  loadingAgreementAction.value = true
+  try {
+    const listedRole = appRole.value === 'company' ? 'school' : 'company'
+    const listed = await listPublicProfiles(listedRole)
+    const partners = filterAgreementDirectoryPartners(listed)
+    directoryPartner.value =
+      partners.find((partner) => partner.organizationId === organizationId) ?? null
+  } catch {
+    directoryPartner.value = null
+  } finally {
+    loadingAgreementAction.value = false
+  }
+}
 
 async function loadProfile() {
   const id = String(route.params.id || '')
@@ -84,15 +154,21 @@ async function loadProfile() {
     ])
     organization.value = profile
     gallery.value = media.slice(0, 3).map((item) => ({ id: item.id, url: item.url, caption: item.caption }))
+    void loadAgreementAction(profile.id)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unable to load organization.'
     if (/not found/i.test(message) || /404/.test(message)) {
       notFound.value = true
+    } else if (/agreement/i.test(message) || /not linked to a school/i.test(message)) {
+      errorMessage.value =
+        message ||
+        'This host is not available because your school does not have an active agreement with them.'
     } else {
       errorMessage.value = message
     }
     organization.value = null
     gallery.value = []
+    directoryPartner.value = null
   } finally {
     loading.value = false
   }
@@ -136,9 +212,20 @@ onMounted(() => {
 
       <Card v-else-if="errorMessage" class="border-border bg-card">
         <CardContent class="space-y-3 px-6 py-16 text-center">
-          <h1 class="text-2xl font-semibold text-foreground">Unable to load profile</h1>
+          <h1 class="text-2xl font-semibold text-foreground">
+            {{ /agreement|not linked to a school/i.test(errorMessage) ? 'Host not available' : 'Unable to load profile' }}
+          </h1>
           <p class="text-sm text-muted-foreground">{{ errorMessage }}</p>
-          <Button variant="outline" @click="loadProfile">Retry</Button>
+          <div class="flex flex-wrap justify-center gap-2">
+            <RouterLink
+              v-if="appRole === 'student'"
+              :to="backTo"
+              class="inline-flex h-10 items-center justify-center rounded-md border border-border bg-background px-4 text-sm font-medium text-foreground hover:bg-accent"
+            >
+              Back to Partner Companies
+            </RouterLink>
+            <Button variant="outline" @click="loadProfile">Retry</Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -221,56 +308,84 @@ onMounted(() => {
           </section>
         </div>
 
-        <div v-if="isCompany" class="space-y-4">
-          <div class="flex items-end justify-between gap-3">
-            <div>
-              <h2 class="text-lg font-semibold text-foreground">Active internships</h2>
-              <p class="text-sm text-muted-foreground">Open roles from this company.</p>
-            </div>
-          </div>
-
-          <div v-if="internships.length" class="space-y-3">
-            <RouterLink
-              v-for="item in internships"
-              :key="item.id"
-              :to="{ name: 'internship-detail', params: { id: item.id } }"
-              class="block rounded-xl border border-border bg-card p-4 transition hover:border-primary/30"
-            >
-              <div class="flex gap-3">
-                <div class="h-16 w-24 shrink-0 overflow-hidden rounded-lg border border-border bg-muted">
-                  <img
-                    v-if="item.coverImage"
-                    :src="item.coverImage"
-                    :alt="`${organization.name || 'Company'} logo`"
-                    class="h-full w-full object-contain p-1"
-                    loading="lazy"
-                  />
-                  <div v-else class="flex h-full items-center justify-center text-muted-foreground">
-                    <Building2 class="h-5 w-5 opacity-70" />
-                  </div>
-                </div>
-                <div class="min-w-0">
-                  <h3 class="truncate font-semibold text-foreground">{{ item.title }}</h3>
-                  <p class="mt-1 truncate text-sm text-muted-foreground">
-                    {{ item.location || item.workSetup || 'Cavite' }}
-                  </p>
-                  <ApplicationCapacity
-                    class="mt-2"
-                    :slots-available="item.slotsAvailable"
-                    :slots-remaining="item.slotsRemaining"
-                    :filled-slots="item.filledSlots"
-                    compact
-                  />
-                </div>
+        <div class="space-y-4">
+          <Card v-if="canRequestAgreement" class="border-border bg-card">
+            <CardContent class="space-y-4 px-5 py-5">
+              <div class="space-y-1">
+                <h2 class="text-lg font-semibold text-foreground">Partnership</h2>
+                <p class="text-sm text-muted-foreground">{{ agreementActionHint }}</p>
               </div>
-            </RouterLink>
-          </div>
-
-          <Card v-else class="border-dashed border-border bg-card">
-            <CardContent class="px-5 py-10 text-center text-sm text-muted-foreground">
-              No active internships right now.
+              <RouterLink
+                v-if="agreementActionEnabled"
+                :to="requestAgreementTo"
+                class="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                <FilePlus2 class="h-4 w-4" />
+                Request Agreement
+              </RouterLink>
+              <Button v-else type="button" class="w-full" variant="outline" disabled>
+                {{ loadingAgreementAction ? 'Checking…' : agreementActionLabel }}
+              </Button>
+              <RouterLink
+                :to="backTo"
+                class="inline-flex h-10 w-full items-center justify-center rounded-md border border-border bg-background px-4 text-sm font-medium text-foreground hover:bg-accent"
+              >
+                Back to browse
+              </RouterLink>
             </CardContent>
           </Card>
+
+          <template v-if="isCompany">
+            <div class="flex items-end justify-between gap-3">
+              <div>
+                <h2 class="text-lg font-semibold text-foreground">Active internships</h2>
+                <p class="text-sm text-muted-foreground">Open roles from this company.</p>
+              </div>
+            </div>
+
+            <div v-if="internships.length" class="space-y-3">
+              <RouterLink
+                v-for="item in internships"
+                :key="item.id"
+                :to="{ name: 'internship-detail', params: { id: item.id } }"
+                class="block rounded-xl border border-border bg-card p-4 transition hover:border-primary/30"
+              >
+                <div class="flex gap-3">
+                  <div class="h-16 w-24 shrink-0 overflow-hidden rounded-lg border border-border bg-muted">
+                    <img
+                      v-if="item.coverImage"
+                      :src="item.coverImage"
+                      :alt="`${organization.name || 'Company'} logo`"
+                      class="h-full w-full object-contain p-1"
+                      loading="lazy"
+                    />
+                    <div v-else class="flex h-full items-center justify-center text-muted-foreground">
+                      <Building2 class="h-5 w-5 opacity-70" />
+                    </div>
+                  </div>
+                  <div class="min-w-0">
+                    <h3 class="truncate font-semibold text-foreground">{{ item.title }}</h3>
+                    <p class="mt-1 truncate text-sm text-muted-foreground">
+                      {{ item.location || item.workSetup || 'Cavite' }}
+                    </p>
+                    <ApplicationCapacity
+                      class="mt-2"
+                      :slots-available="item.slotsAvailable"
+                      :slots-remaining="item.slotsRemaining"
+                      :filled-slots="item.filledSlots"
+                      compact
+                    />
+                  </div>
+                </div>
+              </RouterLink>
+            </div>
+
+            <Card v-else class="border-dashed border-border bg-card">
+              <CardContent class="px-5 py-10 text-center text-sm text-muted-foreground">
+                No active internships right now.
+              </CardContent>
+            </Card>
+          </template>
         </div>
       </div>
     </div>

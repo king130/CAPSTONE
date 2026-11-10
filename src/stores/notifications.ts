@@ -17,7 +17,7 @@ export const useNotificationStore = defineStore('notifications', () => {
   const pollingId = ref<number | null>(null)
 
   const unreadCount = computed(() => items.value.filter((item) => !item.isRead).length)
-  const recentItems = computed(() => items.value.slice(0, 5))
+  const recentItems = computed(() => items.value.slice(0, 8))
   const unreadItems = computed(() => items.value.filter((item) => !item.isRead))
 
   async function fetchNotifications() {

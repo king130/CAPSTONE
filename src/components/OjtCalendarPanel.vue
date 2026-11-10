@@ -7,8 +7,12 @@ import Button from '@/components/ui/button/Button.vue'
 import Input from '@/components/ui/input/Input.vue'
 import { useToast } from '@/composables/useToast'
 import {
+  clearOjtAbsence,
   fetchOjtCalendar,
+  listOjtAbsences,
+  markOjtAbsence,
   updateOjtStartDate,
+  type OjtAttendanceEvent,
   type OjtCalendarDay,
   type OjtCalendarState,
 } from '@/services/ojtCalendar'
@@ -25,12 +29,25 @@ const { success, error } = useToast()
 const state = ref<OjtCalendarState | null>(null)
 const loading = ref(false)
 const saving = ref(false)
+const absenceSaving = ref(false)
 const month = ref('')
 const startDateDraft = ref('')
+const absences = ref<OjtAttendanceEvent[]>([])
+const absenceDraft = ref({
+  date: '',
+  type: 'absent_excused' as 'absent_excused' | 'absent_unexcused',
+  reason: '',
+})
 
 const canEditStart = computed(() => {
   if (props.mode === 'student') return false
   if (props.mode === 'school') return false
+  const role = authStore.user?.role
+  return role === 'company' || role === 'municipal_hall' || role === 'admin' || props.mode === 'host'
+})
+
+const canManageAbsences = computed(() => {
+  if (props.mode === 'student' || props.mode === 'school') return false
   const role = authStore.user?.role
   return role === 'company' || role === 'municipal_hall' || role === 'admin' || props.mode === 'host'
 })
@@ -53,6 +70,10 @@ function dayClass(day: OjtCalendarDay): string {
       return 'border-border bg-accent/60 text-foreground'
     case 'holiday':
       return 'border-amber-500/40 bg-amber-500/15 text-foreground'
+    case 'absent_excused':
+      return 'border-sky-500/40 bg-sky-500/15 text-foreground'
+    case 'absent_unexcused':
+      return 'border-rose-500/40 bg-rose-500/15 text-foreground'
     case 'before_start':
       return 'border-border bg-muted/40 text-muted-foreground'
     default:
@@ -60,13 +81,22 @@ function dayClass(day: OjtCalendarDay): string {
   }
 }
 
+function absenceForDate(date: string): OjtAttendanceEvent | undefined {
+  return absences.value.find((row) => row.date === date)
+}
+
 async function load() {
   if (!props.applicationId) return
   loading.value = true
   try {
-    state.value = await fetchOjtCalendar(props.applicationId, month.value || undefined)
-    month.value = state.value.month
-    startDateDraft.value = state.value.summary.ojtStartDate || ''
+    const [calendar, absenceRows] = await Promise.all([
+      fetchOjtCalendar(props.applicationId, month.value || undefined),
+      listOjtAbsences(props.applicationId),
+    ])
+    state.value = calendar
+    absences.value = absenceRows
+    month.value = calendar.month
+    startDateDraft.value = calendar.summary.ojtStartDate || ''
   } catch (caught) {
     error(caught, { fallback: 'Unable to load OJT calendar.' })
   } finally {
@@ -90,10 +120,46 @@ async function saveStartDate() {
   }
 }
 
+async function submitAbsence() {
+  if (!absenceDraft.value.date || !absenceDraft.value.reason.trim()) {
+    error('Date and reason are required to mark an absence.')
+    return
+  }
+  absenceSaving.value = true
+  try {
+    await markOjtAbsence(props.applicationId, {
+      date: absenceDraft.value.date,
+      type: absenceDraft.value.type,
+      reason: absenceDraft.value.reason.trim(),
+    })
+    absenceDraft.value = { date: '', type: 'absent_excused', reason: '' }
+    success('Absence marked.')
+    await load()
+  } catch (caught) {
+    error(caught, { fallback: 'Unable to mark absence.' })
+  } finally {
+    absenceSaving.value = false
+  }
+}
+
+async function removeAbsence(event: OjtAttendanceEvent) {
+  absenceSaving.value = true
+  try {
+    await clearOjtAbsence(props.applicationId, event.id)
+    success('Absence cleared.')
+    await load()
+  } catch (caught) {
+    error(caught, { fallback: 'Unable to clear absence.' })
+  } finally {
+    absenceSaving.value = false
+  }
+}
+
 const weeks = computed(() => {
   const days = state.value?.days || []
-  if (!days.length) return [] as OjtCalendarDay[][]
-  const first = new Date(days[0].date + 'T00:00:00')
+  const firstDay = days[0]
+  if (!firstDay) return [] as OjtCalendarDay[][]
+  const first = new Date(firstDay.date + 'T00:00:00')
   const pad = (first.getDay() + 6) % 7 // Monday-first
   const cells: (OjtCalendarDay | null)[] = [...Array(pad).fill(null), ...days]
   while (cells.length % 7 !== 0) cells.push(null)
@@ -174,6 +240,60 @@ watch(() => props.applicationId, () => {
       <span v-if="!state.summary.ojtStartEditable"> (locked after first approved DTR)</span>
     </p>
 
+    <div
+      v-if="canManageAbsences"
+      class="space-y-3 rounded-xl border border-border/60 bg-muted/30 p-3"
+    >
+      <div>
+        <p class="text-sm font-medium text-foreground">Mark absence</p>
+        <p class="text-xs text-muted-foreground">
+          Excused absences extend the projected end date. Students cannot log that day until cleared.
+        </p>
+      </div>
+      <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <label class="space-y-1 text-sm">
+          <span class="text-muted-foreground">Date</span>
+          <Input v-model="absenceDraft.date" type="date" />
+        </label>
+        <label class="space-y-1 text-sm">
+          <span class="text-muted-foreground">Type</span>
+          <select
+            v-model="absenceDraft.type"
+            class="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+          >
+            <option value="absent_excused">Excused</option>
+            <option value="absent_unexcused">Unexcused</option>
+          </select>
+        </label>
+        <label class="space-y-1 text-sm sm:col-span-2">
+          <span class="text-muted-foreground">Reason</span>
+          <Input v-model="absenceDraft.reason" placeholder="Reason for absence" />
+        </label>
+      </div>
+      <Button size="sm" :disabled="absenceSaving" @click="submitAbsence">
+        <LoaderCircle v-if="absenceSaving" class="h-4 w-4 animate-spin" />
+        Mark absence
+      </Button>
+      <div v-if="absences.length" class="space-y-2">
+        <p class="text-xs font-medium text-muted-foreground">Recorded absences</p>
+        <div
+          v-for="row in absences"
+          :key="row.id"
+          class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/50 bg-background/70 px-3 py-2 text-sm"
+        >
+          <div>
+            <span class="font-medium">{{ row.date }}</span>
+            <span class="mx-2 text-muted-foreground">·</span>
+            <span>{{ row.type === 'absent_excused' ? 'Excused' : 'Unexcused' }}</span>
+            <p class="text-xs text-muted-foreground">{{ row.reason }}</p>
+          </div>
+          <Button size="sm" variant="outline" :disabled="absenceSaving" @click="removeAbsence(row)">
+            Clear
+          </Button>
+        </div>
+      </div>
+    </div>
+
     <div class="overflow-x-auto">
       <div class="grid min-w-[280px] grid-cols-7 gap-1 text-center text-[11px] font-medium text-muted-foreground">
         <span v-for="label in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']" :key="label">{{ label }}</span>
@@ -185,11 +305,24 @@ watch(() => props.applicationId, () => {
             :key="`${ri}-${di}`"
             class="aspect-square rounded-lg border p-1 text-left"
             :class="day ? dayClass(day) : 'border-transparent'"
+            :title="day?.absenceReason || day?.holidayName || undefined"
           >
             <template v-if="day">
               <p class="text-xs font-semibold">{{ Number(day.date.slice(8)) }}</p>
               <p v-if="day.scheduledHours" class="text-[10px] opacity-80">{{ day.scheduledHours }}h</p>
               <p v-if="day.holidayName" class="truncate text-[9px] leading-tight opacity-80">{{ day.holidayName }}</p>
+              <p
+                v-if="day.approvedMakeupHours"
+                class="truncate text-[9px] font-medium leading-tight text-violet-700 dark:text-violet-300"
+              >
+                Make-up {{ day.approvedMakeupHours }}h
+              </p>
+              <p
+                v-else-if="absenceForDate(day.date)"
+                class="truncate text-[9px] leading-tight opacity-80"
+              >
+                Absent
+              </p>
             </template>
           </div>
         </template>
@@ -200,6 +333,8 @@ watch(() => props.applicationId, () => {
       <span class="inline-flex items-center gap-1"><span class="h-3 w-3 rounded border border-border bg-accent/60" /> Working</span>
       <span class="inline-flex items-center gap-1"><span class="h-3 w-3 rounded border border-emerald-500/40 bg-emerald-500/15" /> Completed</span>
       <span class="inline-flex items-center gap-1"><span class="h-3 w-3 rounded border border-amber-500/40 bg-amber-500/15" /> Holiday</span>
+      <span class="inline-flex items-center gap-1"><span class="h-3 w-3 rounded border border-sky-500/40 bg-sky-500/15" /> Excused absent</span>
+      <span class="inline-flex items-center gap-1"><span class="h-3 w-3 rounded border border-rose-500/40 bg-rose-500/15" /> Unexcused absent</span>
       <span class="inline-flex items-center gap-1"><span class="h-3 w-3 rounded border border-primary bg-primary/15" /> Projected end</span>
     </div>
     <p class="text-xs text-muted-foreground">

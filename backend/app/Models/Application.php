@@ -16,6 +16,10 @@ class Application extends Model
         'company_id',
         'status',
         'tracker_stage',
+        'withdrawal_reason',
+        'placement_closed_at',
+        'placement_close_reason',
+        'active_placement_key',
         'cover_letter',
         'notes',
         'resume_url',
@@ -32,6 +36,7 @@ class Application extends Model
         'documents' => 'array',
         'documents_pending' => 'boolean',
         'required_ojt_hours' => 'integer',
+        'placement_closed_at' => 'datetime',
     ];
 
     protected static function booted(): void

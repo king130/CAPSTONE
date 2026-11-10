@@ -114,7 +114,15 @@ export interface UserProfile {
     } | null
   }
   subscriptionAccess?: {
-    status: 'trial' | 'active' | 'grace' | 'expired' | string
+    status:
+      | 'unverified'
+      | 'trial'
+      | 'free'
+      | 'active'
+      | 'pending_payment'
+      | 'past_due'
+      | 'expired'
+      | string
     canWrite: boolean
     canReviewDtr: boolean
     plan?: string | null
@@ -124,6 +132,7 @@ export interface UserProfile {
     daysRemaining?: number | null
     message?: string
     code?: string
+    verificationStatus?: string | null
     trialDays?: number
     graceDays?: number
   } | null
@@ -324,8 +333,12 @@ export async function resendEmailOtp(): Promise<void> {
   })
 }
 
-export async function validateAccountSetupToken(token: string): Promise<{ email: string; displayName: string; expiresAt?: string }> {
-  const response = await apiFetch<{ data: { email: string; displayName: string; expiresAt?: string } }>('/auth/account-setup/validate', {
+export async function validateAccountSetupToken(
+  token: string,
+): Promise<{ email: string; displayName: string; expiresAt?: string; role?: string | null }> {
+  const response = await apiFetch<{
+    data: { email: string; displayName: string; expiresAt?: string; role?: string | null }
+  }>('/auth/account-setup/validate', {
     method: 'POST',
     body: JSON.stringify({ token }),
   })

@@ -42,6 +42,18 @@ function tryParseJson(text: string): Record<string, unknown> | null {
   }
 }
 
+export class ApiError extends Error {
+  status: number
+  code?: string
+
+  constructor(message: string, status: number, code?: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.code = code
+  }
+}
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
 }
@@ -101,7 +113,8 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
       Array.isArray(msg) ? JSON.stringify(msg)
       : typeof msg === 'string' ? msg
       : text.trim() || res.statusText
-    throw new Error(typeof err === 'string' ? err : 'Request failed')
+    const code = typeof json?.code === 'string' ? json.code : undefined
+    throw new ApiError(typeof err === 'string' ? err : 'Request failed', res.status, code)
   }
 
   if (json !== null) {

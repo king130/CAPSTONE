@@ -8,7 +8,9 @@ function closePopover() {
   setOpen(false)
 }
 
-const { triggerRef, panelRef, panelStyle, containsTarget } = useAnchoredOverlay(open, 'end', closePopover)
+const { triggerRef, panelRef, panelStyle, containsTarget } = useAnchoredOverlay(open, 'end', closePopover, {
+  overflowY: 'hidden',
+})
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
@@ -58,7 +60,7 @@ onBeforeUnmount(() => {
         v-if="open"
         ref="panelRef"
         :style="panelStyle"
-        class="w-80 rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-lg"
+        class="h-auto w-80 overflow-hidden rounded-xl border border-border bg-popover p-0 text-popover-foreground shadow-lg [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] sm:w-96"
         role="dialog"
       >
         <slot :close="closePopover" />

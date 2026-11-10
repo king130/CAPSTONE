@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Internship;
 use App\Models\SavedInternship;
 use App\Models\User;
+use App\Services\InternshipEligibilityService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -13,6 +14,7 @@ class SavedInternshipController extends Controller
 {
     public function __construct(
         private readonly InternshipController $internships,
+        private readonly InternshipEligibilityService $internshipEligibility,
     ) {
     }
 
@@ -26,11 +28,26 @@ class SavedInternshipController extends Controller
         $viewerContext = $this->internships->catalogViewerContext($request);
         $perPage = max(1, min(100, (int) $request->input('per_page', 15)));
 
+        if (! $user->student) {
+            return $this->emptySavedPage($perPage);
+        }
+
+        $eligibleQuery = Internship::query();
+        $constrained = $this->internshipEligibility->applyEligibleListingConstraints($eligibleQuery, $user->student);
+        if ($constrained === null) {
+            return $this->emptySavedPage($perPage);
+        }
+
+        $eligibleIds = $constrained->pluck('id');
+        if ($eligibleIds->isEmpty()) {
+            return $this->emptySavedPage($perPage);
+        }
+
         $paginator = Internship::query()
             ->select('internships.*')
             ->join('saved_internships', 'saved_internships.internship_id', '=', 'internships.id')
             ->where('saved_internships.user_id', $user->id)
-            ->where('internships.status', 'active')
+            ->whereIn('internships.id', $eligibleIds)
             ->with($this->internships->catalogRelations())
             ->withCount([
                 'applications as accepted_applications_count' => fn (Builder $builder) => $builder->where('status', 'accepted'),
@@ -69,12 +86,28 @@ class SavedInternshipController extends Controller
             'internship_id' => ['required', 'integer', 'exists:internships,id'],
         ]);
 
-        $internship = Internship::query()->find((int) $data['internship_id']);
+        $internship = Internship::query()->with('company')->find((int) $data['internship_id']);
         if (! $internship || $internship->status !== 'active') {
             return response()->json([
                 'message' => 'Only active internships can be saved.',
                 'errors' => ['internship_id' => ['Only active internships can be saved.']],
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        if (! $user->student) {
+            return response()->json([
+                'message' => 'Your student account is not linked to a school, so this internship is unavailable.',
+                'code' => 'student_school_required',
+            ], Response::HTTP_FORBIDDEN);
+        }
+
+        $eligibility = $this->internshipEligibility->evaluate($user->student, $internship);
+        if (! $eligibility['allowed']) {
+            return response()->json([
+                'message' => $eligibility['message'],
+                'code' => $eligibility['code'],
+                'errors' => ['internship_id' => [$eligibility['message']]],
+            ], Response::HTTP_FORBIDDEN);
         }
 
         SavedInternship::query()->firstOrCreate([
@@ -116,5 +149,24 @@ class SavedInternshipController extends Controller
         }
 
         return $user;
+    }
+
+    private function emptySavedPage(int $perPage): \Illuminate\Http\JsonResponse
+    {
+        return response()->json([
+            'data' => [],
+            'meta' => [
+                'current_page' => 1,
+                'per_page' => $perPage,
+                'total' => 0,
+                'last_page' => 1,
+            ],
+            'links' => [
+                'first' => null,
+                'last' => null,
+                'prev' => null,
+                'next' => null,
+            ],
+        ]);
     }
 }

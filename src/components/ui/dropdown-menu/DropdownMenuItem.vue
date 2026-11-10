@@ -6,9 +6,11 @@ import { cn } from '@/lib/utils'
 const props = withDefaults(
   defineProps<{
     class?: string
+    disabled?: boolean
   }>(),
   {
     class: '',
+    disabled: false,
   },
 )
 
@@ -16,6 +18,7 @@ const itemClass = computed(() =>
   cn(
     'flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium outline-none transition-all',
     'text-foreground hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground',
+    'disabled:pointer-events-none disabled:opacity-50',
     '[&>svg]:h-4 [&>svg]:w-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground',
     props.class,
   ),
@@ -23,7 +26,7 @@ const itemClass = computed(() =>
 </script>
 
 <template>
-  <button type="button" :class="itemClass">
+  <button type="button" :class="itemClass" :disabled="disabled">
     <slot />
   </button>
 </template>

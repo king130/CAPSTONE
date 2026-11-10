@@ -29,6 +29,7 @@ import {
   type DynamicContractType,
 } from '@/services/dynamicContracts'
 import { useAuthStore } from '@/stores/auth'
+import { slugifyFieldKey } from '@/utils/formatDisplay'
 
 type ContractRole = 'school' | 'company'
 type EditableField = ContractFieldSchema & { optionsText: string }
@@ -68,8 +69,27 @@ const filteredCustomTypes = computed(() => {
 const stats = computed(() => [
   { label: 'Custom Types', value: customTypes.value.length, copy: 'Organization-specific templates you can edit and reuse.' },
   { label: 'Standard Types', value: globalTypes.value.length, copy: 'Built-in templates available across partnerships.' },
-  { label: 'Active Custom Types', value: customTypes.value.filter((item) => item.isActive !== false).length, copy: 'Currently selectable in contract requests.' },
+  { label: 'Active Custom Types', value: customTypes.value.filter((item) => item.isActive !== false).length, copy: 'Currently selectable in agreement requests.' },
 ])
+
+function ensureUniqueFieldKey(base: string, index: number): string {
+  const root = slugifyFieldKey(base) || `field_${index + 1}`
+  const used = new Set(
+    form.value.fields
+      .map((field, fieldIndex) => (fieldIndex === index ? '' : slugifyFieldKey(field.key || field.label)))
+      .filter(Boolean),
+  )
+  if (!used.has(root)) return root
+  let suffix = 2
+  while (used.has(`${root}_${suffix}`)) suffix += 1
+  return `${root}_${suffix}`
+}
+
+function syncFieldKeyFromLabel(index: number) {
+  const field = form.value.fields[index]
+  if (!field) return
+  field.key = ensureUniqueFieldKey(field.label, index)
+}
 
 function defaultField(): EditableField {
   return {
@@ -145,7 +165,7 @@ async function loadTypes() {
     globalTypes.value = data.globalTypes
   } catch (caughtError) {
     error(caughtError, {
-      fallback: 'Unable to load contract types.',
+      fallback: 'Unable to load agreement types.',
     })
   } finally {
     loading.value = false
@@ -196,6 +216,7 @@ function removeField(index: number) {
 }
 
 function normalizeFields() {
+  form.value.fields.forEach((_, index) => syncFieldKeyFromLabel(index))
   return form.value.fields.map((field) => ({
     key: field.key.trim(),
     label: field.label.trim(),
@@ -225,7 +246,7 @@ async function saveType() {
       success('Agreement type updated.')
     } else {
       await createContractType(payload)
-      success('Custom contract type created.')
+      success('Custom agreement type created.')
     }
 
     editorOpen.value = false
@@ -233,7 +254,7 @@ async function saveType() {
     await loadTypes()
   } catch (caughtError) {
     error(caughtError, {
-      fallback: 'Unable to save contract type.',
+      fallback: 'Unable to save agreement type.',
     })
   } finally {
     saving.value = false
@@ -249,7 +270,7 @@ async function confirmDelete() {
     await loadTypes()
   } catch (caughtError) {
     error(caughtError, {
-      fallback: 'Unable to delete contract type.',
+      fallback: 'Unable to delete agreement type.',
     })
   }
 }
@@ -352,7 +373,7 @@ onMounted(() => {
           </div>
           <Card v-else class="border-dashed shadow-none">
             <CardContent class="py-10 text-center text-muted-foreground">
-              No custom contract types yet. Create one to support partner-specific agreements.
+              No custom agreement types yet. Create one to support partner-specific agreements.
             </CardContent>
           </Card>
         </CardContent>
@@ -390,7 +411,7 @@ onMounted(() => {
       <template #default="{ close }">
         <DialogHeader>
           <DialogTitle>{{ form.id ? 'Edit Custom Agreement Type' : 'Create Custom Agreement Type' }}</DialogTitle>
-          <p class="text-sm text-muted-foreground">Define the fields your organization needs when standard contract templates are not enough.</p>
+          <p class="text-sm text-muted-foreground">Define the fields your organization needs when standard agreement templates are not enough.</p>
         </DialogHeader>
 
         <div class="mt-6 space-y-6">
@@ -445,7 +466,7 @@ onMounted(() => {
             <div class="flex items-center justify-between gap-3">
               <div>
                 <h3 class="text-lg font-semibold text-foreground">Field Builder</h3>
-                <p class="text-sm text-muted-foreground">Add the fields that should appear when this contract type is selected.</p>
+                <p class="text-sm text-muted-foreground">Add the questions that should appear when this agreement type is selected.</p>
               </div>
               <Button type="button" variant="outline" @click="addField">
                 <Plus class="h-4 w-4" />
@@ -456,30 +477,28 @@ onMounted(() => {
             <div class="space-y-4">
               <Card v-for="(field, index) in form.fields" :key="index" class="border-border/70 shadow-none">
                 <CardContent class="grid gap-4 p-5 md:grid-cols-2">
-                  <FormItem>
-                    <FormLabel>Field Key</FormLabel>
+                  <FormItem class="md:col-span-2">
+                    <FormLabel>Question to ask</FormLabel>
                     <FormControl>
-                      <Input v-model="field.key" placeholder="placement_type" />
-                    </FormControl>
-                  </FormItem>
-                  <FormItem>
-                    <FormLabel>Label</FormLabel>
-                    <FormControl>
-                      <Input v-model="field.label" placeholder="Placement Type" />
+                      <Input
+                        v-model="field.label"
+                        placeholder="Placement type"
+                        @update:model-value="syncFieldKeyFromLabel(index)"
+                      />
                     </FormControl>
                   </FormItem>
                   <FormItem>
                     <FormLabel>Input Type</FormLabel>
                     <FormControl>
                       <Select v-model="field.type">
-                        <option value="text">Text</option>
-                        <option value="textarea">Textarea</option>
+                        <option value="text">Short answer</option>
+                        <option value="textarea">Long answer</option>
                         <option value="date">Date</option>
                         <option value="number">Number</option>
-                        <option value="select">Select</option>
-                        <option value="multiselect">Multi Select</option>
+                        <option value="checkbox">Yes/No</option>
+                        <option value="select">Pick from a list</option>
+                        <option value="multiselect">Pick from a list (multiple)</option>
                         <option value="email">Email</option>
-                        <option value="checkbox">Checkbox</option>
                       </Select>
                     </FormControl>
                   </FormItem>
@@ -543,7 +562,7 @@ onMounted(() => {
 
     <AlertDialog
       :open="!!deleteTarget"
-      title="Delete custom contract type?"
+      title="Delete custom agreement type?"
       :description="deleteTarget ? `Remove ${deleteTarget.name}? This cannot be undone if it has not been used yet.` : ''"
       action-label="Delete"
       @update:open="(open) => { if (!open) deleteTarget = null }"
